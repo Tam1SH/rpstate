@@ -137,6 +137,7 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     pub(crate) next_id: Arc<AtomicU64>,
     pub(crate) debouncer: Arc<Debouncer>,
     pub(crate) has_pending: Arc<AtomicBool>,
+    _watch_debouncer: Arc<Debouncer>,
     _watcher: RecommendedWatcher,
 }
 
@@ -240,6 +241,54 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let data_path = files.data.path.clone();
         let meta_path = files.meta.path.clone();
 
+        // External edits (e.g. a text editor doing truncate-then-write) fire multiple
+        // raw filesystem events in quick succession, and reading the file on the very
+        // first one can observe a transient, partially-written state (seen as a
+        // spurious delete of every key). Debounce so we only re-read once the file
+        // has settled, same as we already do for our own outgoing writes.
+        let watch_debouncer = Arc::new(Debouncer::new(config.watch_interval, move || {
+            if has_pending_watch.load(Ordering::Acquire) {
+                return;
+            }
+
+            if let Ok(content) = std::fs::read_to_string(&data_path)
+                && let Ok(on_disk) = D::parse(&content)
+            {
+                let events = {
+                    let mut guard = files_watch.data.doc.write();
+
+                    let old_serialized = guard.serialize().unwrap_or_default();
+                    let new_serialized = on_disk.serialize().unwrap_or_default();
+                    if old_serialized == new_serialized {
+                        Vec::new()
+                    } else {
+                        let old = guard.clone();
+                        *guard = on_disk;
+                        info!("external store change detected");
+                        diff_documents::<D>(&old, &*guard)
+                    }
+                };
+                for event in events {
+                    utils::emit_events(&watch_subs, event);
+                }
+            }
+
+            if let Ok(content) = std::fs::read_to_string(&meta_path)
+                && let Ok(on_disk) = D::parse(&content)
+            {
+                let guard = files_watch.meta.doc.read();
+                let current_str = guard.serialize().unwrap_or_default();
+                let on_disk_str = on_disk.serialize().unwrap_or_default();
+                if current_str != on_disk_str {
+                    warn!(
+                        "⚠️  External modification of metadata file detected! \
+                         Metadata must only be mutated via internal migrations."
+                    );
+                }
+            }
+        }));
+
+        let watch_debouncer_trigger = watch_debouncer.clone();
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
             let Ok(event) = res else { return };
 
@@ -248,55 +297,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                 return;
             }
 
-            if has_pending_watch.load(Ordering::Acquire) {
-                return;
-            }
-
-            for path in &event.paths {
-                if *path == data_path {
-                    let Ok(content) = std::fs::read_to_string(path) else {
-                        continue;
-                    };
-
-                    let Ok(on_disk) = D::parse(&content) else {
-                        continue;
-                    };
-
-                    let events = {
-                        let mut guard = files_watch.data.doc.write();
-
-                        let old_serialized = guard.serialize().unwrap_or_default();
-                        let new_serialized = on_disk.serialize().unwrap_or_default();
-                        if old_serialized == new_serialized {
-                            Vec::new()
-                        } else {
-                            let old = guard.clone();
-                            *guard = on_disk;
-                            info!("external store change detected");
-                            diff_documents::<D>(&old, &*guard)
-                        }
-                    };
-                    for event in events {
-                        utils::emit_events(&watch_subs, event);
-                    }
-                } else if *path == meta_path {
-                    let Ok(content) = std::fs::read_to_string(path) else {
-                        continue;
-                    };
-                    let Ok(on_disk) = D::parse(&content) else {
-                        continue;
-                    };
-                    let guard = files_watch.meta.doc.read();
-                    let current_str = guard.serialize().unwrap_or_default();
-                    let on_disk_str = on_disk.serialize().unwrap_or_default();
-                    if current_str != on_disk_str {
-                        warn!(
-                            "⚠️  External modification of metadata file detected! \
-                             Metadata must only be mutated via internal migrations."
-                        );
-                    }
-                }
-            }
+            watch_debouncer_trigger.schedule();
         })
         .map_err(|e| TextStoreError::Watch(e.to_string()))?;
 
@@ -312,6 +313,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             next_id: Arc::new(AtomicU64::new(1)),
             debouncer: Arc::new(debouncer),
             has_pending,
+            _watch_debouncer: watch_debouncer,
             _watcher: watcher,
         });
 
