@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Blocks pushing to master when published-crate source changed but the
+# workspace version wasn't bumped. Enable once with:
+#   git config core.hooksPath .githooks
+set -e
+
+remote="$1"
+url="$2"
+
+# Only the crates that are actually published from this workspace version.
+# amethystate-dioxus/gpui/leptos/slint/yew track their own framework's
+# version and are intentionally excluded.
+PUBLISHED_PATHS=(
+  "crates/core/amethystate-macros-core"
+  "crates/core/amethystate-core"
+  "crates/main/amethystate-macros"
+  "crates/main/amethystate-macros-arena"
+  "crates/adapters/amethystate-tauri"
+  "crates/main/amethystate"
+  "crates/tauri/amethystate-codegen"
+  "crates/main/amethystate-arena"
+)
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  branch="${remote_ref#refs/heads/}"
+  [ "$branch" = "master" ] || continue
+
+  # New branch/tag being pushed for the first time - nothing to diff against.
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  changed_src=false
+  for p in "${PUBLISHED_PATHS[@]}"; do
+    if ! git diff --quiet "$remote_sha" "$local_sha" -- "$p/src"; then
+      changed_src=true
+      break
+    fi
+  done
+
+  [ "$changed_src" = true ] || continue
+
+  old_version=$(git show "$remote_sha:Cargo.toml" | grep -m1 '^version' | sed -E 's/version = "(.*)"/\1/')
+  new_version=$(git show "$local_sha:Cargo.toml" | grep -m1 '^version' | sed -E 's/version = "(.*)"/\1/')
+
+  if [ "$old_version" = "$new_version" ]; then
+    echo "pre-push: published crate source changed but [workspace.package].version is still $new_version." >&2
+    echo "pre-push: bump the version in Cargo.toml before pushing to master, or use --no-verify to override." >&2
+    exit 1
+  fi
+done
+
+exit 0

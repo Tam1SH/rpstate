@@ -31,8 +31,8 @@ pub(crate) struct Options {
 }
 
 mod inner {
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsValue;
+    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::wasm_bindgen;
 
     #[wasm_bindgen(module = "/src/js/event.js")]
@@ -45,7 +45,6 @@ mod inner {
         ) -> Result<JsValue, JsValue>;
     }
 }
-
 
 #[allow(unused)]
 #[derive(serde::Serialize)]
@@ -100,7 +99,7 @@ where
             target: EventTarget::Any,
         })?,
     )
-        .await?;
+    .await?;
 
     Ok(Listen {
         rx,
@@ -108,7 +107,6 @@ where
         _callback_keep_alive: closure,
     })
 }
-
 
 #[allow(unused)]
 pub async fn listen_to<T>(event: &str) -> Result<Listen<T>, String>
@@ -123,8 +121,10 @@ where
         }
     });
 
-    let options = swb::to_value(&ListenOptions { target: ListenTarget::Any })
-        .map_err(|e| e.to_string())?;
+    let options = swb::to_value(&ListenOptions {
+        target: ListenTarget::Any,
+    })
+    .map_err(|e| e.to_string())?;
 
     let unlisten = inner::listen(event, &closure, options)
         .await

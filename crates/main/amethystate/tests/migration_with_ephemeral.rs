@@ -96,9 +96,7 @@ fn test_nested_and_ephemeral_integration() {
     }
 
     {
-        let store = StoreBuilder::new(&path)
-            .build()
-            .unwrap();
+        let (store, _) = StoreBuilder::new(&path).build_with_report().unwrap();
 
         let sys = SystemConfig::new_with(&store).expect("Failed to load v2 system");
         let ui = Dashboard::new_with(&store).expect("Failed to load dashboard");

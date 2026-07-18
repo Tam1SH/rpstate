@@ -8,7 +8,8 @@ expression: ts_content
 // src/bindings/amethystate.ts DO NOT EDIT
 import {invoke} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
-import { Field, ReadonlyField, ReactiveMap } from "amethystate";
+import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
+
 export type StateSchema = {
     "test_root.value": number;
     /** volatile */
@@ -16,12 +17,22 @@ export type StateSchema = {
     "test_root.child.name": string;
 };
 
-class TestNestedFields {
-    readonly name: Field<string>;
+export type TestNested = {
+    name: string;
+};
+
+export class TestNestedFields {
+    readonly name: ReactiveField<string>;
     constructor(prefix: string, initialValues?: Record<string, any>) {
-        this.name = new Field(`${prefix}.name`, initialValues?.[`${prefix}.name`]);
+        this.name = new ReactiveField(`${prefix}.name`, initialValues?.[`${prefix}.name`]);
     }
 }
+
+export type TestRootPlain = {
+    value: number;
+    session: string;
+    child: TestNested;
+};
 
 export type TestRootSchema = {
     "test_root.value": number;
@@ -31,12 +42,12 @@ export type TestRootSchema = {
 };
 
 export class TestRoot {
-    readonly value: Field<number>;
-    readonly session: Field<string>;
+    readonly value: ReactiveField<number>;
+    readonly session: ReactiveField<string>;
     readonly child: TestNestedFields;
     constructor(initialValues?: Partial<TestRootSchema>) {
-        this.value = new Field<number>("test_root.value", initialValues?.["test_root.value"]);
-        this.session = new Field<string>("test_root.session", initialValues?.["test_root.session"]);
+        this.value = new ReactiveField<number>("test_root.value", initialValues?.["test_root.value"]);
+        this.session = new ReactiveField<string>("test_root.session", initialValues?.["test_root.session"]);
         this.child = new TestNestedFields("test_root.child", initialValues);
     }
 

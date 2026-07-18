@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
 #[derive(Clone)]
@@ -25,7 +24,7 @@ where
 impl<K, V> MapSignal<K, V>
 where
     K: ReactiveMapKey,
-    V: ReactiveMapValue
+    V: ReactiveMapValue,
 {
     pub fn set(&self, key: K, value: V) {
         self.set.emit((key, value));
@@ -41,11 +40,7 @@ where
     }
 }
 
-
-
-pub type InitFn<B> = Rc<
-    dyn Fn(B) -> Pin<Box<dyn Future<Output = Rc<dyn Fn(Html) -> Html>>>>
->;
+pub type InitFn<B> = Rc<dyn Fn(B) -> Pin<Box<dyn Future<Output = Rc<dyn Fn(Html) -> Html>>>>>;
 
 #[derive(Properties)]
 pub struct AmeStateProviderProps<B: PartialEq + Clone + 'static> {
@@ -90,7 +85,6 @@ where
         None => props.fallback.clone(),
     }
 }
-
 
 #[macro_export]
 macro_rules! preload_slices {

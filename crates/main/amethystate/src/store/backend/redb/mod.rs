@@ -1,6 +1,6 @@
 use crate::store::{
-    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp,
-    SubscriptionEntry, SubscriptionId, SubscriptionKind,
+    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId,
+    SubscriptionKind,
 };
 use error::RedbStoreError;
 use migration::RedbMigrationBackend;
@@ -18,6 +18,7 @@ use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
 use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
+use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
@@ -26,12 +27,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn};
 use uuid::Uuid;
-use crate::store::traits::MigrationBackendAdapter;
 
 pub mod error;
+mod inspector;
 mod migration;
 mod tables;
-mod inspector;
 
 const BUF_SIZE: usize = 64 * 1024;
 
@@ -581,8 +581,8 @@ mod tests {
         let (store, _) = RedbStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
         let garbage = vec![0x00, 0x01, 0x02];
 
-        let StorageResult: String = store.decode(&garbage).unwrap();
-        assert_eq!(StorageResult, String::default());
+        let storage_result: String = store.decode(&garbage).unwrap();
+        assert_eq!(storage_result, String::default());
     }
 
     #[test]

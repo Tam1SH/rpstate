@@ -1,13 +1,13 @@
-use redb::{ReadableDatabase, ReadableTable};
-use crate::{StorageResult, Store};
 use crate::codec::CodecError;
 use crate::observability::InspectorBackend;
+use crate::store::CodecFormat;
 use crate::store::backend::redb::error::RedbStoreError;
 use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
-use crate::store::CodecFormat;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::RedbStore;
+use crate::{StorageResult, Store};
+use redb::{ReadableDatabase, ReadableTable};
 
 impl InspectorBackend for RedbStore {
     fn format(&self) -> CodecFormat {

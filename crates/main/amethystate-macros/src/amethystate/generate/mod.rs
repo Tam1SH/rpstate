@@ -3,10 +3,10 @@ mod data;
 mod init;
 mod wasm;
 
-use quote::format_ident;
 use crate::ts_mapping::map_type_to_ts;
 use amethystate_macros_core::{MacroArgs, StoreFieldEntry, get_type_ident_str};
 use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
+use quote::format_ident;
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
@@ -65,7 +65,8 @@ pub fn generate_code(
     let scope = accessors::scope(&crate_name, name, prefix.clone());
     let constructor = accessors::constructor(&crate_name, is_root, &init_fields);
 
-    let schema_export = generate_schema_export(&crate_name, name, &prefix, macro_args.version, entries);
+    let schema_export =
+        generate_schema_export(&crate_name, name, &prefix, macro_args.version, entries);
 
     let inherent_subs = if matches!(rp_mode, RpMode::Reactive | RpMode::Both) {
         let sub_all_fields = entries.iter().map(|e| {
@@ -353,16 +354,16 @@ fn generate_schema_export(
 
     let tauri_entry = if cfg!(feature = "tauri") {
         quote! {
-        #crate_name::inventory::submit! {
-            #crate_name::tauri::SchemaExportEntry {
-                prefix: #prefix_tokens,
-                struct_name: #struct_name_str,
-                fields: &[
-                    #(#field_metas),*
-                ],
+            #crate_name::inventory::submit! {
+                #crate_name::tauri::SchemaExportEntry {
+                    prefix: #prefix_tokens,
+                    struct_name: #struct_name_str,
+                    fields: &[
+                        #(#field_metas),*
+                    ],
+                }
             }
         }
-    }
     } else {
         quote!()
     };
@@ -372,7 +373,6 @@ fn generate_schema_export(
         #tauri_entry
     }
 }
-
 
 struct MapEntry {
     key: Expr,

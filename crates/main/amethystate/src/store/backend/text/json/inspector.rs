@@ -1,5 +1,5 @@
-use crate::observability::InspectorBackend;
 use crate::StorageResult;
+use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::JsonStore;

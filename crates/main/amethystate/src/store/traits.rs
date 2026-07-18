@@ -1,12 +1,12 @@
+use crate::migration::AppliedStep;
+use crate::migration::set::MigrationSet;
+use crate::store::error::StorageResult;
+use crate::store::meta::{PrefixMeta, SchemaSnapshot};
+use crate::store::{CodecFormat, StoreCallback, SubscriptionId};
+use crate::{MigrationReport, SubscriptionKind};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::migration::AppliedStep;
-use crate::migration::set::MigrationSet;
-use crate::store::{CodecFormat, StoreCallback, SubscriptionId};
-use crate::store::error::StorageResult;
-use crate::store::meta::{PrefixMeta, SchemaSnapshot};
-use crate::{MigrationReport, SubscriptionKind};
 
 pub trait MigrationBackendAdapter {
     fn format(&self) -> CodecFormat;
@@ -19,7 +19,8 @@ pub trait MigrationBackendAdapter {
     fn get_meta(&self, prefix: &str) -> StorageResult<Option<PrefixMeta>>;
     fn set_meta(&mut self, prefix: &str, meta: &PrefixMeta) -> StorageResult<()>;
     fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>>;
-    fn set_schema_snapshot(&mut self, prefix: &str, snapshot: &SchemaSnapshot) -> StorageResult<()>;
+    fn set_schema_snapshot(&mut self, prefix: &str, snapshot: &SchemaSnapshot)
+    -> StorageResult<()>;
     fn get_migration_log(&self, prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>>;
     fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()>;
 }

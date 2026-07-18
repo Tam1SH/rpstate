@@ -1,8 +1,8 @@
-use crate::observability::InspectorBackend;
 use crate::StorageResult;
-use crate::store::backend::text::{TextDocument, TextStore};
-use crate::store::backend::text::store::{normalize_path, scan_prefix_recursive};
+use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
+use crate::store::backend::text::store::{normalize_path, scan_prefix_recursive};
+use crate::store::backend::text::{TextDocument, TextStore};
 use crate::store::meta::SchemaSnapshot;
 
 impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
@@ -41,7 +41,7 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
     fn set_raw(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
         self.inner.check_debouncer()?;
         let path_str = normalize_path(key)?;
-        
+
         let node = D::bytes_to_node(value)?;
 
         self.inner.set_node(path_str, node, None)

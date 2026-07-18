@@ -1,5 +1,5 @@
-use crate::store::StorageResult;
 use crate::MigrationContext;
+use crate::store::StorageResult;
 
 #[derive(Clone)]
 pub struct FieldDescriptor {

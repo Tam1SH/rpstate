@@ -1,6 +1,5 @@
-use amethystate::migration::types::AmeType;
 use amethystate::ReactiveMap;
-
+use amethystate::migration::types::AmeType;
 
 #[amethystate::amethystate]
 pub struct DeepChildV1 {
@@ -38,7 +37,6 @@ pub struct RootV2WithDeepChange {
     pub mid: MidParentV2,
 }
 
-
 #[amethystate::amethystate(prefix = "network")]
 pub struct NetworkConfigV1 {
     pub dns_servers: ReactiveMap<String, String>,
@@ -54,7 +52,6 @@ pub struct NetworkConfigV2WithDifferentValue {
     pub dns_servers: ReactiveMap<String, u64>,
 }
 
-
 #[amethystate::amethystate(prefix = "database")]
 pub struct DbSource {
     #[amestate(default = 10, export_mut)]
@@ -63,7 +60,6 @@ pub struct DbSource {
 
 #[amethystate::amethystate(prefix = "service")]
 pub struct ServiceV1 {
-
     #[amestate(default = false, volatile)]
     pub is_dirty: bool,
 
@@ -73,7 +69,6 @@ pub struct ServiceV1 {
 
 #[amethystate::amethystate(prefix = "service")]
 pub struct ServiceV2WithChangedVolatileAndLookup {
-
     #[amestate(default = 0, volatile)]
     pub is_dirty: u8,
 
@@ -81,9 +76,7 @@ pub struct ServiceV2WithChangedVolatileAndLookup {
     pub pool_limit: u32,
 }
 
-
 const _: () = {
-
     assert!(
         DeepChildV1_Data::TYPE_HASH != DeepChildV2WithRenamedField_Data::TYPE_HASH,
         "Deep child change must update its own TYPE_HASH"

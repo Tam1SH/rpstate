@@ -1,7 +1,7 @@
-use crate::store::StorageResult;
 use super::MigrationPlan;
-use crate::migration::fields::FieldDescriptor;
 use crate::MigrationError;
+use crate::migration::fields::FieldDescriptor;
+use crate::store::StorageResult;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -123,7 +123,7 @@ impl MigrationSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use crate::migration::fields::FieldDescriptor;
     use crate::store::StorageError;
 

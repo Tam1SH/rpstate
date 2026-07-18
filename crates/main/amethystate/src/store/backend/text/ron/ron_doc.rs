@@ -1,10 +1,10 @@
 use crate::StorageResult;
 use crate::codec::CodecError;
-use crate::store::{CodecFormat, StorageError};
 use crate::store::backend::text::document::{
     Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
 };
 use crate::store::backend::text::error::TextStoreError;
+use crate::store::{CodecFormat, StorageError};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -75,9 +75,7 @@ impl TextDocument for RonDocument {
         let is_root = parts.is_empty() || parts == ["."];
         if is_root {
             if !matches!(node, ::ron::value::Value::Map(_)) {
-                return Err(StorageError::TextStore(
-                    TextStoreError::RootMustBeObject,
-                ));
+                return Err(StorageError::TextStore(TextStoreError::RootMustBeObject));
             }
             self.0 = node;
             return Ok(());

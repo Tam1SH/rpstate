@@ -1,8 +1,6 @@
 use crate::store::Store;
 use crate::store::sync_backend::StoreBackend;
-use crate::{
-    AccessMode, DefaultStore, Field, ReadOnlyMode, StoreSubscription, WritableMode,
-};
+use crate::{AccessMode, DefaultStore, Field, ReadOnlyMode, StoreSubscription, WritableMode};
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use std::marker::PhantomData;
 
@@ -18,8 +16,8 @@ pub struct ReactiveMap<K, V, S: Store = DefaultStore, M: AccessMode = ReadOnlyMo
     pub(crate) _mode: PhantomData<M>,
 }
 
+use crate::reactive::error::{ReactiveMapError, ReactiveMapResult};
 pub use amethystate_core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
-use crate::reactive::error::{ReactiveMapResult, ReactiveMapError};
 
 pub type ReadOnlyReactiveMap<TValue, S> = Field<TValue, S, ReadOnlyMode>;
 pub type WritableReactiveMap<TValue, S> = Field<TValue, S, WritableMode>;
@@ -87,7 +85,9 @@ where
 
     pub fn contains_key(&self, key: &K) -> ReactiveMapResult<bool> {
         let backend = StoreBackend::new(self.store.clone());
-        Ok(amethystate_core::map_contains_key::<_, _, V>(&backend, &self.path, key)?)
+        Ok(amethystate_core::map_contains_key::<_, _, V>(
+            &backend, &self.path, key,
+        )?)
     }
 
     pub fn entries(&self) -> ReactiveMapResult<Vec<(K, V)>> {
@@ -250,7 +250,9 @@ where
 
 impl<K, V, S: Store, M: AccessMode> PartialEq for ReactiveMap<K, V, S, M> {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path && self.instance_id == other.instance_id && Arc::ptr_eq(&self.core.next_id, &other.core.next_id)
+        self.path == other.path
+            && self.instance_id == other.instance_id
+            && Arc::ptr_eq(&self.core.next_id, &other.core.next_id)
     }
 }
 
@@ -265,7 +267,7 @@ mod tests {
 
     use super::*;
     use crate::DefaultStore;
-    
+
     use crate::test_utils::unique_store;
     use amethystate_core::WritableMode;
     use std::collections::HashMap;

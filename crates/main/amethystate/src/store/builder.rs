@@ -7,7 +7,6 @@ use crate::migration::builder::MigrationBuilder;
 use crate::store::config::StoreConfig;
 use crate::{DefaultStore, MigrationReport};
 
-
 #[cfg(backend = "redb")]
 const FILE_EXTENSION: &str = "redb";
 
@@ -121,14 +120,13 @@ impl StoreBuilder {
         self
     }
 
-    pub fn build(mut self) -> StorageResult<DefaultStore> {
-        self.migration_builder.collect_codegen();
+    pub fn build(self) -> StorageResult<DefaultStore> {
         let migration_set = self.migration_builder.into_set();
         let (store, _) = DefaultStore::open(self.config, migration_set)?;
-        
+
         Ok(store)
     }
-    
+
     pub fn build_with_report(mut self) -> StorageResult<(DefaultStore, MigrationReport)> {
         self.migration_builder.collect_codegen();
         let migration_set = self.migration_builder.into_set();
@@ -136,5 +134,4 @@ impl StoreBuilder {
         report.log_to_tracing();
         Ok((store, report))
     }
-
 }

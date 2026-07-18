@@ -1,5 +1,5 @@
-use crate::store::StorageResult;
 use crate::store::CodecFormat;
+use crate::store::StorageResult;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;

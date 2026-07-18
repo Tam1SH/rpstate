@@ -1,8 +1,8 @@
-use std::borrow::Borrow;
-use crate::primitives::error::{ReactiveMapResult, ReactiveMapError};
 use crate::AmeBackendSync;
+use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore};
+use std::borrow::Borrow;
 
 use serde::de::DeserializeOwned;
 use std::fmt::Display;
@@ -19,7 +19,11 @@ where
     Ok(backend.get(&format!("{}.{}", path, key))?)
 }
 
-pub fn map_contains_key<B, K, V>(backend: &B, path: &str, key: &K) -> ReactiveMapResult<bool, B::Error>
+pub fn map_contains_key<B, K, V>(
+    backend: &B,
+    path: &str,
+    key: &K,
+) -> ReactiveMapResult<bool, B::Error>
 where
     B: AmeBackendSync,
     K: Display,

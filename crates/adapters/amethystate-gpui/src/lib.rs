@@ -1,9 +1,9 @@
+use amethystate::store::Store;
 use amethystate::{AmeStateSlice, DefaultStore, ReactiveScope};
 use futures::StreamExt as _;
 use gpui::{App, AppContext, Entity};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use amethystate::store::Store;
 
 #[derive(Clone)]
 pub struct RpView<T, S> {

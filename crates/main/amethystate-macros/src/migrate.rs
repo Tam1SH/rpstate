@@ -39,7 +39,6 @@ pub fn migrate_impl_inner(
     _args: proc_macro::TokenStream,
     mut item_fn: ItemFn,
 ) -> syn::Result<proc_macro::TokenStream> {
-
     let crate_name = amethystate_crate_path();
 
     let fn_name = &item_fn.sig.ident;
@@ -50,10 +49,12 @@ pub fn migrate_impl_inner(
 
     let old_ty = match first_arg {
         FnArg::Typed(PatType { ty, .. }) => ty.clone(),
-        _ => return Err(syn::Error::new_spanned(
-            &item_fn.sig,
-            "first argument must be `AmeData<T>`, e.g. `AmeData<v1::Config>`"
-        )),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &item_fn.sig,
+                "first argument must be `AmeData<T>`, e.g. `AmeData<v1::Config>`",
+            ));
+        }
     };
 
     let has_ctx = inputs.next().is_some();
@@ -61,22 +62,27 @@ pub fn migrate_impl_inner(
     let new_ty = match &item_fn.sig.output {
         ReturnType::Type(_, ty) => match extract_target_type(ty) {
             Some(ty) => ty,
-            None => return Err(syn::Error::new_spanned(
-                ty,
-                "return type must be `MigrationResult<AmeData<T>>`, e.g. `MigrationResult<AmeData<Config>>`"
-            )),
+            None => {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    "return type must be `MigrationResult<AmeData<T>>`, e.g. `MigrationResult<AmeData<Config>>`",
+                ));
+            }
         },
-        _ => return Err(syn::Error::new_spanned(
-            &item_fn.sig,
-            "return type must be `MigrationResult<AmeData<T>>`, e.g. `MigrationResult<AmeData<Config>>`"
-        )),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &item_fn.sig,
+                "return type must be `MigrationResult<AmeData<T>>`, e.g. `MigrationResult<AmeData<Config>>`",
+            ));
+        }
     };
 
-    let old_inner_ty = extract_ame_data_inner(&old_ty)
-        .ok_or_else(|| syn::Error::new_spanned(
+    let _old_inner_ty = extract_ame_data_inner(&old_ty).ok_or_else(|| {
+        syn::Error::new_spanned(
             &old_ty,
-            "first argument must be `AmeData<T>`, e.g. `AmeData<v1::Config>`"
-        ))?;
+            "first argument must be `AmeData<T>`, e.g. `AmeData<v1::Config>`",
+        )
+    })?;
 
     let new_inner_ty = extract_ame_data_inner(&new_ty)
         .ok_or_else(|| syn::Error::new_spanned(
@@ -140,11 +146,16 @@ pub fn migrate_impl_inner(
     };
 
     let struct_name = if let Type::Path(tp) = &new_inner_ty {
-        tp.path.segments.last()
+        tp.path
+            .segments
+            .last()
             .map(|s| s.ident.to_string())
             .ok_or_else(|| syn::Error::new_spanned(&new_inner_ty, "expected a type path"))?
     } else {
-        return Err(syn::Error::new_spanned(&new_inner_ty, "expected a type path"));
+        return Err(syn::Error::new_spanned(
+            &new_inner_ty,
+            "expected a type path",
+        ));
     };
 
     let inventory_block = quote! {

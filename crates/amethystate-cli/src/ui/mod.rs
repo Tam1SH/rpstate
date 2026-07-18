@@ -1,15 +1,15 @@
 use crate::app::App;
+use amethystate::observability::InspectorBackend;
 use anyhow::Result;
+use crossterm::event::KeyEventKind;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use ratatui::prelude::*;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
-use crossterm::event::KeyEventKind;
-use ratatui::prelude::*;
-use amethystate::observability::InspectorBackend;
 
 mod sidebar;
 mod viewer;

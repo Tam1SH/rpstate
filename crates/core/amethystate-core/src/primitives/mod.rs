@@ -1,3 +1,4 @@
+pub mod error;
 pub mod field_core;
 pub mod field_ops;
 #[cfg(feature = "async")]
@@ -9,4 +10,3 @@ pub mod map_ops;
 pub mod map_ops_async;
 pub mod pipeline;
 pub mod signal;
-pub mod error;

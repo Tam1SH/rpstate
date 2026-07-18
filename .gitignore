@@ -11,3 +11,4 @@ examples/*/*/*.redb
 
 /mutants.out
 /mutants.out.old
+/.cache

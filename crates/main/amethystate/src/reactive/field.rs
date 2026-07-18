@@ -1,5 +1,5 @@
+use super::error::{FieldError, ReactiveFieldResult};
 use crate::store::sync_backend::StoreBackend;
-use super::error::{ReactiveFieldResult, FieldError};
 use crate::store::{Store, SubscriptionId};
 use crate::{AccessMode, ReadOnlyMode, WritableMode};
 use amethystate_core::{Change, FieldCore, InterceptDisposer, Signal, SignalSubscription};
@@ -190,7 +190,9 @@ where
 
 impl<TValue, S: Store, M: AccessMode> PartialEq for Field<TValue, S, M> {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path && self.instance_id == other.instance_id && Arc::ptr_eq(&self.core.signal.value, &other.core.signal.value)
+        self.path == other.path
+            && self.instance_id == other.instance_id
+            && Arc::ptr_eq(&self.core.signal.value, &other.core.signal.value)
     }
 }
 

@@ -1,6 +1,6 @@
-use amethystate::Pipeline;
 use crate::MapSignal;
 use amethystate::MapChange;
+use amethystate::Pipeline;
 use amethystate::client::{AsyncSubscriptionBackend, Field, ReactiveMap};
 use amethystate::core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use amethystate::reactive::FieldValue;
@@ -233,7 +233,7 @@ where
         set,
         remove,
         clear,
-        set_or_create
+        set_or_create,
     }
 }
 

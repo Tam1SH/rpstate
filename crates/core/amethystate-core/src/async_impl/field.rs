@@ -1,12 +1,12 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
+use crate::error::FieldError;
+use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
 use crate::{Change, FieldCore, InterceptDisposer, SignalSubscription};
-use crate::primitives::error::ReactiveFieldResult;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use crate::error::FieldError;
 
 pub struct Field<T, B> {
     pub core: FieldCore<T>,
@@ -33,7 +33,9 @@ where
 
 impl<T, B> PartialEq for Field<T, B> {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path && self.instance_id == other.instance_id && Arc::ptr_eq(&self.core.signal.value, &other.core.signal.value)
+        self.path == other.path
+            && self.instance_id == other.instance_id
+            && Arc::ptr_eq(&self.core.signal.value, &other.core.signal.value)
     }
 }
 

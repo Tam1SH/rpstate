@@ -1,4 +1,4 @@
-use amethystate::{Store, StoreBuilder};
+use amethystate::StoreBuilder;
 use amethystate::amethystate;
 
 #[amethystate(prefix = "network", version = 1)]
@@ -20,8 +20,7 @@ pub struct UiState {
 }
 
 fn main() -> anyhow::Result<()> {
-    let store = StoreBuilder::new("./test_data")
-        .build()?;
+    let store = StoreBuilder::new("./test_data").build()?;
 
     let network = NetworkState::new_with(&store)?;
     network.host().set("10.0.0.1".to_string())?;

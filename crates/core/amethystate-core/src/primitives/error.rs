@@ -7,7 +7,7 @@ pub enum FieldError<TStorageError> {
 
     #[error("Change intercepted")]
     Intercepted,
-    
+
     #[error("Key not found in Field: {0}")]
     KeyNotFound(String),
 }
@@ -27,4 +27,3 @@ pub enum ReactiveMapError<TStorageError> {
 }
 
 pub type ReactiveMapResult<T, E> = std::result::Result<T, ReactiveMapError<E>>;
-

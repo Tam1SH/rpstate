@@ -1,16 +1,17 @@
-use crate::store::StorageResult;
+use crate::MigrationReport;
 use crate::codec::CodecError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
+use crate::store::StorageResult;
 use crate::store::backend::sqlite::migration::SqliteMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::config::StoreConfig;
+use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp,
-    SubscriptionEntry, SubscriptionId, SubscriptionKind,
+    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId,
+    SubscriptionKind,
 };
-use crate::MigrationReport;
 use error::SqliteStoreError;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension};
@@ -20,11 +21,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn};
-use crate::store::traits::MigrationBackendAdapter;
 
 pub mod error;
-mod migration;
 mod inspector;
+mod migration;
 
 struct SqliteStoreInner {
     conn: Arc<Mutex<Connection>>,
@@ -144,7 +144,12 @@ impl SqliteStoreInner {
         }
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn set<T: Serialize>(
+        &self,
+        path: &str,
+        value: &T,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
         self.set_owned_with_source(Arc::from(path), value, source)
     }
 
@@ -189,7 +194,7 @@ impl SqliteStoreInner {
     }
 
     fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
-        let mut StorageResults = Vec::new();
+        let mut storage_results = Vec::new();
 
         {
             let conn = self.conn.lock();
@@ -205,7 +210,7 @@ impl SqliteStoreInner {
 
             for row in rows {
                 let (k, v) = row.map_err(SqliteStoreError::from)?;
-                StorageResults.push((k, v));
+                storage_results.push((k, v));
             }
         }
 
@@ -221,17 +226,17 @@ impl SqliteStoreInner {
 
         for (k, opt_v) in pending_map {
             if let Some(v) = opt_v {
-                if let Some(pos) = StorageResults.iter().position(|(rk, _)| *rk == k) {
-                    StorageResults[pos].1 = v;
+                if let Some(pos) = storage_results.iter().position(|(rk, _)| *rk == k) {
+                    storage_results[pos].1 = v;
                 } else {
-                    StorageResults.push((k, v));
+                    storage_results.push((k, v));
                 }
             } else {
-                StorageResults.retain(|(rk, _)| *rk != k);
+                storage_results.retain(|(rk, _)| *rk != k);
             }
         }
 
-        Ok(StorageResults)
+        Ok(storage_results)
     }
 
     fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {

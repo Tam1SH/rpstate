@@ -1,12 +1,12 @@
+use crate::StorageResult;
 use crate::codec::CodecError;
-use crate::store::{CodecFormat, StorageError};
 use crate::store::backend::text::document::{
     Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
 };
 use crate::store::backend::text::error::TextStoreError;
+use crate::store::{CodecFormat, StorageError};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use crate::StorageResult;
 
 #[derive(Clone, Debug)]
 pub struct JsonDocument(pub serde_json::Value);
@@ -59,9 +59,7 @@ impl TextDocument for JsonDocument {
         let is_root = parts.is_empty() || parts == ["."];
         if is_root {
             if !node.is_object() {
-                return Err(StorageError::TextStore(
-                    TextStoreError::RootMustBeObject,
-                ));
+                return Err(StorageError::TextStore(TextStoreError::RootMustBeObject));
             }
             self.0 = node;
             return Ok(());

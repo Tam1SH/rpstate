@@ -131,9 +131,6 @@ pub async fn amethystate_unsubscribe(
     Ok(())
 }
 #[tauri::command]
-pub async fn amethystate_delete(
-    store: State<'_, PluginState>,
-    key: String,
-) -> Result<(), String> {
+pub async fn amethystate_delete(store: State<'_, PluginState>, key: String) -> Result<(), String> {
     store.store.delete(&key).map_err(|e| e.to_string())
 }

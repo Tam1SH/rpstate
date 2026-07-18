@@ -1,13 +1,13 @@
 use super::error::RedbStoreError;
 use super::tables::{
-    TableReader, TableWriter, TABLE_DATA, TABLE_META, TABLE_MIGRATION_LOG, TABLE_SCHEMA_SNAPSHOT,
+    TABLE_DATA, TABLE_META, TABLE_MIGRATION_LOG, TABLE_SCHEMA_SNAPSHOT, TableReader, TableWriter,
 };
 use crate::migration::AppliedStep;
-use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::CodecFormat;
-use redb::ReadableTable;
 use crate::store::error::StorageResult;
+use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
+use redb::ReadableTable;
 
 pub(super) struct RedbMigrationBackend<'a> {
     txn: &'a redb::WriteTransaction,
@@ -81,7 +81,11 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         Ok(self.txn.load_typed(TABLE_SCHEMA_SNAPSHOT, prefix)?)
     }
 
-    fn set_schema_snapshot(&mut self, prefix: &str, snapshot: &SchemaSnapshot) -> StorageResult<()> {
+    fn set_schema_snapshot(
+        &mut self,
+        prefix: &str,
+        snapshot: &SchemaSnapshot,
+    ) -> StorageResult<()> {
         Ok(self
             .txn
             .save_typed(TABLE_SCHEMA_SNAPSHOT, prefix, snapshot)?)

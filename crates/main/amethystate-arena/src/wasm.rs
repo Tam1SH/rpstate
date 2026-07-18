@@ -2,8 +2,8 @@ use crate::primitives::*;
 use amethystate::{AccessMode, MapChange, Pipeline, SignalSubscription, WritableMode};
 use parking_lot::RwLock;
 
-use amethystate::core::error::{ReactiveMapResult, ReactiveFieldResult};
 use amethystate::client::{AsyncSubscriptionBackend, Field, ReactiveMap};
+use amethystate::core::error::{ReactiveFieldResult, ReactiveMapResult};
 use amethystate::reactive::FieldValue;
 use amethystate::{ReactiveMapKey, ReactiveMapValue};
 use serde::de::DeserializeOwned;
@@ -72,7 +72,11 @@ impl<B: AsyncSubscriptionBackend> Arena<B> {
         self.with_item::<Field<T, B>, _, _>(handle.key, "Field", |field| field.value())
     }
 
-    pub async fn set_field<T>(&self, handle: WritableHandle<T>, value: T) -> ReactiveFieldResult<(), B::Error>
+    pub async fn set_field<T>(
+        &self,
+        handle: WritableHandle<T>,
+        value: T,
+    ) -> ReactiveFieldResult<(), B::Error>
     where
         T: FieldValue,
     {
@@ -322,7 +326,10 @@ impl<B: AsyncSubscriptionBackend> Arena<B> {
         map.remove(key).await
     }
 
-    pub async fn clear_map<K, V>(&self, handle: WritableMapHandle<K, V>) -> ReactiveMapResult<(), B::Error>
+    pub async fn clear_map<K, V>(
+        &self,
+        handle: WritableMapHandle<K, V>,
+    ) -> ReactiveMapResult<(), B::Error>
     where
         K: ReactiveMapKey + for<'de> Deserialize<'de>,
         V: ReactiveMapValue,

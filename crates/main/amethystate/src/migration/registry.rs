@@ -1,7 +1,7 @@
-use crate::store::StorageResult;
 use crate::MigrationContext;
 use crate::migration::fields::FieldDescriptor;
 use crate::store::StateScope;
+use crate::store::StorageResult;
 use std::collections::BTreeSet;
 
 #[derive(Clone)]

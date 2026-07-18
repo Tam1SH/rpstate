@@ -1,7 +1,7 @@
 use crate::AmeBackendSync;
 use crate::FieldCore;
+use crate::primitives::error::{FieldError, ReactiveFieldResult};
 use crate::primitives::field_core::FieldValue;
-use crate::primitives::error::{ReactiveFieldResult, FieldError};
 use std::sync::Arc;
 use uuid::Uuid;
 

@@ -19,5 +19,4 @@ pub enum StorageError {
     Migration(#[from] MigrationError),
 }
 
-
 pub type StorageResult<T> = std::result::Result<T, StorageError>;

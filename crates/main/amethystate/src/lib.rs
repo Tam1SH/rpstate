@@ -1,3 +1,5 @@
+//! Persistent reactive state for Rust GUI apps.
+
 #![allow(clippy::complexity)]
 mod codec;
 mod global;
@@ -15,7 +17,6 @@ pub use inventory;
 pub use serde;
 pub use uuid;
 
-
 pub use reactive::{
     AccessMode, AmeState, AmeStateNode, Change, Field, InterceptDisposer, IntoPipeline, MapChange,
     Pipeline, Reactive, ReactiveMap, ReactiveMapKey, ReactiveMapValue, ReactiveScope, ReadOnly,
@@ -23,18 +24,17 @@ pub use reactive::{
     WritableField, WritableMode,
 };
 
-
 pub mod errors {
+    pub use crate::reactive::error::{FieldError, ReactiveMapError};
     pub use crate::store::StorageError;
-    pub use crate::reactive::error::{ReactiveMapError, FieldError};
 }
 pub mod stores {
     pub use crate::store::default::*;
 }
 
 pub use store::{
-    AmeStateSlice, StateScope, StoreEvent, StoreOp, SubscriptionKind, builder::StoreBuilder,
-    config::StoreConfig, default::DefaultStore, join_path, StorageResult
+    AmeStateSlice, StateScope, StorageResult, StoreEvent, StoreOp, SubscriptionKind,
+    builder::StoreBuilder, config::StoreConfig, default::DefaultStore, join_path,
 };
 
 pub use migration::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
@@ -68,8 +68,8 @@ pub mod client {
     pub use amethystate_core::AmeStateSliceAsync;
     pub use amethystate_core::async_impl::*;
 
-    use amethystate_core::async_impl::ReactiveMap as CoreReactiveMap;
     use amethystate_core::async_impl::Field as CoreField;
+    use amethystate_core::async_impl::ReactiveMap as CoreReactiveMap;
     #[cfg(feature = "tauri")]
     pub type ReactiveMap<K, V, B = crate::tauri::TauriBackend> = CoreReactiveMap<K, V, B>;
 
@@ -81,5 +81,4 @@ pub mod client {
 
     #[cfg(all(feature = "async", not(feature = "tauri")))]
     pub type Field<V, B> = CoreField<V, B>;
-
 }

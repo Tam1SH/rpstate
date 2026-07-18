@@ -1,9 +1,9 @@
-use crate::store::StorageResult;
 use crate::migration::AppliedStep;
+use crate::store::CodecFormat;
+use crate::store::StorageResult;
 use crate::store::backend::text::document::TextDocument;
 use crate::store::backend::text::store;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
-use crate::store::CodecFormat;
 use crate::store::traits::MigrationBackendAdapter;
 
 pub struct TextMigrationBackend<'a, D: TextDocument> {

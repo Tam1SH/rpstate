@@ -30,13 +30,14 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::codec::CodecError;
-use crate::{DefaultStore, Error as RpError, StoreBuilder};
+use crate::store::StorageError as RpError;
+use crate::{DefaultStore, StoreBuilder};
 
+use crate::store::Store;
 #[cfg(feature = "toml")]
 use toml_edit::de::Error as TomlDeErr;
 #[cfg(feature = "toml")]
 use toml_edit::ser::Error as TomlSerErr;
-use crate::store::Store;
 
 #[cfg(backend = "toml")]
 const EXTENSION: &str = "toml";
@@ -199,15 +200,6 @@ impl From<RpError> for ConfyError {
                 panic!(
                     "Unexpected migration error during confy emulation: {:?}",
                     mig_err
-                );
-            }
-            RpError::Intercepted => {
-                panic!("Unexpected Intercepted error during confy emulation");
-            }
-            RpError::KeyNotFound(key) => {
-                panic!(
-                    "Unexpected KeyNotFound error during confy emulation: {}",
-                    key
                 );
             }
         }

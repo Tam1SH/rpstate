@@ -15,13 +15,12 @@ async fn test_tauri_plugin_commands() {
 
     let plugin_state = PluginState {
         subscriptions: Default::default(),
-        store: store.clone()
+        store: store.clone(),
     };
 
     app.manage(plugin_state);
 
     let plugin_state = app.state::<PluginState>();
-
 
     let val = tauri_plugin_amethystate::backend::commands::amethystate_get(
         plugin_state.clone(),

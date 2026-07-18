@@ -2,20 +2,17 @@ pub mod backend;
 pub mod builder;
 pub mod config;
 pub mod default;
+mod error;
 pub mod meta;
 mod primitives_factory;
-pub(crate) mod sync_backend;
-pub mod util;
-mod error;
-mod traits;
 mod state_slice;
+pub(crate) mod sync_backend;
+mod traits;
 mod types;
+pub mod util;
 
 pub use error::{StorageError, StorageResult};
-pub use types::*;
+pub use primitives_factory::*;
 pub use state_slice::*;
 pub use traits::*;
-pub use primitives_factory::*;
-
-
-
+pub use types::*;

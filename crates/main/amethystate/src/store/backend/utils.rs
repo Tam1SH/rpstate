@@ -1,8 +1,14 @@
-use std::sync::Arc;
-use crate::store::{StoreEvent, SubscriptionEntry};
-use parking_lot::{Mutex, RwLock};
+use crate::SubscriptionKind;
+#[cfg(any(feature = "redb", feature = "sqlite"))]
 use crate::store::util::debouncer::Debouncer;
-use crate::{StorageResult, StoreOp, SubscriptionKind};
+use crate::store::{StoreEvent, SubscriptionEntry};
+#[cfg(any(feature = "redb", feature = "sqlite"))]
+use crate::{StorageResult, StoreOp};
+#[cfg(any(feature = "redb", feature = "sqlite"))]
+use parking_lot::Mutex;
+use parking_lot::RwLock;
+#[cfg(any(feature = "redb", feature = "sqlite"))]
+use std::sync::Arc;
 
 pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent) {
     let callbacks = {
@@ -25,8 +31,8 @@ fn matches_kind(kind: &SubscriptionKind, path: &str) -> bool {
         SubscriptionKind::Prefix(prefix) => {
             *path == **prefix
                 || path
-                .strip_prefix(&**prefix)
-                .is_some_and(|t| t.starts_with('.'))
+                    .strip_prefix(&**prefix)
+                    .is_some_and(|t| t.starts_with('.'))
         }
     }
 }
@@ -63,6 +69,7 @@ pub fn drain_pending_prefix(
     }
 }
 
+#[cfg(any(feature = "redb", feature = "sqlite"))]
 pub fn set_raw_pending(
     pending: &Mutex<std::collections::HashMap<Arc<str>, Option<Vec<u8>>>>,
     subscriptions: &RwLock<Vec<SubscriptionEntry>>,

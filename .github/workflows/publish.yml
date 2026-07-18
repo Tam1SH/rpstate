@@ -1,0 +1,75 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches workspace version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match [workspace.package].version ($CARGO_VERSION) in Cargo.toml"
+            exit 1
+          fi
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            libglib2.0-dev libgtk-3-dev libatk1.0-dev \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libxcb1-dev libxcb-xkb-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Publish order follows the internal dependency graph (leaves first).
+      # amethystate-dioxus/gpui/leptos/slint/yew are NOT published here - they
+      # track their underlying framework's own version, not this workspace's.
+      - name: Publish crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          set -e
+          CRATES=(
+            amethystate-macros-core
+            amethystate-core
+            amethystate-macros
+            amethystate-macros-arena
+            amethystate-tauri
+            amethystate
+            amethystate-codegen
+            amethystate-arena
+          )
+          for crate in "${CRATES[@]}"; do
+            echo "::group::cargo publish -p $crate"
+            for attempt in 1 2 3; do
+              if cargo publish -p "$crate" --locked; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to publish $crate after 3 attempts"
+                exit 1
+              fi
+              echo "Publish of $crate failed (attempt $attempt), retrying in 20s..."
+              sleep 20
+            done
+            echo "::endgroup::"
+            # give crates.io's index a moment to propagate before the next
+            # crate (which may depend on this one) tries to resolve it
+            sleep 20
+          done

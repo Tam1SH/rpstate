@@ -211,23 +211,23 @@ pub(crate) fn data_impl(
         }
     });
 
-    let fields_for_hash = p_fields.iter().map(|e| {
-        let fname_str = e.ident.as_ref().unwrap().to_string();
-        let ty = &e.ty;
-        let field_ty = if e.nested {
-            quote! { <#ty<#crate_name::DefaultStore> as #crate_name::AmeState>::Data }
-        } else if let Some((k, v)) = e.get_map_types() {
-            quote! { ::std::collections::HashMap<#k, #v> }
-        } else {
-            quote! { #ty }
-        };
-        (fname_str, field_ty)
-    }).collect::<Vec<_>>();
+    let fields_for_hash = p_fields
+        .iter()
+        .map(|e| {
+            let fname_str = e.ident.as_ref().unwrap().to_string();
+            let ty = &e.ty;
+            let field_ty = if e.nested {
+                quote! { <#ty<#crate_name::DefaultStore> as #crate_name::AmeState>::Data }
+            } else if let Some((k, v)) = e.get_map_types() {
+                quote! { ::std::collections::HashMap<#k, #v> }
+            } else {
+                quote! { #ty }
+            };
+            (fname_str, field_ty)
+        })
+        .collect::<Vec<_>>();
 
-    let recursive_hash_expr = crate::hash::gen_recursive_type_hash(
-        crate_name,
-        fields_for_hash,
-    );
+    let recursive_hash_expr = crate::hash::gen_recursive_type_hash(crate_name, fields_for_hash);
 
     let prefix_expr = prefix.clone().unwrap_or_default();
     let deps = migration_deps(crate_name, entries);

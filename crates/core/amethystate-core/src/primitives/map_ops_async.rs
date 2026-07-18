@@ -1,15 +1,19 @@
 use crate::AmeBackendAsync as AmeBackend;
+use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore, map_apply_remote_change};
 use uuid::Uuid;
-use crate::primitives::error::{ReactiveMapResult, ReactiveMapError};
 
 use serde::de::DeserializeOwned;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
 
-pub async fn map_get_async<B, K, V>(backend: &B, path: &str, key: &K) -> ReactiveMapResult<Option<V>, B::Error>
+pub async fn map_get_async<B, K, V>(
+    backend: &B,
+    path: &str,
+    key: &K,
+) -> ReactiveMapResult<Option<V>, B::Error>
 where
     B: AmeBackend,
     K: Display,
@@ -33,7 +37,10 @@ where
         .map(|v| v.is_some())
 }
 
-pub async fn map_entries_async<B, K, V>(backend: &B, path: &str) -> ReactiveMapResult<Vec<(K, V)>, B::Error>
+pub async fn map_entries_async<B, K, V>(
+    backend: &B,
+    path: &str,
+) -> ReactiveMapResult<Vec<(K, V)>, B::Error>
 where
     B: AmeBackend,
     K: FromStr,

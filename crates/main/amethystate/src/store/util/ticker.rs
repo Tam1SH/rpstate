@@ -99,7 +99,7 @@ mod tests {
             count_inner.fetch_add(1, Ordering::SeqCst);
         });
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(600));
         drop(t);
 
         let n = count.load(Ordering::SeqCst);

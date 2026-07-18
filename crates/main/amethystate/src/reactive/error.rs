@@ -1,5 +1,5 @@
-use thiserror::Error;
 use crate::store::StorageError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum FieldError {
@@ -24,12 +24,8 @@ where
             amethystate_core::error::FieldError::StorageError(e) => {
                 FieldError::StorageError(StorageError::from(e))
             }
-            amethystate_core::error::FieldError::Intercepted => {
-                FieldError::Intercepted
-            }
-            amethystate_core::error::FieldError::KeyNotFound(k) => {
-                FieldError::KeyNotFound(k)
-            }
+            amethystate_core::error::FieldError::Intercepted => FieldError::Intercepted,
+            amethystate_core::error::FieldError::KeyNotFound(k) => FieldError::KeyNotFound(k),
         }
     }
 }
@@ -57,9 +53,7 @@ where
             amethystate_core::error::ReactiveMapError::StorageError(e) => {
                 ReactiveMapError::StorageError(StorageError::from(e))
             }
-            amethystate_core::error::ReactiveMapError::Intercepted => {
-                ReactiveMapError::Intercepted
-            }
+            amethystate_core::error::ReactiveMapError::Intercepted => ReactiveMapError::Intercepted,
             amethystate_core::error::ReactiveMapError::KeyNotFound(k) => {
                 ReactiveMapError::KeyNotFound(k)
             }

@@ -1,4 +1,5 @@
 use crate::observability::register_field;
+use crate::store::StorageResult;
 use crate::{Field, ReactiveMap, StateScope, Store, StoreOp, StoreSubscription, SubscriptionKind};
 use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
 use serde::Serialize;
@@ -9,7 +10,6 @@ use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::store::StorageResult;
 
 pub fn field<TScope, TValue, S>(
     store: &S,
@@ -109,6 +109,22 @@ where
     V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
     M: AccessMode,
 {
+    reactive_map_with_scope_key(store, path, TScope::PREFIX, defaults, instance_id)
+}
+
+pub fn reactive_map_with_scope_key<K, V, S, M>(
+    store: &S,
+    path: Arc<str>,
+    scope_key: &str,
+    defaults: HashMap<K, V>,
+    instance_id: Uuid,
+) -> StorageResult<ReactiveMap<K, V, S, M>>
+where
+    S: Store,
+    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
+    V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
+    M: AccessMode,
+{
     let mut known_cache = HashMap::new();
 
     let prefix = format!("{}.", path);
@@ -122,7 +138,7 @@ where
         }
     }
 
-    if !store.is_initialized(TScope::PREFIX)? {
+    if !store.is_initialized(scope_key)? {
         for (k, v) in defaults {
             let full_path = format!("{}.{}", path, k);
             store.set(&full_path, &v)?;

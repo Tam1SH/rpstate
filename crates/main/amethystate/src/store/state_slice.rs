@@ -1,6 +1,6 @@
-use amethystate_core::ReactiveScope;
 use crate::Store;
 use crate::store::error::StorageResult;
+use amethystate_core::ReactiveScope;
 
 pub trait StateScope {
     const PREFIX: &'static str;

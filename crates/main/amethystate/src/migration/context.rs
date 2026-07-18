@@ -1,14 +1,14 @@
+use crate::MigrationError;
 use crate::codec::CodecError;
 use crate::migration::fields::AmeStateFields;
 use crate::migration::migrate_from::MigrateFrom;
+use crate::store::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageResult};
-use crate::MigrationError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::str::FromStr;
-use crate::store::MigrationBackendAdapter;
 
 pub struct MigrationContext<'a> {
     prefix: String,
@@ -174,7 +174,10 @@ impl<'a> MigrationContext<'a> {
     }
 }
 
-pub fn encode<T: Serialize>(storage: &dyn MigrationBackendAdapter, value: &T) -> StorageResult<Vec<u8>> {
+pub fn encode<T: Serialize>(
+    storage: &dyn MigrationBackendAdapter,
+    value: &T,
+) -> StorageResult<Vec<u8>> {
     match storage.format() {
         #[cfg(feature = "redb")]
         CodecFormat::MessagePack => rmp_serde::to_vec(value)
@@ -314,7 +317,11 @@ mod tests {
             unreachable!()
         }
 
-        fn set_schema_snapshot(&mut self, _prefix: &str, _snapshot: &SchemaSnapshot) -> StorageResult<()> {
+        fn set_schema_snapshot(
+            &mut self,
+            _prefix: &str,
+            _snapshot: &SchemaSnapshot,
+        ) -> StorageResult<()> {
             unreachable!()
         }
 

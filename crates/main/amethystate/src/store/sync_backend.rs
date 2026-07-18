@@ -1,11 +1,11 @@
 use crate::Store;
 
+use crate::store::StorageError;
+use amethystate_core::AmeBackendSync;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use uuid::Uuid;
-use amethystate_core::AmeBackendSync;
-use crate::store::StorageError;
 
 pub(crate) struct StoreBackend<S> {
     pub(crate) store: S,
@@ -75,5 +75,4 @@ where
     {
         self.store.decode(raw)
     }
-
 }

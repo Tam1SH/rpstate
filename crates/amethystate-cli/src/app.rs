@@ -1,7 +1,11 @@
 use amethystate::observability::InspectorBackend;
 use amethystate::store::meta::SchemaSnapshot;
 
-pub enum ViewMode { All, Flatten, Struct(String) }
+pub enum ViewMode {
+    All,
+    Flatten,
+    Struct(String),
+}
 
 pub struct App {
     pub backend: Box<dyn InspectorBackend>,
@@ -52,23 +56,21 @@ impl App {
 
 enum Skip {
     Plus,
-    Minus
+    Minus,
 }
 fn skip_board(selected: usize, skip: Skip) -> usize {
     match skip {
         Skip::Plus => {
             if selected == 1 {
                 selected + 2
-            }
-            else {
+            } else {
                 selected + 1
             }
         }
         Skip::Minus => {
             if selected == 3 {
                 selected - 2
-            }
-            else {
+            } else {
                 selected - 1
             }
         }

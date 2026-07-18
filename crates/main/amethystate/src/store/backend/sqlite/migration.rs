@@ -2,11 +2,11 @@ use super::error::SqliteStoreError;
 use crate::codec::CodecError;
 use crate::migration::AppliedStep;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
+use crate::store::traits::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageResult};
 use rusqlite::{OptionalExtension, Transaction};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use crate::store::traits::MigrationBackendAdapter;
 
 pub struct SqliteMigrationBackend<'a> {
     pub(crate) txn: &'a Transaction<'a>,
@@ -116,7 +116,11 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
     fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
         self.get_typed("schema_snapshot", prefix)
     }
-    fn set_schema_snapshot(&mut self, prefix: &str, snapshot: &SchemaSnapshot) -> StorageResult<()> {
+    fn set_schema_snapshot(
+        &mut self,
+        prefix: &str,
+        snapshot: &SchemaSnapshot,
+    ) -> StorageResult<()> {
         self.set_typed("schema_snapshot", prefix, snapshot)
     }
 

@@ -1,7 +1,7 @@
-use crate::store::StorageResult;
 use crate::migration::fields::FieldDescriptor;
 use crate::migration::registry::MigrationDependency;
 use crate::migration::set::MigrationSet;
+use crate::store::StorageResult;
 use crate::{MigrationContext, MigrationPlan, StateScope};
 use std::collections::{BTreeSet, HashMap};
 
@@ -25,7 +25,6 @@ pub struct PrefixMigrationBuilder<'a> {
 }
 
 impl MigrationBuilder {
-
     pub fn collect_codegen(&mut self) -> &mut Self {
         use crate::migration::registry::MigrationStepEntry;
         use std::collections::HashSet;

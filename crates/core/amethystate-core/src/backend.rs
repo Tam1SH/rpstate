@@ -1,6 +1,6 @@
-use std::borrow::Borrow;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::borrow::Borrow;
 use std::sync::Arc;
 use uuid::Uuid;
 

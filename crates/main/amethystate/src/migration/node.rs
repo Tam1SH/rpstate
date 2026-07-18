@@ -1,6 +1,6 @@
+use crate::migration::fields::AmeStateFields;
 use crate::store::StorageResult;
 use crate::store::Store;
-use crate::migration::fields::AmeStateFields;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

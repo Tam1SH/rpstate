@@ -1,7 +1,7 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
+use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use crate::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
-use crate::primitives::error::{ReactiveMapResult, ReactiveMapError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -32,7 +32,9 @@ where
 
 impl<K, V, B> PartialEq for ReactiveMap<K, V, B> {
     fn eq(&self, other: &Self) -> bool {
-        self.prefix == other.prefix && self.instance_id == other.instance_id && Arc::ptr_eq(&self.core.next_id, &other.core.next_id)
+        self.prefix == other.prefix
+            && self.instance_id == other.instance_id
+            && Arc::ptr_eq(&self.core.next_id, &other.core.next_id)
     }
 }
 
@@ -181,7 +183,7 @@ where
             value,
             Some(self.instance_id),
         )
-            .await
+        .await
     }
 
     pub async fn set(&self, key: K, value: &V) -> ReactiveMapResult<(), B::Error> {

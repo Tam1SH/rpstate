@@ -1,19 +1,20 @@
-use crate::errors::StorageError;
-use crate::store::StorageResult;
 use super::document::TextDocument;
 use super::error::TextStoreError;
+use crate::MigrationReport;
 use crate::codec::CodecError;
+use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
+use crate::store::StorageResult;
 use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::config::StoreConfig;
+use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp,
-    SubscriptionEntry, SubscriptionId, SubscriptionKind,
+    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId,
+    SubscriptionKind,
 };
-use crate::MigrationReport;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -25,7 +26,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tempfile::NamedTempFile;
 use tracing::{info, warn};
-use crate::store::traits::MigrationBackendAdapter;
 
 pub struct StoreFile<D> {
     pub path: PathBuf,
@@ -317,7 +317,6 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
 
         Ok(Self { inner })
     }
-
 }
 
 impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
@@ -374,7 +373,12 @@ impl<D: TextDocument> TextStoreInner<D> {
         }
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn set<T: Serialize>(
+        &self,
+        path: &str,
+        value: &T,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
         self.check_debouncer()?;
         let path_str = normalize_path(path)?;
         let node = D::serialize_node(value)?;
@@ -498,7 +502,6 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.debouncer.schedule();
         Ok(())
     }
-
 }
 
 impl<D: TextDocument + Send + 'static> Store for TextStore<D> {

@@ -1,5 +1,5 @@
-mod scheme;
 mod inspector_trait;
+mod scheme;
 pub use inspector_trait::*;
 
 pub use scheme::*;

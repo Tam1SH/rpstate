@@ -1,10 +1,10 @@
 use crate::StorageResult;
 use crate::codec::CodecError;
-use crate::store::{CodecFormat, StorageError};
 use crate::store::backend::text::TextStoreError;
 use crate::store::backend::text::document::{
     Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
 };
+use crate::store::{CodecFormat, StorageError};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -61,9 +61,7 @@ impl TextDocument for TomlDocument {
             let table = match node.into_table() {
                 Ok(t) => t,
                 Err(_) => {
-                    return Err(StorageError::TextStore(
-                        TextStoreError::RootMustBeObject,
-                    ));
+                    return Err(StorageError::TextStore(TextStoreError::RootMustBeObject));
                 }
             };
             *self.0.as_item_mut() = toml_edit::Item::Table(table);

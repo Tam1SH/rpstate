@@ -33,7 +33,6 @@ impl IntoGlobalStore for StoreBuilder {
     }
 }
 
-
 impl IntoGlobalStore for &str {
     type Output = MigrationReport;
 

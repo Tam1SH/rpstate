@@ -1,12 +1,12 @@
-use crate::observability::SchemaEntry;
-use crate::store::StorageResult;
 use crate::migration::fields::FieldDescriptor;
 use crate::migration::meta::{PrefixMeta, SchemaSnapshot, StoredFieldEntry};
 use crate::migration::set::MigrationSet;
 use crate::migration::{
     AppliedStep, ComponentOutcome, ComponentResult, FieldTypeChange, NaggingRecord, SchemaDiff,
 };
+use crate::observability::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
+use crate::store::StorageResult;
 use crate::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
 use std::collections::HashMap;
 
@@ -37,22 +37,31 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
                 let needs_update = match &stored {
                     None => true,
-                    Some(s) => s.struct_name.as_deref() != Some(entry.struct_name)
-                        || s.version != entry.version
-                        || s.schema_hash != entry.schema_hash,
+                    Some(s) => {
+                        s.struct_name.as_deref() != Some(entry.struct_name)
+                            || s.version != entry.version
+                            || s.schema_hash != entry.schema_hash
+                    }
                 };
 
                 if needs_update {
-                    storage.set_schema_snapshot(prefix, &SchemaSnapshot {
-                        version: entry.version,
-                        struct_name: Some(entry.struct_name.to_string()),
-                        schema_hash: entry.schema_hash,
-                        fields: entry.fields.iter().map(|f| StoredFieldEntry {
-                            name: f.name.to_string(),
-                            type_name: f.type_name.to_string(),
-                            type_hash: f.type_hash,
-                        }).collect(),
-                    })?;
+                    storage.set_schema_snapshot(
+                        prefix,
+                        &SchemaSnapshot {
+                            version: entry.version,
+                            struct_name: Some(entry.struct_name.to_string()),
+                            schema_hash: entry.schema_hash,
+                            fields: entry
+                                .fields
+                                .iter()
+                                .map(|f| StoredFieldEntry {
+                                    name: f.name.to_string(),
+                                    type_name: f.type_name.to_string(),
+                                    type_hash: f.type_hash,
+                                })
+                                .collect(),
+                        },
+                    )?;
                 }
             }
             Ok(())
@@ -339,7 +348,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use crate::migration::context::{decode, encode};
     use crate::migration::fields::FieldDescriptor;
     use crate::store::{CodecFormat, StorageError};
@@ -401,7 +410,11 @@ mod tests {
         fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
             Ok(self.snapshots.get(prefix).cloned())
         }
-        fn set_schema_snapshot(&mut self, prefix: &str, snapshot: &SchemaSnapshot) -> StorageResult<()> {
+        fn set_schema_snapshot(
+            &mut self,
+            prefix: &str,
+            snapshot: &SchemaSnapshot,
+        ) -> StorageResult<()> {
             self.snapshots.insert(prefix.to_string(), snapshot.clone());
             Ok(())
         }

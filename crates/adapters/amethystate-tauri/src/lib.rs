@@ -12,10 +12,9 @@ use uuid::Uuid;
 pub(crate) type TauriResult<T> = std::result::Result<T, Error>;
 
 mod core;
-mod event;
 mod error;
+mod event;
 pub use error::*;
-
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TauriBackend;
@@ -135,7 +134,6 @@ impl AmeBackendAsync for TauriBackend {
     {
         serde_json::from_value(raw.clone()).map_err(|e| e.to_string())
     }
-
 }
 
 impl AsyncSubscriptionBackend for TauriBackend {
@@ -190,8 +188,7 @@ impl AsyncSubscriptionBackend for TauriBackend {
             )
             .await;
 
-            if let Ok(stream) = event::listen::<serde_json::Value>(&event_channel).await
-            {
+            if let Ok(stream) = event::listen::<serde_json::Value>(&event_channel).await {
                 let mut aborted_stream =
                     futures::stream::Abortable::new(stream, abort_registration);
                 while let Some(Event { payload, .. }) = aborted_stream.next().await {

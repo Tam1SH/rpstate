@@ -1,5 +1,5 @@
-use crate::store::StorageResult;
 use crate::MigrationContext;
+use crate::store::StorageResult;
 
 pub trait MigrateFrom<TOld>: Sized {
     const RENAMES: &'static [(&'static str, &'static str)] = &[];

@@ -1,7 +1,9 @@
 use crate::primitives::*;
+use amethystate::reactive::error::{ReactiveFieldResult, ReactiveMapResult};
+use amethystate::store::Store;
 use amethystate::{
     AccessMode, Field, MapChange, Pipeline, Reactive, ReactiveMap, ReactiveMapKey,
-    ReactiveMapValue, StorageResult, SignalSubscription, WritableMode,
+    ReactiveMapValue, SignalSubscription, WritableMode,
 };
 use parking_lot::RwLock;
 use serde::{Serialize, de::DeserializeOwned};
@@ -10,8 +12,6 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use uuid::Uuid;
-use amethystate::reactive::error::{ReactiveFieldResult, ReactiveMapResult};
-use amethystate::store::Store;
 
 type ErasedItem = Box<dyn Any + Send + Sync>;
 
@@ -169,7 +169,11 @@ impl<S: Store> Arena<S> {
         }
     }
 
-    pub fn get_map_entry<K, V, M>(&self, handle: MapHandle<K, V, M>, key: &K) -> ReactiveMapResult<Option<V>>
+    pub fn get_map_entry<K, V, M>(
+        &self,
+        handle: MapHandle<K, V, M>,
+        key: &K,
+    ) -> ReactiveMapResult<Option<V>>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
@@ -267,7 +271,10 @@ impl<S: Store> Arena<S> {
         self.storage.write().remove(handle.key);
     }
 
-    pub fn get_map_entries<K, V, M>(&self, handle: MapHandle<K, V, M>) -> ReactiveMapResult<Vec<(K, V)>>
+    pub fn get_map_entries<K, V, M>(
+        &self,
+        handle: MapHandle<K, V, M>,
+    ) -> ReactiveMapResult<Vec<(K, V)>>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,

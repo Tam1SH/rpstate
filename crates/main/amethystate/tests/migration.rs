@@ -24,7 +24,9 @@ pub struct Config {
 
 #[migrate]
 #[rename(host => address)]
-fn migrate_config_v1_to_v2(old: AmeData<v1::Config>) -> amethystate::MigrationResult<AmeData<Config>> {
+fn migrate_config_v1_to_v2(
+    old: AmeData<v1::Config>,
+) -> amethystate::MigrationResult<AmeData<Config>> {
     Ok(AmeData::<Config> {
         address: old.host,
         port: 9090,
@@ -41,9 +43,7 @@ fn test_decentralized_codegen_migration() {
         config.host().set("10.0.0.1".to_string()).unwrap();
     }
 
-    let (store, reports) = StoreBuilder::new(&path)
-        .build_with_report()
-        .unwrap();
+    let (store, reports) = StoreBuilder::new(&path).build_with_report().unwrap();
 
     assert!(!reports.has_failures());
 

@@ -1,8 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 use amethystate::test_utils::unique_store;
 use amethystate::{
-    DefaultStore, Field, IntoPipeline, MapChange, ReactiveMap, Store,
-    WritableMode, amethystate,
+    DefaultStore, Field, IntoPipeline, MapChange, ReactiveMap, Store, WritableMode, amethystate,
 };
 use amethystate_arena::Arena;
 use std::sync::atomic::{AtomicUsize, Ordering};

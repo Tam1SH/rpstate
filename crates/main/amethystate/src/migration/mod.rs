@@ -11,8 +11,7 @@ pub mod registry;
 pub mod set;
 pub mod types;
 
-
-use crate::store::{meta, StorageError, StorageResult};
+use crate::store::{StorageError, StorageResult, meta};
 pub use context::MigrationContext;
 pub use error::MigrationError;
 

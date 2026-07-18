@@ -80,9 +80,8 @@ import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
                             FieldKind::Plain | FieldKind::Volatile | FieldKind::Lookup { .. } => {
                                 field.ts_type.to_string()
                             }
-                            FieldKind::Nested { struct_name } | FieldKind::LookupNode { struct_name, .. } => {
-                                struct_name.to_string()
-                            }
+                            FieldKind::Nested { struct_name }
+                            | FieldKind::LookupNode { struct_name, .. } => struct_name.to_string(),
                             FieldKind::ReactiveMap {
                                 key_type,
                                 value_type,
@@ -95,8 +94,8 @@ import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
                     }
                     nested_classes.push_str("};\n\n");
 
-
-                    nested_classes.push_str(&format!("export class {}Fields {{\n", entry.struct_name));
+                    nested_classes
+                        .push_str(&format!("export class {}Fields {{\n", entry.struct_name));
                     for field in entry.fields {
                         let prop_name = field.name.to_lower_camel_case();
                         let prop_type = match &field.kind {
@@ -148,7 +147,11 @@ import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
                                 target_key,
                                 mutable,
                             } => {
-                                let class_name = if *mutable { "ReactiveField" } else { "ReadonlyReactiveField" };
+                                let class_name = if *mutable {
+                                    "ReactiveField"
+                                } else {
+                                    "ReadonlyReactiveField"
+                                };
                                 nested_classes.push_str(&format!(
                                     "        this.{} = new {}<{}>(\"{}\", initialValues?.[\"{}\"]);\n",
                                     prop_name, class_name, field.full_ts_type, target_key, target_key
@@ -178,16 +181,16 @@ import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
                     nested_classes.push_str("    }\n}\n\n");
                 }
                 Some(prefix) => {
-                    root_classes.push_str(&format!("export type {}Plain = {{\n", entry.struct_name));
+                    root_classes
+                        .push_str(&format!("export type {}Plain = {{\n", entry.struct_name));
                     for field in entry.fields {
                         let prop_name = field.name.to_lower_camel_case();
                         let prop_type = match &field.kind {
                             FieldKind::Plain | FieldKind::Volatile | FieldKind::Lookup { .. } => {
                                 field.ts_type.to_string()
                             }
-                            FieldKind::Nested { struct_name } | FieldKind::LookupNode { struct_name, .. } => {
-                                struct_name.to_string()
-                            }
+                            FieldKind::Nested { struct_name }
+                            | FieldKind::LookupNode { struct_name, .. } => struct_name.to_string(),
                             FieldKind::ReactiveMap {
                                 key_type,
                                 value_type,
@@ -272,7 +275,11 @@ import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
                                 target_key,
                                 mutable,
                             } => {
-                                let class_name = if *mutable { "ReactiveField" } else { "ReadonlyReactiveField" };
+                                let class_name = if *mutable {
+                                    "ReactiveField"
+                                } else {
+                                    "ReadonlyReactiveField"
+                                };
                                 root_classes.push_str(&format!(
                                     "        this.{} = new {}<{}>(\"{}\", initialValues?.[\"{}\" as any]);\n",
                                     prop_name, class_name, field.full_ts_type, target_key, target_key
