@@ -18,6 +18,7 @@ PUBLISHED_PATHS=(
   "crates/adapters/amethystate-tauri"
   "crates/main/amethystate"
   "crates/tauri/amethystate-codegen"
+  "crates/tauri/tauri-plugin-amethystate"
   "crates/main/amethystate-arena"
 )
 
