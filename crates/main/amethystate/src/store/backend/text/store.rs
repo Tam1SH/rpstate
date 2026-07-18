@@ -238,7 +238,6 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let files_watch = files.clone();
         let watch_subs = subscriptions.clone();
         let has_pending_watch = has_pending.clone();
-        let data_path = files.data.path.clone();
         let meta_path = files.meta.path.clone();
 
         // External edits (e.g. a text editor doing truncate-then-write) fire multiple
@@ -251,27 +250,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                 return;
             }
 
-            if let Ok(content) = std::fs::read_to_string(&data_path)
-                && let Ok(on_disk) = D::parse(&content)
-            {
-                let events = {
-                    let mut guard = files_watch.data.doc.write();
-
-                    let old_serialized = guard.serialize().unwrap_or_default();
-                    let new_serialized = on_disk.serialize().unwrap_or_default();
-                    if old_serialized == new_serialized {
-                        Vec::new()
-                    } else {
-                        let old = guard.clone();
-                        *guard = on_disk;
-                        info!("external store change detected");
-                        diff_documents::<D>(&old, &*guard)
-                    }
-                };
-                for event in events {
-                    utils::emit_events(&watch_subs, event);
-                }
-            }
+            sync_external_changes::<D>(&files_watch.data, &watch_subs);
 
             if let Ok(content) = std::fs::read_to_string(&meta_path)
                 && let Ok(on_disk) = D::parse(&content)
@@ -401,6 +380,10 @@ impl<D: TextDocument> TextStoreInner<D> {
     fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
 
+        if !self.has_pending.load(Ordering::Acquire) {
+            sync_external_changes::<D>(&self.files.data, &self.subscriptions);
+        }
+
         let path_str = normalize_path(path)?;
         let parts = split_path(&path_str);
 
@@ -478,6 +461,10 @@ impl<D: TextDocument> TextStoreInner<D> {
         node: D::Node,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
+        if !self.has_pending.load(Ordering::Acquire) {
+            sync_external_changes::<D>(&self.files.data, &self.subscriptions);
+        }
+
         let parts = split_path(&path_str);
         let (old_bytes, new_bytes) = {
             let mut guard = self.files.data.doc.write();
@@ -716,6 +703,40 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
                 scan_prefix_recursive(doc, &child_parts, prefix_str, results, target_depth);
             }
         }
+    }
+}
+
+/// Re-reads `file` from disk and adopts it in-memory if it differs from what we
+/// already have, emitting events for the difference. Callers are responsible for
+/// only invoking this when there's no pending unflushed internal write (otherwise
+/// this would clobber in-flight local changes with whatever is currently on disk).
+fn sync_external_changes<D: TextDocument>(
+    file: &StoreFile<D>,
+    subscriptions: &Arc<RwLock<Vec<SubscriptionEntry>>>,
+) {
+    let Ok(content) = std::fs::read_to_string(&file.path) else {
+        return;
+    };
+    let Ok(on_disk) = D::parse(&content) else {
+        return;
+    };
+
+    let events = {
+        let mut guard = file.doc.write();
+
+        let old_serialized = guard.serialize().unwrap_or_default();
+        let new_serialized = on_disk.serialize().unwrap_or_default();
+        if old_serialized == new_serialized {
+            Vec::new()
+        } else {
+            let old = guard.clone();
+            *guard = on_disk;
+            info!("external store change detected");
+            diff_documents::<D>(&old, &*guard)
+        }
+    };
+    for event in events {
+        utils::emit_events(subscriptions, event);
     }
 }
 
