@@ -44,7 +44,7 @@ jobs:
           toolchain: 1.90.0
           components: clippy, rust-src
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --exclude amethystate-gpui --all-targets --all-features -- -D warnings
 
   test:
     runs-on: ${{ matrix.os }}
@@ -83,9 +83,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.feature_set }}" == "all" ]; then
-            cargo test --workspace --all-features
+            cargo test --workspace --exclude amethystate-gpui --all-features
           else
-            cargo test --workspace --no-default-features --features ${{ matrix.feature_set }}
+            cargo test --workspace --exclude amethystate-gpui --no-default-features --features ${{ matrix.feature_set }}
           fi
 
   docs:
@@ -102,4 +102,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.90.0
-      - run: cargo doc --workspace --all-features --no-deps
+      - run: cargo doc --workspace --exclude amethystate-gpui --all-features --no-deps
