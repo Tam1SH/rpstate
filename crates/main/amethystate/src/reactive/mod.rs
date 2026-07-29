@@ -1,3 +1,4 @@
+pub mod entry_signal;
 pub mod error;
 pub mod field;
 pub mod map;
@@ -11,6 +12,7 @@ pub use amethystate_core::primitives::map_core::{
     InterceptorAny, InterceptorKey, SubscriberAny, SubscriberKey,
 };
 pub use amethystate_core::primitives::signal::*;
+pub use entry_signal::*;
 pub use field::*;
 pub use map::*;
 pub use pipeline::*;
