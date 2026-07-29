@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{ReactiveMap, amethystate};
@@ -98,14 +98,22 @@ fn two_entry_signals_sync_without_echo_loop() {
     // Delivery is synchronous: b.set -> store -> a's read (1 fire). The
     // store-originated re-set carries the marker source, so it is not written
     // back - no second fire, no echo.
-    assert_eq!(fires.load(Ordering::SeqCst), 1, "b's write must fire a exactly once");
+    assert_eq!(
+        fires.load(Ordering::SeqCst),
+        1,
+        "b's write must fire a exactly once"
+    );
 
     a.set(300);
 
     assert_eq!(b.get(), 300, "a's write must reach b");
     // a.set fires the watch directly (2nd), then the store round-trip re-set
     // fires once more (3rd, marked, not written back). Still no echo.
-    assert_eq!(fires.load(Ordering::SeqCst), 3, "a's write must settle without echo");
+    assert_eq!(
+        fires.load(Ordering::SeqCst),
+        3,
+        "a's write must settle without echo"
+    );
 }
 
 /// Integration: a write through the entry signal survives a store rebuild.
@@ -123,7 +131,10 @@ fn entry_signal_write_persists_across_store_rebuild() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let config = TableConfig::new_with(&store).unwrap();
-        assert_eq!(config.widths().get(&"memory".to_string()).unwrap(), Some(256));
+        assert_eq!(
+            config.widths().get(&"memory".to_string()).unwrap(),
+            Some(256)
+        );
 
         let entry = config.widths().entry_signal("memory".to_string(), 110);
         assert_eq!(entry.get(), 256);

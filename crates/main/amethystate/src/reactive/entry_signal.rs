@@ -18,7 +18,11 @@ where
     /// Live per-key cell over this map entry. `default` is used when the key
     /// is absent (and again if the key is later removed from the store).
     pub fn entry_signal(&self, key: K, default: V) -> MapEntrySignal<K, V, S> {
-        let initial = self.get(&key).ok().flatten().unwrap_or_else(|| default.clone());
+        let initial = self
+            .get(&key)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| default.clone());
         let inner = Signal::new(initial);
 
         // Marks signal updates that came *from* the store, so the write-back
@@ -31,7 +35,10 @@ where
         let inner_for_read = inner.clone();
         let read = self.subscribe_key(key.clone(), move |change| {
             let next = match change {
-                MapChange::Insert { value, .. } | MapChange::Update { new_value: value, .. } => value.clone(),
+                MapChange::Insert { value, .. }
+                | MapChange::Update {
+                    new_value: value, ..
+                } => value.clone(),
                 MapChange::Remove { .. } | MapChange::Clear { .. } => default.clone(),
             };
             inner_for_read.set(next, Some(sync_source));
@@ -46,7 +53,12 @@ where
             }
         });
 
-        MapEntrySignal { key, map: self.clone(), inner, _sync: (read, write) }
+        MapEntrySignal {
+            key,
+            map: self.clone(),
+            inner,
+            _sync: (read, write),
+        }
     }
 }
 
