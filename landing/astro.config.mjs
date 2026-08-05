@@ -7,7 +7,7 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://Tam1SH.github.io',
+  site: 'https://uniproc-dev.github.io',
   base: '/amethystate',
 
   vite: {

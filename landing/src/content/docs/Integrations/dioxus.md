@@ -174,4 +174,4 @@ fn App() -> Element {
 
 ## Examples
 
-- [`dioxus-settings`](https://github.com/Tam1SH/amethystate/tree/master/examples/dioxus-settings)
+- [`dioxus-settings`](https://github.com/uniproc-dev/amethystate/tree/master/examples/dioxus-settings)

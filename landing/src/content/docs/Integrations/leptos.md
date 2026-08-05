@@ -178,4 +178,4 @@ view! {
 
 ## Examples
 
-- [`tauri-leptos`](https://github.com/Tam1SH/amethystate/tree/master/examples/tauri-leptos) — Full Tauri v2 app with a Leptos WASM frontend.
+- [`tauri-leptos`](https://github.com/uniproc-dev/amethystate/tree/master/examples/tauri-leptos) — Full Tauri v2 app with a Leptos WASM frontend.

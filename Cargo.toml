@@ -19,12 +19,12 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.4"
+version = "0.9.5"
 authors = ["Tam1SH <ignatternyev54@gmail.com>"]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/Tam1SH/amethystate"
-homepage = "https://github.com/Tam1SH/amethystate"
+repository = "https://github.com/uniproc-dev/amethystate"
+homepage = "https://github.com/uniproc-dev/amethystate"
 description = "Type-safe reactive persistence for Rust GUI apps"
 keywords = ["state", "state-managment", "reactive", "persistence", "gui"]
 categories = ["config", "data-structures", "gui"]
@@ -33,14 +33,14 @@ rust-version = "1.90.0"
 
 [workspace.dependencies]
 # internal
-amethystate = { path = "crates/main/amethystate", version = "0.9.4" }
-amethystate-core = { path = "crates/core/amethystate-core", version = "0.9.4" }
-amethystate-macros = { path = "crates/main/amethystate-macros", version = "0.9.4" }
-amethystate-arena = { path = "crates/main/amethystate-arena", version = "0.9.4" }
-amethystate-tauri = { path = "crates/adapters/amethystate-tauri", version = "0.9.4" }
-amethystate-codegen = { path = "crates/tauri/amethystate-codegen", version = "0.9.4" }
-amethystate-macros-core = { path = "crates/core/amethystate-macros-core", version = "0.9.4" }
-amethystate-macros-arena = { path = "crates/main/amethystate-macros-arena", version = "0.9.4" }
+amethystate = { path = "crates/main/amethystate", version = "0.9.5" }
+amethystate-core = { path = "crates/core/amethystate-core", version = "0.9.5" }
+amethystate-macros = { path = "crates/main/amethystate-macros", version = "0.9.5" }
+amethystate-arena = { path = "crates/main/amethystate-arena", version = "0.9.5" }
+amethystate-tauri = { path = "crates/adapters/amethystate-tauri", version = "0.9.5" }
+amethystate-codegen = { path = "crates/tauri/amethystate-codegen", version = "0.9.5" }
+amethystate-macros-core = { path = "crates/core/amethystate-macros-core", version = "0.9.5" }
+amethystate-macros-arena = { path = "crates/main/amethystate-macros-arena", version = "0.9.5" }
 
 # external
 anyhow = "1.0"

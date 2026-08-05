@@ -138,4 +138,4 @@ settings.destroy();
 
 ## Examples
 
-- [`tauri-settings`](https://github.com/Tam1SH/amethystate/tree/master/examples/tauri-settings) — TypeScript frontend
+- [`tauri-settings`](https://github.com/uniproc-dev/amethystate/tree/master/examples/tauri-settings) — TypeScript frontend

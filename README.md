@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/Tam1SH/amethystate/master/logo.svg" alt="amethystate" width="384" />
+<img src="https://raw.githubusercontent.com/uniproc-dev/amethystate/master/logo.svg" alt="amethystate" width="384" />
 
 # amethystate
 
 [![Crates.io](https://img.shields.io/crates/v/amethystate.svg)](https://crates.io/crates/amethystate)
 [![Docs.rs](https://docs.rs/amethystate/badge.svg)](https://docs.rs/amethystate)
-[![CI](https://github.com/Tam1SH/amethystate/actions/workflows/ci.yml/badge.svg)](https://github.com/Tam1SH/amethystate/actions)
+[![CI](https://github.com/uniproc-dev/amethystate/actions/workflows/ci.yml/badge.svg)](https://github.com/uniproc-dev/amethystate/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.90-orange.svg)](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/)
 
@@ -48,11 +48,11 @@ fn main() -> amethystate::Result<()> {
 }
 ```
 
-egui, iced, ratatui, and other retain-mode frameworks are supported too — see [Integrations](https://tam1sh.github.io/amethystate/integrations/overview).
+egui, iced, ratatui, and other retain-mode frameworks are supported too — see [Integrations](https://uniproc-dev.github.io/amethystate/integrations/overview).
 
 ---
 
-See the **[book](https://tam1sh.github.io/amethystate/)** for full documentation — concepts, migrations, and per-framework integration guides.
+See the **[book](https://uniproc-dev.github.io/amethystate/)** for full documentation — concepts, migrations, and per-framework integration guides.
 
 ### Compatibility
 The minimum supported Rust version (MSRV) for `amethystate` is **1.90**.

@@ -102,4 +102,4 @@ Without this, Cargo will treat the crates.io and git versions as separate crates
 
 ## Examples
 
-- [`gpui-settings`](https://github.com/Tam1SH/amethystate/tree/master/examples/gpui-settings)
+- [`gpui-settings`](https://github.com/uniproc-dev/amethystate/tree/master/examples/gpui-settings)

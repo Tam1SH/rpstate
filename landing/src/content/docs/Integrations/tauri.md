@@ -140,6 +140,6 @@ cargo run --bin codegen
 
 ## Examples
 
-- [`tauri-settings`](https://github.com/Tam1SH/amethystate/tree/master/examples/tauri-settings) — TypeScript frontend
-- [`tauri-leptos`](https://github.com/Tam1SH/amethystate/tree/master/examples/tauri-leptos) — Leptos WASM frontend
-- [`tauri-yew`](https://github.com/Tam1SH/amethystate/tree/master/examples/tauri-yew) — Yew WASM frontend
+- [`tauri-settings`](https://github.com/uniproc-dev/amethystate/tree/master/examples/tauri-settings) — TypeScript frontend
+- [`tauri-leptos`](https://github.com/uniproc-dev/amethystate/tree/master/examples/tauri-leptos) — Leptos WASM frontend
+- [`tauri-yew`](https://github.com/uniproc-dev/amethystate/tree/master/examples/tauri-yew) — Yew WASM frontend

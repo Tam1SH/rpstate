@@ -219,4 +219,4 @@ html! {
 
 ## Examples
 
-- [`tauri-yew`](https://github.com/Tam1SH/amethystate/tree/master/examples/tauri-yew) — Full Tauri v2 app with a Yew WASM frontend.
+- [`tauri-yew`](https://github.com/uniproc-dev/amethystate/tree/master/examples/tauri-yew) — Full Tauri v2 app with a Yew WASM frontend.

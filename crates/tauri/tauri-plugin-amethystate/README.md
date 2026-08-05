@@ -4,10 +4,10 @@
 
 [![Crates.io](https://img.shields.io/crates/v/tauri-plugin-amethystate.svg)](https://crates.io/crates/tauri-plugin-amethystate)
 [![Docs.rs](https://docs.rs/tauri-plugin-amethystate/badge.svg)](https://docs.rs/tauri-plugin-amethystate)
-[![CI](https://github.com/Tam1SH/amethystate/actions/workflows/ci.yml/badge.svg)](https://github.com/Tam1SH/amethystate/actions)
+[![CI](https://github.com/uniproc-dev/amethystate/actions/workflows/ci.yml/badge.svg)](https://github.com/uniproc-dev/amethystate/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-*Tauri v2 plugin that exposes [amethystate](https://github.com/Tam1SH/amethystate) reactive persistent state to the frontend, with TypeScript codegen.*
+*Tauri v2 plugin that exposes [amethystate](https://github.com/uniproc-dev/amethystate) reactive persistent state to the frontend, with TypeScript codegen.*
 
 </div>
 
