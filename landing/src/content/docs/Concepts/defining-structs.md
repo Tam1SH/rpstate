@@ -161,4 +161,4 @@ name = "legacy"
 comfy = false
 ```
 
-The primary use case is coexistence with or migration from an existing `confy`-managed file. See [Migrating from confy](../../migrations/confy-compat).
+The primary use case is coexistence with or migration from an existing `confy`-managed file. See [Migrating from confy](/amethystate/migrations/confy-compat/).

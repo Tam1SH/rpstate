@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.svg" alt="amethystate" width="384" />
+<img src="https://raw.githubusercontent.com/Tam1SH/amethystate/master/logo.svg" alt="amethystate" width="384" />
 
 # amethystate
 
@@ -48,11 +48,11 @@ fn main() -> amethystate::Result<()> {
 }
 ```
 
-egui, iced, ratatui, and other retain-mode frameworks are supported too — see [Integrations](./landing/src/content/docs/Integrations/overview.md).
+egui, iced, ratatui, and other retain-mode frameworks are supported too — see [Integrations](https://tam1sh.github.io/amethystate/integrations/overview).
 
 ---
 
-See the **[book](./landing/src/content/docs/)** for full documentation — concepts, migrations, and per-framework integration guides.
+See the **[book](https://tam1sh.github.io/amethystate/)** for full documentation — concepts, migrations, and per-framework integration guides.
 
 ### Compatibility
 The minimum supported Rust version (MSRV) for `amethystate` is **1.90**.

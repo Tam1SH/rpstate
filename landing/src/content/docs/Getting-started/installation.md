@@ -41,12 +41,12 @@ Tauri integration includes a plugin, async backend, and Rust and TypeScript bind
 amethystate = { version = "*", features = ["tauri"] }
 ```
 
-See [Tauri integration](../../integrations/tauri) for setup and usage.
+See [Tauri integration](/amethystate/integrations/tauri/) for setup and usage.
 
 ## Migrating from an existing solution
 
-See [Migrating from confy](../../migrations/confy-compat) or [Migrating from a custom solution](../../migrations/custom).
+See [Migrating from confy](/amethystate/migrations/confy-compat/) or [Migrating from a custom solution](/amethystate/migrations/custom/).
 
 ## Framework integrations
 
-See [Integrations](../../integrations/overview).
+See [Integrations](/amethystate/integrations/overview/).
