@@ -232,67 +232,97 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
         path: Arc<str>,
         mut change: MapChange<K, V>,
     ) -> Result<MapChange<K, V>, String> {
-        if let Some(_guard) = InterceptGuard::enter(&self.intercept_depth, path) {
-            let mut keys_to_intercept = Vec::new();
-            if let Some(k) = change.key() {
-                keys_to_intercept.push(k.clone());
-            } else {
+        let Some(_guard) = InterceptGuard::enter(&self.intercept_depth, path) else {
+            // Letting the change through unchecked would turn a validating
+            // interceptor off exactly where recursion is deepest, and the value
+            // it exists to reject would reach the backend.
+            return Err("Maximum intercept depth reached".to_string());
+        };
+
+        // A change with no key is not about any one key, so key interceptors do
+        // not apply. Running all of them used to hand each the same `Clear`,
+        // accumulating their rewrites, in `HashMap` order.
+        if let Some(key) = change.key().cloned() {
+            let interceptors = {
                 let lock = self.interceptors_key.lock().unwrap();
-                keys_to_intercept = lock.keys().cloned().collect();
-            }
-            for key in keys_to_intercept {
-                let interceptors = {
-                    let lock = self.interceptors_key.lock().unwrap();
-                    lock.get(&key).cloned().unwrap_or_default()
-                };
-                for (_, interceptor) in interceptors {
-                    if let Some(new_change) = interceptor(change.clone()) {
-                        change = new_change;
-                    } else {
-                        return Err("Map change intercepted by key filter".to_string());
-                    }
-                }
-            }
-            let interceptors_any = self.interceptors_any.lock().unwrap().clone();
-            for (_, interceptor) in interceptors_any {
+                lock.get(&key).cloned().unwrap_or_default()
+            };
+            for (_, interceptor) in interceptors {
                 if let Some(new_change) = interceptor(change.clone()) {
                     change = new_change;
                 } else {
-                    return Err("Map change intercepted by global filter".to_string());
+                    return Err("Map change intercepted by key filter".to_string());
                 }
             }
         }
-        Ok(change)
-    }
 
-    pub fn notify(&self, change: &MapChange<K, V>) {
-        if let Some(k) = change.key()
-            && let Ok(lock) = self.subscribers_key.lock()
-            && let Some(entries) = lock.get(k)
-        {
-            for (_, cb, meta) in entries {
-                tracing::trace!(
-                    target: "amethystate",
-                    subscription_id = meta.id,
-                    name = meta.name,
-                    location = format!("{}:{}", meta.location.file(), meta.location.line()),
-                    "map signal emit → key subscription fire",
-                );
-                cb(change);
+        let interceptors_any = self.interceptors_any.lock().unwrap().clone();
+        for (_, interceptor) in interceptors_any {
+            if let Some(new_change) = interceptor(change.clone()) {
+                change = new_change;
+            } else {
+                return Err("Map change intercepted by global filter".to_string());
             }
         }
 
-        if let Ok(lock) = self.subscribers_any.lock() {
-            for (_, cb, meta) in lock.iter() {
-                tracing::trace!(
-                    target: "amethystate",
-                    subscription_id = meta.id,
-                    name = meta.name,
-                    location = format!("{}:{}", meta.location.file(), meta.location.line()),
-                    "map signal emit → any subscription fire",
-                );
-                cb(change);
-            }
+        Ok(change)
+    }
+
+    /// Fires every subscriber interested in `change`.
+    ///
+    /// The callbacks are collected before any of them runs, and the locks are
+    /// released first. A subscriber reacting to a change by writing to the same
+    /// map is ordinary, and `std::sync::Mutex` is not reentrant, so holding the
+    /// lock across the calls deadlocks the thread. It also means a panicking
+    /// callback cannot poison the subscriber lists.
+    pub fn notify(&self, change: &MapChange<K, V>) {
+        let keyed: Vec<_> = match change.key() {
+            Some(k) => self
+                .subscribers_key
+                .lock()
+                .ok()
+                .and_then(|lock| {
+                    lock.get(k).map(|entries| {
+                        entries
+                            .iter()
+                            .map(|(_, cb, meta)| (cb.clone(), *meta))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        let any: Vec<_> = self
+            .subscribers_any
+            .lock()
+            .map(|lock| {
+                lock.iter()
+                    .map(|(_, cb, meta)| (cb.clone(), *meta))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for (cb, meta) in keyed {
+            tracing::trace!(
+                target: "amethystate",
+                subscription_id = meta.id,
+                name = meta.name,
+                location = format!("{}:{}", meta.location.file(), meta.location.line()),
+                "map signal emit → key subscription fire",
+            );
+            cb(change);
+        }
+
+        for (cb, meta) in any {
+            tracing::trace!(
+                target: "amethystate",
+                subscription_id = meta.id,
+                name = meta.name,
+                location = format!("{}:{}", meta.location.file(), meta.location.line()),
+                "map signal emit → any subscription fire",
+            );
+            cb(change);
         }
     }
 }

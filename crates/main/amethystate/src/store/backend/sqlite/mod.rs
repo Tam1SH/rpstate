@@ -443,8 +443,14 @@ impl SqliteStore {
                 }
                 if success && txn.commit().is_ok() {
                     let mut lock = pending_save.lock();
-                    for key in changes.keys() {
-                        lock.remove(key);
+                    for (key, committed) in &changes {
+                        // Only if the buffer still holds what was just written.
+                        // A write landing while the commit was in flight is a
+                        // different value, and dropping it here would lose it:
+                        // it is not on disk, and nothing would write it later.
+                        if lock.get(key) == Some(committed) {
+                            lock.remove(key);
+                        }
                     }
                 }
             }

@@ -424,8 +424,14 @@ mod tests {
             Some(c)
         });
 
-        field.set(10).unwrap();
-        assert_eq!(field.get(), 10);
+        let result = field.set(10);
+
+        assert!(
+            result.is_err(),
+            "past the depth limit the interceptor cannot run, so the write is \
+             refused rather than let through unchecked"
+        );
+        assert_eq!(field.get(), 1, "and nothing is written");
     }
 
     #[test]

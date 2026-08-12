@@ -55,16 +55,20 @@ where
     let sig_clone = signal.clone();
     let store_clone = store.clone();
     let path_log = Arc::clone(&path);
+    let on_delete = default.clone();
 
     let id = store.subscribe(
         SubscriptionKind::ExactPath(path.clone()),
-        Arc::new(move |event| {
-            if let Some(raw) = &event.new {
-                match store_clone.decode::<TValue>(raw) {
-                    Ok(parsed) => sig_clone.set_forwarded(parsed, event.source),
-                    Err(e) => tracing::error!(path = %path_log, error = %e, "decode failed"),
-                }
-            }
+        Arc::new(move |event| match &event.new {
+            Some(raw) => match store_clone.decode::<TValue>(raw) {
+                Ok(parsed) => sig_clone.set_forwarded(parsed, event.source),
+                Err(e) => tracing::error!(path = %path_log, error = %e, "decode failed"),
+            },
+            // The key is gone - from `delete`, or from an edit to the file
+            // outside the process. Reporting the default is what the next
+            // startup would read, and beats holding a value the store no
+            // longer has.
+            None => sig_clone.set_forwarded(on_delete.clone(), event.source),
         }),
     );
 

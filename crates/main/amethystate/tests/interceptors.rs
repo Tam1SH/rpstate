@@ -1,0 +1,123 @@
+use amethystate::store::Store;
+use amethystate::store::builder::StoreBuilder;
+use amethystate::{MapChange, ReactiveMap, amethystate};
+use amethystate_core::test_utils::unique_path;
+use std::sync::{Arc, Mutex};
+
+#[amethystate(prefix = "ic")]
+pub struct Cfg {
+    #[amestate(default = 0u64)]
+    pub counter: u64,
+
+    #[amestate(default = {"a": 1u64, "b": 2u64})]
+    pub items: ReactiveMap<String, u64>,
+}
+
+fn cfg() -> (impl Store, Cfg) {
+    let path = unique_path("interceptors");
+    let store = StoreBuilder::new(&path).build().unwrap();
+    let cfg = Cfg::new_with(&store).unwrap();
+    (store, cfg)
+}
+
+/// Past the depth limit the interceptor cannot run. Letting the change through
+/// used to mean a validator stopped being consulted exactly where recursion was
+/// deepest, and the value it exists to reject reached the store.
+#[test]
+fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
+    let (store, cfg) = cfg();
+
+    let counter = cfg.counter();
+    let nested = counter.clone();
+
+    let _guard = counter.intercept(move |change| {
+        if change.new_value > 100 {
+            return None;
+        }
+        if change.new_value < 10 {
+            let _ = nested.set(change.new_value + 1);
+        } else if change.new_value == 10 {
+            let _ = nested.set(999);
+        }
+        Some(change)
+    });
+
+    let reached = Arc::new(Mutex::new(Vec::new()));
+    let cap = reached.clone();
+    let _sub = counter.subscribe(move |v: &u64| cap.lock().unwrap().push(*v));
+
+    let _ = counter.set(1);
+
+    assert!(
+        !reached.lock().unwrap().contains(&999),
+        "saw {:?}",
+        reached.lock().unwrap()
+    );
+    assert!(store.get::<u64>("ic.counter").unwrap().unwrap_or(0) <= 100);
+}
+
+/// A `Clear` is not about any one key, so key interceptors must not see it.
+/// Running all of them handed each the same change and accumulated their
+/// rewrites, in an order that varied between runs.
+#[test]
+fn clear_does_not_run_key_interceptors() {
+    let (_s, cfg) = cfg();
+    let items = cfg.items();
+
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let mut guards = Vec::new();
+    for key in ["a", "b"] {
+        let hits = hits.clone();
+        let owned = key.to_string();
+        guards.push(items.intercept_key(key.to_string(), move |change| {
+            hits.lock().unwrap().push(owned.clone());
+            Some(change)
+        }));
+    }
+
+    items.clear().unwrap();
+
+    assert!(
+        hits.lock().unwrap().is_empty(),
+        "key interceptors ran for a keyless change: {:?}",
+        hits.lock().unwrap()
+    );
+}
+
+#[test]
+fn key_interceptors_still_run_for_their_own_key() {
+    let (_s, cfg) = cfg();
+    let items = cfg.items();
+
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let cap = hits.clone();
+    let _guard = items.intercept_key("a".to_string(), move |change| {
+        cap.lock().unwrap().push(change.key().cloned());
+        Some(change)
+    });
+
+    items.set("a".to_string(), &10).unwrap();
+    items.set("b".to_string(), &20).unwrap();
+
+    assert_eq!(*hits.lock().unwrap(), vec![Some("a".to_string())]);
+}
+
+/// A global interceptor is about the map, so it does see a `Clear`.
+#[test]
+fn clear_still_reaches_a_global_interceptor() {
+    let (_s, cfg) = cfg();
+    let items = cfg.items();
+
+    let seen = Arc::new(Mutex::new(0usize));
+    let cap = seen.clone();
+    let _guard = items.intercept(move |change| {
+        if matches!(change, MapChange::Clear { .. }) {
+            *cap.lock().unwrap() += 1;
+        }
+        Some(change)
+    });
+
+    items.clear().unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), 1);
+}

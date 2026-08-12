@@ -1,0 +1,60 @@
+use amethystate::amethystate;
+use amethystate::store::Store;
+use amethystate::store::builder::StoreBuilder;
+use amethystate_core::test_utils::unique_path;
+use std::sync::{Arc, Mutex};
+
+#[amethystate(prefix = "del")]
+pub struct Cfg {
+    #[amestate(default = 7u64)]
+    pub counter: u64,
+}
+
+/// The subscription used to look only at `event.new`, so a delete left the
+/// field reporting a value the store no longer had - and a restart then read
+/// the default, silently disagreeing with what the running process had shown.
+#[test]
+fn a_deleted_key_falls_back_to_the_default() {
+    let path = unique_path("field_delete");
+    let store = StoreBuilder::new(&path).build().unwrap();
+    let cfg = Cfg::new_with(&store).unwrap();
+
+    cfg.counter().set(42).unwrap();
+    assert_eq!(cfg.counter().get(), 42);
+
+    store.delete("del.counter").unwrap();
+
+    assert_eq!(store.get::<u64>("del.counter").unwrap(), None);
+    assert_eq!(cfg.counter().get(), 7, "field must not outlive the key");
+}
+
+#[test]
+fn a_delete_notifies_subscribers() {
+    let path = unique_path("field_delete_notify");
+    let store = StoreBuilder::new(&path).build().unwrap();
+    let cfg = Cfg::new_with(&store).unwrap();
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let cap = seen.clone();
+    let _sub = cfg
+        .counter()
+        .subscribe(move |v: &u64| cap.lock().unwrap().push(*v));
+
+    cfg.counter().set(42).unwrap();
+    store.delete("del.counter").unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![42, 7]);
+}
+
+#[test]
+fn writing_again_after_a_delete_works() {
+    let path = unique_path("field_delete_rewrite");
+    let store = StoreBuilder::new(&path).build().unwrap();
+    let cfg = Cfg::new_with(&store).unwrap();
+
+    store.delete("del.counter").unwrap();
+    cfg.counter().set(5).unwrap();
+
+    assert_eq!(cfg.counter().get(), 5);
+    assert_eq!(store.get::<u64>("del.counter").unwrap(), Some(5));
+}
