@@ -114,10 +114,9 @@ fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> 
             }
         } else {
             quote! {
-                #fname: #crate_name::store::reactive_map_with_scope_key::<#k, #v, _, _>(
+                #fname: #crate_name::store::reactive_map_with_path_only::<#k, #v, _, _>(
                     store,
                     ::std::sync::Arc::from(format!("{}.{}", namespace, #key)),
-                    namespace,
                     #def,
                     instance_id
                 )?

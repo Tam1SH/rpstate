@@ -113,13 +113,12 @@ where
     V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
     M: AccessMode,
 {
-    reactive_map_with_scope_key(store, path, TScope::PREFIX, defaults, instance_id)
+    reactive_map_with_path_only(store, path, defaults, instance_id)
 }
 
-pub fn reactive_map_with_scope_key<K, V, S, M>(
+pub fn reactive_map_with_path_only<K, V, S, M>(
     store: &S,
     path: Arc<str>,
-    scope_key: &str,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
 ) -> StorageResult<ReactiveMap<K, V, S, M>>
@@ -142,13 +141,23 @@ where
         }
     }
 
-    if !store.is_initialized(scope_key)? {
+    // Keyed on this map's own path, not on the scope. A scope is marked
+    // initialized once, when its struct is first built, so a map added to that
+    // struct later never seeded its defaults for anyone already running - it
+    // came up empty with nothing to say why.
+    //
+    // Keys already on disk count as having been seeded, so upgrading does not
+    // restore entries the user has since removed.
+    let seeded_before = store.is_initialized(&path)? || !known_cache.is_empty();
+
+    if !seeded_before {
         for (k, v) in defaults {
             let full_path = format!("{}.{}", path, k);
             store.set(&full_path, &v)?;
             known_cache.insert(k, v);
         }
     }
+    store.mark_initialized(&path)?;
 
     let core = ReactiveMapCore::new();
     {
