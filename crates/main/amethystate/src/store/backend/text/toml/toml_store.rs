@@ -65,6 +65,10 @@ impl Store for TomlStore {
         self.0.scan_prefix(prefix)
     }
 
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        self.0.scan_keys(prefix)
+    }
+
     fn save_now(&self) -> StorageResult<()> {
         self.0.save_now()
     }

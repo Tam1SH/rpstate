@@ -403,6 +403,11 @@ impl<D: TextDocument> TextStoreInner<D> {
         scan_prefix_impl(&*guard, prefix)
     }
 
+    fn scan_keys(&self, prefix: &str) -> Vec<String> {
+        let guard = self.files.data.doc.read();
+        scan_keys_impl(&*guard, prefix)
+    }
+
     fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
 
@@ -589,6 +594,10 @@ impl<D: TextDocument + Send + 'static> Store for TextStore<D> {
         self.inner.scan_prefix(prefix)
     }
 
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        Ok(self.inner.scan_keys(prefix))
+    }
+
     fn delete(&self, path: &str) -> StorageResult<()> {
         self.delete_with_source(path, None)
     }
@@ -772,10 +781,6 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
     }
 }
 
-/// Re-reads `file` from disk and adopts it in-memory if it differs from what we
-/// already have, emitting events for the difference. Callers are responsible for
-/// only invoking this when there's no pending unflushed internal write (otherwise
-/// this would clobber in-flight local changes with whatever is currently on disk).
 fn sync_external_changes<D: TextDocument>(
     file: &StoreFile<D>,
     subscriptions: &Arc<RwLock<Vec<SubscriptionEntry>>>,
@@ -874,6 +879,58 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> Vec<StoreEvent> {
     events
 }
 
+pub(super) fn scan_keys_impl<D: TextDocument>(doc: &D, prefix: &str) -> Vec<String> {
+    let parts = split_path(prefix);
+    let target_depth = parts.len() + 1;
+    let mut keys = Vec::new();
+    scan_keys_recursive(doc, &parts, prefix, &mut keys, Some(target_depth));
+
+    keys.retain(|k| k.starts_with(prefix));
+    keys.sort();
+    keys
+}
+
+fn scan_keys_recursive<D: TextDocument>(
+    doc: &D,
+    parts: &[&str],
+    prefix_str: &str,
+    keys: &mut Vec<String>,
+    target_depth: Option<usize>,
+) {
+    let current_depth = parts.len();
+
+    if let Some(target_depth) = target_depth
+        && current_depth >= target_depth
+    {
+        if !prefix_str.is_empty() && !prefix_str.ends_with('.') && doc.get(parts).is_some() {
+            keys.push(prefix_str.to_string());
+        }
+        return;
+    }
+
+    let children = doc.scan(parts);
+    if children.is_empty() {
+        if !prefix_str.is_empty() && !prefix_str.ends_with('.') && doc.get(parts).is_some() {
+            keys.push(prefix_str.to_string());
+        }
+    } else {
+        for (full_key, _node) in children {
+            let child_parts = split_path(&full_key);
+            let grand_children = doc.scan(&child_parts);
+
+            let should_stop = grand_children.is_empty()
+                || target_depth.is_some_and(|depth| child_parts.len() >= depth);
+
+            if should_stop {
+                if doc.get(&child_parts).is_some() {
+                    keys.push(full_key);
+                }
+            } else {
+                scan_keys_recursive(doc, &child_parts, prefix_str, keys, target_depth);
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

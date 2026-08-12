@@ -73,6 +73,10 @@ where
         self.store.scan_prefix(prefix)
     }
 
+    fn scan_keys(&self, prefix: &str) -> Result<Vec<String>, Self::Error> {
+        self.store.scan_keys(prefix)
+    }
+
     fn decode<T>(&self, raw: &[u8]) -> Result<T, Self::Error>
     where
         T: DeserializeOwned + Default,

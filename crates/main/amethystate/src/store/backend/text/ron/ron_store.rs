@@ -57,6 +57,10 @@ impl Store for RonStore {
         self.0.scan_prefix(prefix)
     }
 
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        self.0.scan_keys(prefix)
+    }
+
     fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()> {
         self.0.delete_with_source(path, source)
     }

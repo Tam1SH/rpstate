@@ -63,6 +63,13 @@ pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
     /// Every key under `prefix`, sorted by key on every backend.
     fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
+    /// The keys under `prefix`, sorted, without reading their values.
+    ///
+    /// `scan_prefix` copies every value out of the backend, which is wasted
+    /// work when only the keys are wanted - and grows with the data rather
+    /// than with the answer.
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>>;
+
     fn save_now(&self) -> StorageResult<()>;
 
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId;

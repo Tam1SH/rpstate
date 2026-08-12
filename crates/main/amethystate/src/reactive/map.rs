@@ -106,15 +106,15 @@ where
         }))
     }
 
-    /// Every key, sorted. Nothing is deserialized.
+    /// Every key, sorted. Values are neither read nor deserialized.
     pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
         let backend = StoreBackend::new(self.store.clone());
         let prefix = format!("{}.", self.path);
 
         Ok(backend
-            .scan_prefix(&prefix)?
+            .scan_keys(&prefix)?
             .into_iter()
-            .filter_map(|(full_path, _)| K::from_str(full_path.strip_prefix(&prefix)?).ok())
+            .filter_map(|full_path| K::from_str(full_path.strip_prefix(&prefix)?).ok())
             .collect())
     }
 

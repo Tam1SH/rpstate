@@ -44,6 +44,9 @@ pub trait AmeBackendSync {
 
     fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, Self::Raw)>, Self::Error>;
 
+    /// The keys under `prefix`, sorted, without reading their values.
+    fn scan_keys(&self, prefix: &str) -> Result<Vec<String>, Self::Error>;
+
     fn decode<T>(&self, raw: &Self::Borrowed) -> Result<T, Self::Error>
     where
         T: DeserializeOwned + Default;

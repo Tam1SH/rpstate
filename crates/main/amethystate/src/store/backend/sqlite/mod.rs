@@ -262,6 +262,43 @@ impl SqliteStoreInner {
         Ok(storage_results)
     }
 
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        let mut keys = Vec::new();
+
+        {
+            let conn = self.conn.lock();
+            let mut stmt = conn
+                .prepare_cached("SELECT key FROM data WHERE key GLOB ?")
+                .map_err(SqliteStoreError::from)?;
+            let rows = stmt
+                .query_map([format!("{}*", prefix)], |row| row.get::<_, String>(0))
+                .map_err(SqliteStoreError::from)?;
+
+            for row in rows {
+                keys.push(row.map_err(SqliteStoreError::from)?);
+            }
+        }
+
+        {
+            let lock = self.pending.lock();
+            for (k, opt_v) in lock.iter() {
+                if !k.starts_with(prefix) {
+                    continue;
+                }
+                match opt_v {
+                    Some(_) if !keys.iter().any(|existing| existing == &**k) => {
+                        keys.push(k.to_string())
+                    }
+                    Some(_) => {}
+                    None => keys.retain(|existing| existing != &**k),
+                }
+            }
+        }
+
+        keys.sort();
+        Ok(keys)
+    }
+
     fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer();
         let path_arc: Arc<str> = Arc::from(path);
@@ -519,6 +556,10 @@ impl Store for SqliteStore {
 
     fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
         self.inner.scan_prefix(prefix)
+    }
+
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        self.inner.scan_keys(prefix)
     }
 
     fn delete(&self, path: &str) -> StorageResult<()> {

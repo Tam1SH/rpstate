@@ -56,3 +56,36 @@ fn entries_and_keys_agree() {
 
     assert_eq!(from_entries, cfg.items().keys().unwrap());
 }
+
+/// `keys()` must agree with `entries()` on every backend, including for keys
+/// that are still only in the write buffer.
+#[test]
+fn keys_sees_unflushed_writes() {
+    let path = unique_path("order_unflushed");
+    let (_store, cfg) = seeded(&path);
+
+    cfg.items().set_or_create("zzz".to_string(), &1).unwrap();
+
+    let keys = cfg.items().keys().unwrap();
+    assert!(keys.contains(&"zzz".to_string()));
+    assert_eq!(keys, {
+        let mut from_entries: Vec<String> =
+            cfg.items().entries().unwrap().map(|(k, _)| k).collect();
+        from_entries.sort();
+        from_entries
+    });
+}
+
+#[test]
+fn keys_forgets_a_removed_entry() {
+    let path = unique_path("order_removed");
+    let (store, cfg) = seeded(&path);
+
+    store.save_now().unwrap();
+    cfg.items().remove("mike".to_string()).unwrap();
+
+    assert_eq!(
+        cfg.items().keys().unwrap(),
+        ["alpha", "bravo", "delta", "zulu"]
+    );
+}

@@ -403,6 +403,43 @@ impl Store for RedbStore {
         Ok(results)
     }
 
+    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        let mut keys = Vec::new();
+
+        let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
+        let table = read_txn
+            .open_table(TABLE_DATA)
+            .map_err(RedbStoreError::from)?;
+
+        for result in table.range(prefix..).map_err(RedbStoreError::from)? {
+            let (k, _) = result.map_err(RedbStoreError::from)?;
+            let key = k.value();
+            if !key.starts_with(prefix) {
+                break;
+            }
+            keys.push(key.to_string());
+        }
+
+        {
+            let lock = self.inner.pending.lock();
+            for (k, opt_v) in lock.iter() {
+                if !k.starts_with(prefix) {
+                    continue;
+                }
+                match opt_v {
+                    Some(_) if !keys.iter().any(|existing| existing == &**k) => {
+                        keys.push(k.to_string())
+                    }
+                    Some(_) => {}
+                    None => keys.retain(|existing| existing != &**k),
+                }
+            }
+        }
+
+        keys.sort();
+        Ok(keys)
+    }
+
     fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()> {
         self.inner.check_debouncer();
         let path_arc: Arc<str> = Arc::from(path);
