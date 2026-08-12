@@ -19,9 +19,9 @@ pub use uuid;
 
 pub use reactive::{
     AccessMode, AmeState, AmeStateNode, Change, Field, InterceptDisposer, IntoPipeline, MapChange,
-    MapEntrySignal, Pipeline, Reactive, ReactiveMap, ReactiveMapKey, ReactiveMapValue,
-    ReactiveScope, ReadOnly, ReadOnlyField, ReadOnlyMode, Signal, SignalSubscription,
-    StoreSubscription, Writable, WritableField, WritableMode,
+    MapEntrySignal, Pipeline, Reactive, ReactiveCell, ReactiveMap, ReactiveMapKey,
+    ReactiveMapValue, ReactiveScope, ReadOnly, ReadOnlyField, ReadOnlyMode, Signal,
+    SignalSubscription, StoreSubscription, Writable, WritableField, WritableMode,
 };
 
 pub mod errors {

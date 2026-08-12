@@ -41,7 +41,7 @@ where
                 } => value.clone(),
                 MapChange::Remove { .. } | MapChange::Clear { .. } => default.clone(),
             };
-            inner_for_read.set(next, Some(sync_source));
+            inner_for_read.set_with_source(next, sync_source);
         });
 
         // signal -> store (skip store-originated updates)
@@ -80,7 +80,7 @@ where
 
     /// Writes through the inner signal (and thus to the store).
     pub fn set(&self, value: V) {
-        self.inner.set(value, None);
+        self.inner.set(value);
     }
 
     pub fn key(&self) -> &K {

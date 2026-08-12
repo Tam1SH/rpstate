@@ -99,7 +99,7 @@ where
         let mapper = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
-            target.set(mapper(value), source);
+            target.set_forwarded(mapper(value), source);
         });
 
         Pipeline {
@@ -124,7 +124,7 @@ where
 
         let sub = self.subscribe_with_source(move |value, source| {
             if let Some(mapped) = mapper(value) {
-                target.set(mapped, source);
+                target.set_forwarded(mapped, source);
             }
         });
 
@@ -151,7 +151,7 @@ where
 
         let sub = self.subscribe_with_source(move |value, source| {
             inspector(&value);
-            target.set(value, source);
+            target.set_forwarded(value, source);
         });
 
         Pipeline {
@@ -177,7 +177,7 @@ where
             let mut last = last_seen.lock().unwrap();
             if *last != value {
                 *last = value.clone();
-                target.set(value, source);
+                target.set_forwarded(value, source);
             }
         });
 
@@ -252,7 +252,7 @@ where
         let signal = Arc::new(Signal::new(initial));
         let target = Arc::clone(&signal);
         let sub = self.subscribe_with_source(move |value, source| {
-            target.set(value, source);
+            target.set_forwarded(value, source);
         });
 
         Pipeline {
@@ -295,7 +295,7 @@ macro_rules! impl_tuple_pipeline {
                     let target = Arc::clone(&signal);
                     let refresh_cb = Arc::clone(&refresh);
                     source_subs.push($source.subscribe_with_source(move |_, src| {
-                        target.set(refresh_cb(), src);
+                        target.set_forwarded(refresh_cb(), src);
                     }));
                 )+
 

@@ -61,7 +61,7 @@ where
         Arc::new(move |event| {
             if let Some(raw) = &event.new {
                 match store_clone.decode::<TValue>(raw) {
-                    Ok(parsed) => sig_clone.set(parsed, event.source),
+                    Ok(parsed) => sig_clone.set_forwarded(parsed, event.source),
                     Err(e) => tracing::error!(path = %path_log, error = %e, "decode failed"),
                 }
             }

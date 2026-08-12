@@ -44,7 +44,7 @@ fn signal_write_lands_in_store() {
     let config = TableConfig::new_with(&store).unwrap();
 
     let entry = config.widths().entry_signal("cpu".to_string(), 110);
-    entry.signal().set(144, None);
+    entry.signal().set(144);
 
     assert_eq!(config.widths().get(&"cpu".to_string()).unwrap(), Some(144));
 }

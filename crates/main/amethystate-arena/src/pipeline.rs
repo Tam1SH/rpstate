@@ -69,7 +69,7 @@ where
         let signal = Arc::new(Signal::new(initial));
         let target = Arc::clone(&signal);
         let sub = self.subscribe_with_source(&pipeline_arena(), move |val, source| {
-            target.set(val, source);
+            target.set_forwarded(val, source);
         });
         Pipeline::from_signal(signal, vec![sub], vec![])
     }
@@ -101,7 +101,7 @@ macro_rules! impl_tuple_pipeline {
                     let target = Arc::clone(&signal);
                     let refresh_cb = Arc::clone(&refresh);
                     source_subs.push($source.subscribe_with_source(&pipeline_arena(), move |_, src| {
-                        target.set(refresh_cb(), src);
+                        target.set_forwarded(refresh_cb(), src);
                     }));
                 )+
 

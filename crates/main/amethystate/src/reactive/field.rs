@@ -1,3 +1,4 @@
+use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
 use crate::store::sync_backend::StoreBackend;
 use crate::store::{Store, SubscriptionId};
@@ -120,6 +121,26 @@ where
     TValue: FieldValue,
     S: Store,
 {
+    /// This field as a [`ReactiveCell`], with the store backend and access mode
+    /// erased so it can be stored and passed around next to cells over other
+    /// primitives.
+    ///
+    /// Writes through the cell go through [`Field::set`], so they reach the
+    /// store and keep this field's provenance - `subscribe_external` and
+    /// tracing still tell them apart from anyone else's writes.
+    ///
+    /// No `keepalive` is needed: the field captured by the writer already holds
+    /// the store subscription that feeds the cache.
+    pub fn cell(&self) -> ReactiveCell<TValue> {
+        let me = self.clone();
+
+        ReactiveCell::from_parts(
+            self.core.signal.clone(),
+            Arc::new(move |value| me.set(value)),
+            None,
+        )
+    }
+
     pub fn update<F>(&self, f: F) -> ReactiveFieldResult<TValue>
     where
         F: FnOnce(TValue) -> TValue,
@@ -161,7 +182,9 @@ where
                 .core
                 .run_interceptors(self.path.clone(), value, Some(self.instance_id))
                 .map_err(|_| FieldError::Intercepted)?;
-            self.core.signal.set(change.new_value, change.source);
+            self.core
+                .signal
+                .set_forwarded(change.new_value, change.source);
         }
         Ok(())
     }
@@ -261,7 +284,7 @@ mod tests {
             *cap.lock().unwrap() = v;
         });
 
-        field.core.signal.set(22, Default::default());
+        field.core.signal.set(22);
         assert_eq!(*callback_val.lock().unwrap(), 22);
     }
 
@@ -454,7 +477,7 @@ mod tests {
             "Updates from fork should trigger"
         );
 
-        field.core.signal.set(3, None);
+        field.core.signal.set(3);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,

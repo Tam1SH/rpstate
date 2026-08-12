@@ -67,13 +67,42 @@ impl<T: 'static> Signal<T> {
         }
     }
 
-    pub fn set(&self, new_value: T, source: Option<Uuid>) {
-        self.value.store(Arc::new(new_value));
-        self.emit(source);
+    /// Writes a value that originates here.
+    pub fn set(&self, value: T) {
+        self.store_and_emit(value, None);
     }
 
-    fn emit(&self, _source: Option<Uuid>) {
-        let val = self.value.load_full();
+    /// Writes a value that originates elsewhere, carrying its provenance.
+    ///
+    /// For propagation layers - a store subscription applying a committed
+    /// change, an interceptor rewriting one - so subscribers can tell whose
+    /// write they are seeing. Application code wants [`Signal::set`].
+    pub fn set_with_source(&self, value: T, source: Uuid) {
+        self.store_and_emit(value, Some(source));
+    }
+
+    /// Re-emits a change with whatever provenance it already carried.
+    ///
+    /// Only for layers forwarding someone else's change, where "no provenance"
+    /// is a real possibility - an edit made to the file outside this process
+    /// arrives with none. Everyone else picks [`Signal::set`] or
+    /// [`Signal::set_with_source`] explicitly.
+    #[doc(hidden)]
+    pub fn set_forwarded(&self, value: T, source: Option<Uuid>) {
+        self.store_and_emit(value, source);
+    }
+
+    fn store_and_emit(&self, value: T, source: Option<Uuid>) {
+        // Emit the value we just stored rather than re-reading it: a concurrent
+        // write can land between the store and the load, which would hand
+        // subscribers someone else's value tagged with our source. Provenance
+        // drives echo suppression, so a mismatch there is not cosmetic.
+        let value = Arc::new(value);
+        self.value.store(Arc::clone(&value));
+        self.emit(value, source);
+    }
+
+    fn emit(&self, value: Arc<T>, source: Option<Uuid>) {
         let callbacks: Vec<_> = {
             let subs = self.subscribers.lock().unwrap();
             subs.iter()
@@ -88,7 +117,7 @@ impl<T: 'static> Signal<T> {
                 location = format!("{}:{}", meta.location.file(), meta.location.line()),
                 "signal emit → subscription fire",
             );
-            cb(&val, _source);
+            cb(&value, source);
         }
     }
 
@@ -161,10 +190,10 @@ mod tests {
             let _sub = signal.subscribe(move |_: &String| {
                 *cap.lock().unwrap() += 1;
             });
-            signal.set("b".to_string(), None);
+            signal.set("b".to_string());
             assert_eq!(*counter.lock().unwrap(), 1);
         }
-        signal.set("c".to_string(), None);
+        signal.set("c".to_string());
         assert_eq!(*counter.lock().unwrap(), 1);
     }
 
@@ -182,5 +211,46 @@ mod tests {
         let signal = Signal::new(0i32);
         let sub = signal.subscribe(|_| {});
         assert!(!sub.location.file().is_empty());
+    }
+
+    #[test]
+    fn concurrent_writes_keep_value_and_source_together() {
+        // `emit` used to re-read the value out of the ArcSwap instead of
+        // emitting the one it had just stored, so a write landing in between
+        // handed subscribers someone else's value tagged with this writer's
+        // source. Provenance drives echo suppression, so a mismatch there can
+        // turn into a spurious write-back.
+        const WRITERS: usize = 8;
+        const WRITES: usize = 500;
+
+        let signal = Signal::new((Uuid::nil(), 0usize));
+        let mismatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let seen = mismatches.clone();
+        let _sub = signal.subscribe_with_source(move |(stamp, _): &(Uuid, usize), source| {
+            // Every writer stamps the value with its own id, so the value and
+            // the source must always agree on who wrote it.
+            if Some(*stamp) != source {
+                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+
+        std::thread::scope(|scope| {
+            for _ in 0..WRITERS {
+                let signal = signal.clone();
+                scope.spawn(move || {
+                    let me = Uuid::new_v4();
+                    for n in 0..WRITES {
+                        signal.set_with_source((me, n), me);
+                    }
+                });
+            }
+        });
+
+        assert_eq!(
+            mismatches.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "value and source must describe the same write"
+        );
     }
 }

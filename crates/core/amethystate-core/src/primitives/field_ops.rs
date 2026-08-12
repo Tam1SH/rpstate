@@ -29,5 +29,5 @@ pub fn field_apply_remote_value<T>(core: &FieldCore<T>, value: T, source: Option
 where
     T: Clone + 'static,
 {
-    core.signal.set(value, source);
+    core.signal.set_forwarded(value, source);
 }

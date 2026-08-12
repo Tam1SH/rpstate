@@ -85,7 +85,7 @@ impl<T: Clone + Send + Sync + 'static> CellCached<T> {
         let sink = cache.clone();
         Self {
             cache,
-            writer: Some(Arc::new(move |v| sink.set(v, None))),
+            writer: Some(Arc::new(move |v| sink.set(v))),
         }
     }
 
