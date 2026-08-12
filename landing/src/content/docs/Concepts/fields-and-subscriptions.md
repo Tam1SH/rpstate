@@ -46,29 +46,73 @@ state.host().subscribe(|h| println!("{h}")).watch(&mut scope);
 scope.clear(); // drops all subscriptions at once
 ```
 
-## Send + Sync requirement
+## Configuring a subscription
 
-Callbacks must be `Send + Sync` because external changes — for example when the underlying file is modified outside the process — are delivered from a background watcher thread.
-
-For frameworks that don't support `Send + Sync` callbacks directly, bridge via a channel:
+`subscribe` covers the common case. Anything beyond it — ignoring your own writes, seeing who made a change, running the callback on your own thread — goes through `subscription_with()`:
 
 ```rust
-let (tx, rx) = std::sync::mpsc::channel();
-
-let _sub = state.port().subscribe(move |val| {
-    let _ = tx.send(val);
-});
-
-// drain rx in your framework's event loop
+field.subscription_with()
+    .external()                 // skip writes made through this handle
+    .local(&mut ui)             // run the callback where ui is drained
+    .register(|value| ...);     // or .register_with_source(|value, who| ...)
 ```
+
+Each link is optional and they compose freely. `register` returns a subscription handle you must keep, exactly like `subscribe`.
+
+## Callbacks on your own thread
+
+A plain `subscribe` callback must be `Send + Sync`, because a change made to the store file outside the process is delivered from a background watcher thread. That rules out `Rc` state and most GUI context handles.
+
+`.local()` queues the change instead, and runs the callback when you drain — on whatever thread drains:
+
+```rust
+let mut ui = LocalScope::new();
+
+state.port()
+    .subscription_with()
+    .local(&mut ui)
+    .register(move |port| label.set_text(&port.to_string()));
+
+// once a frame
+ui.drain();
+```
+
+The scope is neither `Send` nor `Sync`, so a callback registered on it cannot reach another thread — the compiler will not let the scope move. Dropping the scope ends every subscription in it.
+
+Changes **coalesce**: however many arrived since the last drain, the callback sees the newest once. That is what a frame wants from a value. For map changes, which are events rather than a state, add `.every()` to keep them all.
+
+A callback that writes to what it listens to cannot spin: its own write lands in the next drain, not the current one.
+
+### If you already have an event loop
+
+`changed()` waits until something is queued, so you can drive the drain from a loop instead of a frame:
+
+```rust
+loop {
+    ui.changed().await;
+    ui.drain();
+}
+```
+
+Or skip callbacks entirely and take a `Stream`:
+
+```rust
+let mut ports = state.port().subscription_with().stream();
+
+while let Some(port) = ports.next().await {
+    label.set_text(&port.to_string());
+}
+```
+
+A stream yields every change rather than coalescing — it is a sequence, and you can coalesce downstream if you want to. Dropping it ends the subscription.
 
 ## clone vs fork
 
 `clone()` and `fork()` both give you a new handle to the same field, but they differ in one thing: `instance_id`.
 
-**`clone()`** preserves the same `instance_id`. Both the original and the clone are considered the same actor — `subscribe_external` on one will fire for writes from the other.
+**`clone()`** preserves the same `instance_id`. Both the original and the clone are considered the same actor — an `external` subscription on one will not fire for writes from the other.
 
-**`fork()`** assigns a new `instance_id`. The fork is a distinct actor. `subscribe_external` on the original will fire for writes from the fork, and vice versa.
+**`fork()`** assigns a new `instance_id`. The fork is a distinct actor, so an `external` subscription on the original does fire for writes from the fork, and vice versa.
 
 ```rust
 let a = state.port();
@@ -76,26 +120,26 @@ let b = state.port().clone(); // same instance_id as a
 let c = state.port().fork();  // new instance_id
 ```
 
-## subscribe vs subscribe_external
+## Ignoring your own writes
 
-`subscribe` fires on every write — including writes made by the same handle. If a component writes to a field and subscribes to it, it will receive its own writes back. This is fine for most cases.
+`subscribe` fires on every write, including ones made through the same handle. If a component writes to a field and subscribes to it, it gets its own writes back. That is usually fine.
 
-`subscribe_external` filters out writes from the same `instance_id`. It only fires when another actor made the change:
+`.external()` filters them out, so the subscription only fires when somebody else made the change:
 
 ```rust
 let state = ConnectionState::new()?;
 let watcher = state.fork();
 
-// fires only when watcher (or anyone else) writes — not when state writes
-let _sub = state.port().subscribe_external(|p| {
-    redraw();
-});
+let _sub = state.port()
+    .subscription_with()
+    .external()
+    .register(|_| redraw());
 
 state.port().set(8080)?;   // silent — same instance_id
 watcher.port().set(9090)?; // fires
 ```
 
-A typical pattern is a background thread writing, and the UI reacting without spurious redraws:
+A typical use is a background thread writing while the UI reacts, without redrawing on its own writes:
 
 ```rust
 let watcher = state.fork();
@@ -107,13 +151,15 @@ thread::spawn(move || {
     }
 });
 
-// UI subscribes externally — only redraws when the background thread writes
-let _sub = state.latency_ms().subscribe_external(|ms| {
-    ui.update_latency(ms);
-});
+let _sub = state.latency_ms()
+    .subscription_with()
+    .external()
+    .register(|ms| ui.update_latency(*ms));
 ```
 
-`subscribe_external` also fires when the value is changed from outside the process entirely — for example if the store file is edited externally. Those changes have no `instance_id` and are always delivered to all subscribers including `subscribe_external`.
+A change made outside the process — the store file edited by hand, say — has no `instance_id`, so it is nobody's own write and reaches `external` subscribers too.
+
+On a map, `.external()` filters `Update` only. A key appearing or disappearing changes what the map holds and goes to everyone, including the handle that caused it. See [ReactiveMap subscriptions](#reactivemap-subscriptions).
 
 ## ReactiveMap iteration order
 
@@ -131,7 +177,7 @@ a list — keep that list yourself and use the map for lookup.
 
 ## ReactiveMap subscriptions
 
-`ReactiveMap` follows the same pattern with `subscribe_any`, `subscribe_key`, `subscribe_any_external`, and `subscribe_key_external`:
+`ReactiveMap` follows the same pattern, with `.key()` to narrow to one entry:
 
 ```rust
 // any change to the map
@@ -144,14 +190,19 @@ let _sub = state.limits().subscribe_key("cpu".into(), |change| {
     println!("cpu limits changed");
 });
 
-// external changes only (same fork semantics as Field)
-let watcher = state.limits().fork();
-let _sub = state.limits().subscribe_any_external(|change| {
-    println!("external change: {change:?}");
-});
+// one key, other people's changes only, delivered on your thread
+state.limits()
+    .subscription_with()
+    .key("cpu".into())
+    .external()
+    .local(&mut ui)
+    .every()
+    .register(|change| println!("{change:?}"));
 ```
 
-### What `_external` filters, and what it does not
+Map changes are events rather than a state, so pair `.local()` with `.every()` unless dropping the intermediate ones is what you want.
+
+### What `external` filters, and what it does not
 
 The map variants filter `Update` and nothing else. `Insert`, `Remove` and `Clear` are delivered
 to every subscriber regardless of who caused them, including the actor that caused them.
@@ -165,7 +216,7 @@ This has one consequence worth knowing about:
 
 ```rust
 let limits = state.limits();
-let _sub = limits.subscribe_any_external(|change| {
+let _sub = limits.subscription_with().external().register(|change| {
     println!("{change:?}");
 });
 
@@ -177,12 +228,3 @@ limits.set_or_create("cpu".into(), &90)?;  // Update — filtered out
 call comes back to you depends on whether the key already existed. If you need every change
 including your own, use `subscribe_any`; if you need none of your own, compare
 `change.source()` against your `instance_id` yourself.
-
-### `clear` is one event
-
-`clear()` produces exactly one `Clear`, however many keys the map held, and every handle on that
-map sees it — not just the one that called `clear()`.
-
-This matters if you hold more than one handle on the same store, which is normal when separate
-parts of an app each build their own state struct. A collection emptying itself is not the same
-as its keys being removed one by one, and `Clear` is how you tell the difference.

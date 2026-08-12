@@ -87,7 +87,7 @@ std::thread::spawn(move || {
 });
 ```
 
-Note that writes from the same instance (non-forked) do not trigger `subscribe_external` and therefore do not notify the entity. Use `.fork()` when writing from a background thread if you want the UI to react.
+Note that writes from the same instance (non-forked) do not trigger an `external` subscription and therefore do not notify the entity. Use `.fork()` when writing from a background thread if you want the UI to react.
 
 ## Using with a custom GPUI version
 
