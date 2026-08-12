@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::NamedTempFile;
 use tracing::{info, warn};
 
@@ -136,7 +136,12 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     pub(crate) subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     pub(crate) next_id: Arc<AtomicU64>,
     pub(crate) debouncer: Arc<Debouncer>,
-    pub(crate) has_pending: Arc<AtomicBool>,
+    /// Bumped by every mutation, and compared against `persisted` to tell
+    /// whether the document differs from the file. A flag could not do this:
+    /// checking it and acting on it are two steps, and a write landing in
+    /// between was either lost or clobbered.
+    pub(crate) writes: Arc<AtomicU64>,
+    pub(crate) persisted: Arc<AtomicU64>,
     _watch_debouncer: Arc<Debouncer>,
     _watcher: RecommendedWatcher,
 }
@@ -223,21 +228,28 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         );
 
         let subscriptions = Arc::new(RwLock::new(Vec::<SubscriptionEntry>::new()));
-        let has_pending = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicU64::new(0));
+        let persisted = Arc::new(AtomicU64::new(0));
 
         let files_debounce = files.clone();
-        let has_pending_debounce = has_pending.clone();
+        let writes_debounce = writes.clone();
+        let persisted_debounce = persisted.clone();
         let debouncer = Debouncer::new(config.save_debounce, move || {
+            // Read the generation before serializing. A write landing during
+            // the persist bumps it past this, so it stays pending instead of
+            // being marked saved without having been written.
+            let saving = writes_debounce.load(Ordering::Acquire);
             if let Err(e) = files_debounce.persist() {
                 warn!("store persist failed: {e:#}");
             } else {
-                has_pending_debounce.store(false, Ordering::Release);
+                persisted_debounce.store(saving, Ordering::Release);
             }
         });
 
         let files_watch = files.clone();
         let watch_subs = subscriptions.clone();
-        let has_pending_watch = has_pending.clone();
+        let writes_watch = writes.clone();
+        let persisted_watch = persisted.clone();
         let meta_path = files.meta.path.clone();
 
         // External edits (e.g. a text editor doing truncate-then-write) fire multiple
@@ -246,11 +258,12 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         // spurious delete of every key). Debounce so we only re-read once the file
         // has settled, same as we already do for our own outgoing writes.
         let watch_debouncer = Arc::new(Debouncer::new(config.watch_interval, move || {
-            if has_pending_watch.load(Ordering::Acquire) {
-                return;
-            }
-
-            sync_external_changes::<D>(&files_watch.data, &watch_subs);
+            sync_external_changes::<D>(
+                &files_watch.data,
+                &watch_subs,
+                &writes_watch,
+                &persisted_watch,
+            );
 
             if let Ok(content) = std::fs::read_to_string(&meta_path)
                 && let Ok(on_disk) = D::parse(&content)
@@ -291,7 +304,8 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             subscriptions,
             next_id: Arc::new(AtomicU64::new(1)),
             debouncer: Arc::new(debouncer),
-            has_pending,
+            writes,
+            persisted,
             _watch_debouncer: watch_debouncer,
             _watcher: watcher,
         });
@@ -367,9 +381,21 @@ impl<D: TextDocument> TextStoreInner<D> {
     }
 
     fn save_now(&self) -> StorageResult<()> {
+        let saving = self.writes.load(Ordering::Acquire);
         self.files.persist()?;
-        self.has_pending.store(false, Ordering::Release);
+        self.persisted.store(saving, Ordering::Release);
         Ok(())
+    }
+
+    /// Picks up an edit made to the file outside the process before writing our
+    /// own, unless we have unsaved changes of our own to lose.
+    fn pull_external_changes(&self) {
+        sync_external_changes::<D>(
+            &self.files.data,
+            &self.subscriptions,
+            &self.writes,
+            &self.persisted,
+        );
     }
 
     fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
@@ -380,9 +406,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
 
-        if !self.has_pending.load(Ordering::Acquire) {
-            sync_external_changes::<D>(&self.files.data, &self.subscriptions);
-        }
+        self.pull_external_changes();
 
         let path_str = normalize_path(path)?;
         let parts = split_path(&path_str);
@@ -394,7 +418,7 @@ impl<D: TextDocument> TextStoreInner<D> {
             old
         };
 
-        self.has_pending.store(true, Ordering::Release);
+        self.writes.fetch_add(1, Ordering::Release);
 
         utils::emit_events(
             &self.subscriptions,
@@ -414,9 +438,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     fn delete_prefix(&self, prefix: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
 
-        if !self.has_pending.load(Ordering::Acquire) {
-            sync_external_changes::<D>(&self.files.data, &self.subscriptions);
-        }
+        self.pull_external_changes();
 
         {
             let mut guard = self.files.data.doc.write();
@@ -431,7 +453,7 @@ impl<D: TextDocument> TextStoreInner<D> {
             }
         }
 
-        self.has_pending.store(true, Ordering::Release);
+        self.writes.fetch_add(1, Ordering::Release);
 
         utils::emit_events(
             &self.subscriptions,
@@ -498,9 +520,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         node: D::Node,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        if !self.has_pending.load(Ordering::Acquire) {
-            sync_external_changes::<D>(&self.files.data, &self.subscriptions);
-        }
+        self.pull_external_changes();
 
         let parts = split_path(&path_str);
         let (old_bytes, new_bytes) = {
@@ -512,7 +532,7 @@ impl<D: TextDocument> TextStoreInner<D> {
             (old, new_bytes)
         };
 
-        self.has_pending.store(true, Ordering::Release);
+        self.writes.fetch_add(1, Ordering::Release);
 
         utils::emit_events(
             &self.subscriptions,
@@ -759,6 +779,8 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
 fn sync_external_changes<D: TextDocument>(
     file: &StoreFile<D>,
     subscriptions: &Arc<RwLock<Vec<SubscriptionEntry>>>,
+    writes: &AtomicU64,
+    persisted: &AtomicU64,
 ) {
     let Ok(content) = std::fs::read_to_string(&file.path) else {
         return;
@@ -769,6 +791,14 @@ fn sync_external_changes<D: TextDocument>(
 
     let events = {
         let mut guard = file.doc.write();
+
+        // Under the same guard a write takes, so this cannot be overtaken:
+        // either the write landed first and is seen here, or it lands after
+        // and applies on top. Checking before taking the guard let a write
+        // slip into the gap and be overwritten with what was read from disk.
+        if writes.load(Ordering::Acquire) != persisted.load(Ordering::Acquire) {
+            return;
+        }
 
         let old_serialized = guard.serialize().unwrap_or_default();
         let new_serialized = on_disk.serialize().unwrap_or_default();
