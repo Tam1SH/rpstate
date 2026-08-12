@@ -117,6 +117,7 @@ impl<W: Watchable> Watch<W, Local<'_>> {
     {
         let mine = self.external.then(|| self.source.watch_id());
         let coalesce = self.delivery.coalesce;
+        let wake = self.delivery.scope.wake_handle();
 
         type Queued<I> = Vec<(I, Option<Uuid>)>;
         let queue: Arc<Mutex<Queued<W::Item>>> = Arc::new(Mutex::new(Vec::new()));
@@ -126,11 +127,14 @@ impl<W: Watchable> Watch<W, Local<'_>> {
             if mine.is_some() && source == mine && W::filterable(item) {
                 return;
             }
-            let mut queued = sink.lock().unwrap();
-            if coalesce {
-                queued.clear();
+            {
+                let mut queued = sink.lock().unwrap();
+                if coalesce {
+                    queued.clear();
+                }
+                queued.push((item.clone(), source));
             }
-            queued.push((item.clone(), source));
+            wake.signal();
         });
 
         self.delivery.scope.add(

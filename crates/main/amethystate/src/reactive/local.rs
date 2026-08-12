@@ -1,7 +1,56 @@
 use amethystate_core::SignalSubscription;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 type Pump = Box<dyn FnMut()>;
+
+/// Crosses the thread boundary: the writer flags it, the draining thread waits
+/// on it. Carries no value - the queues do that.
+#[derive(Default)]
+pub(crate) struct Wake {
+    ready: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl Wake {
+    pub(crate) fn signal(&self) {
+        self.ready.store(true, Ordering::Release);
+        if let Some(waker) = self.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+    }
+
+    fn take(&self) -> bool {
+        self.ready.swap(false, Ordering::AcqRel)
+    }
+}
+
+/// Resolves once there is something to [`LocalScope::drain`].
+pub struct Changed<'a> {
+    wake: &'a Arc<Wake>,
+}
+
+impl Future for Changed<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.wake.take() {
+            return Poll::Ready(());
+        }
+
+        *self.wake.waker.lock().unwrap() = Some(cx.waker().clone());
+
+        if self.wake.take() {
+            return Poll::Ready(());
+        }
+
+        Poll::Pending
+    }
+}
 
 /// Holds subscriptions whose callbacks run on this thread, when you pump.
 ///
@@ -20,6 +69,7 @@ type Pump = Box<dyn FnMut()>;
 pub struct LocalScope {
     subs: Vec<SignalSubscription>,
     pumps: Vec<Pump>,
+    wake: Arc<Wake>,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -52,9 +102,28 @@ impl LocalScope {
         self.pumps.clear();
     }
 
+    /// Waits until something is queued.
+    ///
+    /// Delivery still happens in [`LocalScope::drain`] - this only wakes the
+    /// loop that calls it:
+    ///
+    /// ```rust,ignore
+    /// loop {
+    ///     ui.changed().await;
+    ///     ui.drain();
+    /// }
+    /// ```
+    pub fn changed(&self) -> Changed<'_> {
+        Changed { wake: &self.wake }
+    }
+
     pub(crate) fn add(&mut self, sub: SignalSubscription, pump: Pump) {
         self.subs.push(sub);
         self.pumps.push(pump);
+    }
+
+    pub(crate) fn wake_handle(&self) -> Arc<Wake> {
+        Arc::clone(&self.wake)
     }
 }
 
@@ -72,7 +141,9 @@ mod tests {
 
         let seen = Rc::new(RefCell::new(Vec::new()));
         let cap = Rc::clone(&seen);
-        cell.subscribe_local(&mut scope, move |v: &u64| cap.borrow_mut().push(*v));
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |v: &u64| cap.borrow_mut().push(*v));
 
         cell.set(2).unwrap();
         scope.drain();
@@ -87,7 +158,9 @@ mod tests {
 
         let seen = Rc::new(RefCell::new(Vec::new()));
         let cap = Rc::clone(&seen);
-        cell.subscribe_local(&mut scope, move |v: &u64| cap.borrow_mut().push(*v));
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |v: &u64| cap.borrow_mut().push(*v));
 
         cell.set(2).unwrap();
         assert!(seen.borrow().is_empty());
@@ -103,7 +176,9 @@ mod tests {
 
         let seen = Rc::new(RefCell::new(Vec::new()));
         let cap = Rc::clone(&seen);
-        cell.subscribe_local(&mut scope, move |v: &u64| cap.borrow_mut().push(*v));
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |v: &u64| cap.borrow_mut().push(*v));
 
         for n in 1..=5 {
             cell.set(n).unwrap();
@@ -120,7 +195,9 @@ mod tests {
 
         let calls = Rc::new(RefCell::new(0usize));
         let cap = Rc::clone(&calls);
-        cell.subscribe_local(&mut scope, move |_: &u64| *cap.borrow_mut() += 1);
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |_: &u64| *cap.borrow_mut() += 1);
 
         scope.drain();
         scope.drain();
@@ -137,10 +214,12 @@ mod tests {
         let calls = Rc::new(RefCell::new(0usize));
         let cap = Rc::clone(&calls);
 
-        cell.subscribe_local(&mut scope, move |v: &u64| {
-            *cap.borrow_mut() += 1;
-            let _ = writer.set(v + 1);
-        });
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |v: &u64| {
+                *cap.borrow_mut() += 1;
+                let _ = writer.set(v + 1);
+            });
 
         cell.set(1).unwrap();
         scope.drain();
@@ -151,6 +230,89 @@ mod tests {
         assert_eq!(*calls.borrow(), 2);
     }
 
+    fn block_on<F: Future>(mut future: F) -> F::Output {
+        struct ParkWaker(std::thread::Thread);
+
+        impl std::task::Wake for ParkWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+
+        let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
+        let mut cx = Context::from_waker(&waker);
+        let mut future = unsafe { Pin::new_unchecked(&mut future) };
+
+        loop {
+            if let Poll::Ready(out) = future.as_mut().poll(&mut cx) {
+                return out;
+            }
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    fn changed_resolves_once_something_is_queued() {
+        let cell = ReactiveCell::new(0u64);
+        let mut scope = LocalScope::new();
+
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let cap = Rc::clone(&seen);
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |v: &u64| cap.borrow_mut().push(*v));
+
+        cell.set(7).unwrap();
+
+        block_on(scope.changed());
+        scope.drain();
+
+        assert_eq!(*seen.borrow(), vec![7]);
+    }
+
+    #[test]
+    fn changed_is_pending_while_nothing_happened() {
+        let cell = ReactiveCell::new(0u64);
+        let mut scope = LocalScope::new();
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(|_: &u64| {});
+
+        let mut fut = scope.changed();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+
+        assert!(
+            unsafe { Pin::new_unchecked(&mut fut) }
+                .poll(&mut cx)
+                .is_pending()
+        );
+    }
+
+    #[test]
+    fn a_write_from_another_thread_wakes_the_drainer() {
+        let cell = ReactiveCell::new(0u64);
+        let mut scope = LocalScope::new();
+
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let cap = Rc::clone(&seen);
+        cell.subscription_with()
+            .local(&mut scope)
+            .register(move |v: &u64| cap.borrow_mut().push(*v));
+
+        let writer = cell.clone();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            writer.set(42).unwrap();
+        });
+
+        block_on(scope.changed());
+        scope.drain();
+        handle.join().unwrap();
+
+        assert_eq!(*seen.borrow(), vec![42]);
+    }
+
     #[test]
     fn dropping_the_scope_ends_its_subscriptions() {
         let cell = ReactiveCell::new(0u64);
@@ -159,7 +321,9 @@ mod tests {
         {
             let mut scope = LocalScope::new();
             let cap = Rc::clone(&seen);
-            cell.subscribe_local(&mut scope, move |v: &u64| cap.borrow_mut().push(*v));
+            cell.subscription_with()
+                .local(&mut scope)
+                .register(move |v: &u64| cap.borrow_mut().push(*v));
             assert_eq!(scope.len(), 1);
         }
 

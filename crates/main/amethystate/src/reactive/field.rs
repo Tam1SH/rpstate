@@ -140,6 +140,7 @@ where
         ReactiveCell::from_parts(
             self.core.signal.clone(),
             Arc::new(move |value| me.set(value)),
+            self.instance_id,
             None,
         )
     }

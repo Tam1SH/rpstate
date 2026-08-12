@@ -1,7 +1,7 @@
 use crate::reactive::error::WriteResult;
-use crate::reactive::local::LocalScope;
+use crate::reactive::watch::{Immediate, Watch, Watchable};
 use amethystate_core::{Signal, SignalSubscription};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use uuid::Uuid;
 
 type Writer<T> = Arc<dyn Fn(T) -> WriteResult<()> + Send + Sync>;
@@ -14,6 +14,7 @@ type Writer<T> = Arc<dyn Fn(T) -> WriteResult<()> + Send + Sync>;
 pub struct ReactiveCell<T> {
     cache: Signal<T>,
     writer: Writer<T>,
+    origin: Uuid,
     _keepalive: Option<Arc<dyn Send + Sync>>,
 }
 
@@ -22,6 +23,7 @@ impl<T> Clone for ReactiveCell<T> {
         Self {
             cache: self.cache.clone(),
             writer: Arc::clone(&self.writer),
+            origin: self.origin,
             _keepalive: self._keepalive.clone(),
         }
     }
@@ -36,11 +38,13 @@ where
     pub(crate) fn from_parts(
         cache: Signal<T>,
         writer: Writer<T>,
+        origin: Uuid,
         keepalive: Option<Arc<dyn Send + Sync>>,
     ) -> Self {
         Self {
             cache,
             writer,
+            origin,
             _keepalive: keepalive,
         }
     }
@@ -56,6 +60,7 @@ where
                 sink.set(value);
                 Ok(())
             }),
+            origin: Uuid::new_v4(),
             _keepalive: None,
         }
     }
@@ -109,33 +114,28 @@ where
         self.cache.subscribe_with_source(callback)
     }
 
-    /// Subscribes with a callback that runs on the draining thread, so it need
-    /// not be `Send + Sync`.
-    ///
-    /// The value is a state rather than a stream of events, so changes coalesce:
-    /// however many times it moved since the last [`LocalScope::drain`], the
-    /// callback sees the newest once.
-    #[track_caller]
-    pub fn subscribe_local<F>(&self, scope: &mut LocalScope, mut callback: F)
+    /// Configures a subscription: filtering, provenance, and where the callback
+    /// runs. See [`Watch`].
+    pub fn subscription_with(&self) -> Watch<Self, Immediate> {
+        Watch::new(self.clone())
+    }
+}
+
+impl<T> Watchable for ReactiveCell<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    type Item = T;
+
+    fn watch_id(&self) -> Uuid {
+        self.origin
+    }
+
+    fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
-        F: FnMut(&T) + 'static,
+        F: Fn(&T, Option<Uuid>) + Send + Sync + 'static,
     {
-        let slot: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
-        let sink = Arc::clone(&slot);
-
-        let sub = self.cache.subscribe(move |value: &T| {
-            *sink.lock().unwrap() = Some(value.clone());
-        });
-
-        scope.add(
-            sub,
-            Box::new(move || {
-                let pending = slot.lock().unwrap().take();
-                if let Some(value) = pending {
-                    callback(&value);
-                }
-            }),
-        );
+        self.cache.subscribe_with_source(callback)
     }
 }
 

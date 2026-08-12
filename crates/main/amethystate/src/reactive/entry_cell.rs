@@ -35,12 +35,14 @@ where
             sink.set_forwarded(next, source);
         });
 
+        let origin = self.instance_id;
         let map = self.clone();
         let write_key = key;
 
         ReactiveCell::from_parts(
             cache,
             Arc::new(move |value: V| Ok(map.set_or_create(write_key.clone(), &value)?)),
+            origin,
             Some(Arc::new(read)),
         )
     }
