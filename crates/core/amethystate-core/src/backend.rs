@@ -38,6 +38,10 @@ pub trait AmeBackendSync {
 
     fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> Result<(), Self::Error>;
 
+    /// Removes every key under `prefix` as one operation, emitting a single
+    /// event rather than one per key.
+    fn delete_prefix(&self, prefix: &str, source: Option<Uuid>) -> Result<(), Self::Error>;
+
     fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, Self::Raw)>, Self::Error>;
 
     fn decode<T>(&self, raw: &Self::Borrowed) -> Result<T, Self::Error>

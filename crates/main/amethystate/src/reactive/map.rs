@@ -1,6 +1,7 @@
 use crate::store::Store;
 use crate::store::sync_backend::StoreBackend;
 use crate::{AccessMode, DefaultStore, Field, ReadOnlyMode, StoreSubscription, WritableMode};
+use amethystate_core::backend::AmeBackendSync;
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use std::marker::PhantomData;
 
@@ -90,9 +91,30 @@ where
         )?)
     }
 
-    pub fn entries(&self) -> ReactiveMapResult<Vec<(K, V)>> {
+    /// Every entry, sorted by key. Values are decoded as the iterator is
+    /// consumed, so `.find()` or `.take(n)` decode only what they reach.
+    pub fn entries(&self) -> ReactiveMapResult<impl Iterator<Item = (K, V)>> {
         let backend = StoreBackend::new(self.store.clone());
-        Ok(amethystate_core::map_entries(&backend, &self.path)?)
+        let prefix = format!("{}.", self.path);
+        let scanned = backend.scan_prefix(&prefix)?;
+
+        Ok(scanned.into_iter().filter_map(move |(full_path, raw)| {
+            let key = K::from_str(full_path.strip_prefix(&prefix)?).ok()?;
+            let value = backend.decode::<V>(&raw).ok()?;
+            Some((key, value))
+        }))
+    }
+
+    /// Every key, sorted. Nothing is deserialized.
+    pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
+        let backend = StoreBackend::new(self.store.clone());
+        let prefix = format!("{}.", self.path);
+
+        Ok(backend
+            .scan_prefix(&prefix)?
+            .into_iter()
+            .filter_map(|(full_path, _)| K::from_str(full_path.strip_prefix(&prefix)?).ok())
+            .collect())
     }
 
     pub fn len(&self) -> ReactiveMapResult<usize> {
@@ -244,7 +266,7 @@ where
             &backend,
             &self.core,
             self.path.clone(),
-            true,
+            false,
             Some(self.instance_id),
         )?)
     }
@@ -332,8 +354,6 @@ mod tests {
             "own updates stay hidden, own structural changes do not"
         );
 
-        // `clear` deletes each key through the store, so the subscription
-        // rebuilds a `Remove` per key on top of the `Clear` itself.
         seen.lock().unwrap().clear();
         map.set_or_create("b".to_string(), &4).unwrap();
         seen.lock().unwrap().clear();
@@ -341,11 +361,10 @@ mod tests {
 
         assert_eq!(
             *seen.lock().unwrap(),
-            vec!["remove".to_string(), "clear".to_string()],
-            "clear reports the keys it dropped as well as itself"
+            vec!["clear".to_string()],
+            "clear is one event, not one per key it dropped"
         );
 
-        // Another handle is somebody else, and is heard for updates too.
         seen.lock().unwrap().clear();
         let other = map.fork();
         other.set_or_create("c".to_string(), &5).unwrap();
@@ -419,7 +438,7 @@ mod tests {
         assert!(matches!(res, Err(ReactiveMapError::KeyNotFound(_))));
 
         map.set_or_create("b".into(), &100).unwrap();
-        let entries = map.entries().unwrap();
+        let entries: Vec<_> = map.entries().unwrap().collect();
         assert_eq!(entries.len(), 2);
 
         let removed = map.remove("a".into()).unwrap();
@@ -696,7 +715,7 @@ mod tests {
             )
             .unwrap();
 
-        let entries = map_int.entries().unwrap();
+        let entries: Vec<_> = map_int.entries().unwrap().collect();
 
         // i32::from_str("123") succeed, but decoder falls back to Default (0) for invalid bytes
         assert_eq!(entries.len(), 1);

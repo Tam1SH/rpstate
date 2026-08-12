@@ -115,6 +115,20 @@ let _sub = state.latency_ms().subscribe_external(|ms| {
 
 `subscribe_external` also fires when the value is changed from outside the process entirely — for example if the store file is edited externally. Those changes have no `instance_id` and are always delivered to all subscribers including `subscribe_external`.
 
+## ReactiveMap iteration order
+
+`entries()` is **sorted by key** — the same on every backend, and stable across writes.
+
+```rust
+// inserted as zulu, alpha, mike
+for (key, _) in state.limits().entries()? {
+    println!("{key}");   // alpha, mike, zulu
+}
+```
+
+Insertion order is not recorded. If your UI needs an order of its own — table columns, steps in
+a list — keep that list yourself and use the map for lookup.
+
 ## ReactiveMap subscriptions
 
 `ReactiveMap` follows the same pattern with `subscribe_any`, `subscribe_key`, `subscribe_any_external`, and `subscribe_key_external`:
@@ -164,9 +178,11 @@ call comes back to you depends on whether the key already existed. If you need e
 including your own, use `subscribe_any`; if you need none of your own, compare
 `change.source()` against your `instance_id` yourself.
 
-### `clear` reports twice
+### `clear` is one event
 
-`clear()` deletes each key through the store, and the map rebuilds a `Remove` from each of
-those deletions on top of the `Clear` itself. A subscriber to a map holding two keys sees three
-events: `Remove`, `Remove`, `Clear`. Match on the variants you care about rather than assuming
-one call produces one event.
+`clear()` produces exactly one `Clear`, however many keys the map held, and every handle on that
+map sees it — not just the one that called `clear()`.
+
+This matters if you hold more than one handle on the same store, which is normal when separate
+parts of an app each build their own state struct. A collection emptying itself is not the same
+as its keys being removed one by one, and `Clear` is how you tell the difference.

@@ -144,7 +144,7 @@ state.limits().set_or_create("gpu".into(), &AlertThresholds { warning: 60, criti
 // Lookup
 let cpu = state.limits().get(&"cpu".into())?;
 
-// Iterate
+// Iterate — always sorted by key
 for (key, val) in state.limits().entries()? {
     println!("{key}: {val:?}");
 }

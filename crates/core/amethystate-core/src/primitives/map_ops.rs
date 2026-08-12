@@ -217,11 +217,7 @@ where
             backend.delete_with_source(&format!("{}.{}", path, key), processed.source())?;
         }
         MapChange::Clear { .. } => {
-            let prefix = format!("{}.", path);
-            let kvs = backend.scan_prefix(&prefix)?;
-            for (full_path, _) in kvs {
-                backend.delete_with_source(&full_path, processed.source())?;
-            }
+            backend.delete_prefix(&format!("{}.", path), processed.source())?;
         }
     }
 

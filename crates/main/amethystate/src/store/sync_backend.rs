@@ -65,6 +65,10 @@ where
         self.store.delete_with_source(path, source)
     }
 
+    fn delete_prefix(&self, prefix: &str, source: Option<Uuid>) -> Result<(), Self::Error> {
+        self.store.delete_prefix_with_source(prefix, source)
+    }
+
     fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, Self::Raw)>, Self::Error> {
         self.store.scan_prefix(prefix)
     }

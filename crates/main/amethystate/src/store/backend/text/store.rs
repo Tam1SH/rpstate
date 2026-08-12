@@ -411,6 +411,43 @@ impl<D: TextDocument> TextStoreInner<D> {
         Ok(())
     }
 
+    fn delete_prefix(&self, prefix: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+        self.check_debouncer()?;
+
+        if !self.has_pending.load(Ordering::Acquire) {
+            sync_external_changes::<D>(&self.files.data, &self.subscriptions);
+        }
+
+        {
+            let mut guard = self.files.data.doc.write();
+            let keys: Vec<String> = scan_prefix_impl(&*guard, prefix)?
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect();
+
+            for key in keys {
+                let parts = split_path(&key);
+                guard.delete(&parts)?;
+            }
+        }
+
+        self.has_pending.store(true, Ordering::Release);
+
+        utils::emit_events(
+            &self.subscriptions,
+            StoreEvent {
+                path: Arc::from(prefix),
+                op: StoreOp::DeletePrefix,
+                old: None,
+                new: None,
+                source,
+            },
+        );
+
+        self.debouncer.schedule();
+        Ok(())
+    }
+
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.subscriptions
@@ -540,6 +577,14 @@ impl<D: TextDocument + Send + 'static> Store for TextStore<D> {
         self.inner.delete(path, source)
     }
 
+    fn delete_prefix_with_source(
+        &self,
+        prefix: &str,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
+        self.inner.delete_prefix(prefix, source)
+    }
+
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId {
         self.inner.subscribe(kind, callback)
     }
@@ -655,6 +700,7 @@ pub(super) fn scan_prefix_impl<D: TextDocument>(
         }
     }
 
+    results.sort_by(|(a, _), (b, _)| a.cmp(b));
     Ok(results)
 }
 

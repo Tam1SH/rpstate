@@ -52,6 +52,15 @@ pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
     fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()>;
     fn delete(&self, path: &str) -> StorageResult<()>;
 
+    /// Removes every key under `prefix`, emitting one
+    /// [`StoreOp::DeletePrefix`] instead of a `Delete` per key.
+    fn delete_prefix_with_source(&self, prefix: &str, source: Option<Uuid>) -> StorageResult<()>;
+
+    fn delete_prefix(&self, prefix: &str) -> StorageResult<()> {
+        self.delete_prefix_with_source(prefix, None)
+    }
+
+    /// Every key under `prefix`, sorted by key on every backend.
     fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
     fn save_now(&self) -> StorageResult<()>;

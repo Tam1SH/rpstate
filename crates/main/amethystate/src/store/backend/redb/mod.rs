@@ -380,6 +380,7 @@ impl Store for RedbStore {
             }
         }
 
+        results.sort_by(|(a, _), (b, _)| a.cmp(b));
         Ok(results)
     }
 
@@ -414,6 +415,33 @@ impl Store for RedbStore {
                 path: path_arc,
                 op: StoreOp::Delete,
                 old: old_bytes,
+                new: None,
+                source,
+            },
+        );
+
+        self.inner.debouncer.schedule();
+        Ok(())
+    }
+
+    fn delete_prefix_with_source(&self, prefix: &str, source: Option<Uuid>) -> StorageResult<()> {
+        self.inner.check_debouncer();
+
+        let keys = self.scan_prefix(prefix)?;
+
+        {
+            let mut lock = self.inner.pending.lock();
+            for (path, _) in keys {
+                lock.insert(Arc::from(path.as_str()), None);
+            }
+        }
+
+        utils::emit_events(
+            &self.inner.subscriptions,
+            StoreEvent {
+                path: Arc::from(prefix),
+                op: StoreOp::DeletePrefix,
+                old: None,
                 new: None,
                 source,
             },

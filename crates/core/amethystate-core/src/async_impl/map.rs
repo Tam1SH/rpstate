@@ -138,15 +138,27 @@ where
         .await
     }
 
-    pub fn values(&self) -> ReactiveMapResult<HashMap<K, V>, B::Error> {
-        Ok(self.core.cache.lock().unwrap().clone())
+    /// The cached entries, sorted by key.
+    pub fn values(&self) -> ReactiveMapResult<Vec<(K, V)>, B::Error> {
+        let mut entries: Vec<(K, V)> = self
+            .core
+            .cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        entries.sort_by_key(|(k, _)| k.to_string());
+        Ok(entries)
     }
 
-    pub async fn entries(&self) -> ReactiveMapResult<HashMap<K, V>, B::Error> {
-        Ok(crate::map_entries_async(&self.backend, &self.prefix)
-            .await?
-            .into_iter()
-            .collect())
+    /// Every entry, sorted by key.
+    pub async fn entries(&self) -> ReactiveMapResult<Vec<(K, V)>, B::Error> {
+        let mut entries: Vec<(K, V)> =
+            crate::map_entries_async(&self.backend, &self.prefix).await?;
+        entries.sort_by_key(|(k, _)| k.to_string());
+        Ok(entries)
     }
 
     pub async fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>, B::Error>

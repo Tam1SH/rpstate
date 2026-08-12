@@ -117,16 +117,9 @@ where
     TValue: FieldValue,
     S: Store,
 {
-    /// This field as a [`ReactiveCell`], with the store backend and access mode
-    /// erased so it can be stored and passed around next to cells over other
-    /// primitives.
-    ///
-    /// Writes through the cell go through [`Field::set`], so they reach the
-    /// store and keep this field's provenance - `subscribe_external` and
-    /// tracing still tell them apart from anyone else's writes.
-    ///
-    /// No `keepalive` is needed: the field captured by the writer already holds
-    /// the store subscription that feeds the cache.
+    /// This field as a [`ReactiveCell`], with the store backend and access
+    /// mode erased. Writes go through [`Field::set`], keeping this field's
+    /// provenance.
     pub fn cell(&self) -> ReactiveCell<TValue> {
         let me = self.clone();
 

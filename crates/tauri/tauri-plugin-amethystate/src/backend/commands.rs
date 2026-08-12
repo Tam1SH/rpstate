@@ -104,6 +104,9 @@ pub async fn amethystate_subscribe<R: Runtime>(
                         "key": subkey,
                         "oldValue": old_val.unwrap_or(serde_json::Value::Null),
                     }),
+                    amethystate::StoreOp::DeletePrefix => serde_json::json!({
+                        "type": "Clear",
+                    }),
                 };
                 let _ = app_handle.emit(&event_name, payload);
             } else if *event.path == *key_clone

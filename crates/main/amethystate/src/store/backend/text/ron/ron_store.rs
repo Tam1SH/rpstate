@@ -61,6 +61,10 @@ impl Store for RonStore {
         self.0.delete_with_source(path, source)
     }
 
+    fn delete_prefix_with_source(&self, prefix: &str, source: Option<Uuid>) -> StorageResult<()> {
+        self.0.delete_prefix_with_source(prefix, source)
+    }
+
     fn delete(&self, path: &str) -> StorageResult<()> {
         self.0.delete(path)
     }

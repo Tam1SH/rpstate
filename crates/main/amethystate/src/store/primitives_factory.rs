@@ -160,6 +160,14 @@ where
     let id = store.subscribe(
         SubscriptionKind::Prefix(path_for_sub),
         Arc::new(move |event| {
+            if event.op == StoreOp::DeletePrefix && *event.path == *prefix_for_strip {
+                core_clone.cache.lock().unwrap().clear();
+                core_clone.notify(&MapChange::Clear {
+                    source: event.source,
+                });
+                return;
+            }
+
             if let Some(key_str) = event.path.strip_prefix(&prefix_for_strip)
                 && let Ok(k) = K::from_str(key_str)
             {
@@ -199,7 +207,7 @@ where
                                 }
                             }
                         }
-                        StoreOp::Delete => {
+                        StoreOp::Delete | StoreOp::DeletePrefix => {
                             keys.remove(&k);
                             MapChange::Remove {
                                 key: k.clone(),

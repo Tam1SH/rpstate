@@ -236,6 +236,7 @@ impl SqliteStoreInner {
             }
         }
 
+        storage_results.sort_by(|(a, _), (b, _)| a.cmp(b));
         Ok(storage_results)
     }
 
@@ -269,6 +270,33 @@ impl SqliteStoreInner {
                 path: path_arc,
                 op: StoreOp::Delete,
                 old: old_bytes,
+                new: None,
+                source,
+            },
+        );
+
+        self.debouncer.schedule();
+        Ok(())
+    }
+
+    fn delete_prefix(&self, prefix: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+        self.check_debouncer();
+
+        let keys = self.scan_prefix(prefix)?;
+
+        {
+            let mut lock = self.pending.lock();
+            for (path, _) in keys {
+                lock.insert(Arc::from(path.as_str()), None);
+            }
+        }
+
+        utils::emit_events(
+            &self.subscriptions,
+            StoreEvent {
+                path: Arc::from(prefix),
+                op: StoreOp::DeletePrefix,
+                old: None,
                 new: None,
                 source,
             },
@@ -493,6 +521,14 @@ impl Store for SqliteStore {
 
     fn delete_with_source(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.inner.delete(path, source)
+    }
+
+    fn delete_prefix_with_source(
+        &self,
+        prefix: &str,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
+        self.inner.delete_prefix(prefix, source)
     }
 
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId {

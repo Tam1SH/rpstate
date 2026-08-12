@@ -2,7 +2,6 @@ mod hooks;
 pub use hooks::*;
 
 use amethystate::{ReactiveMapKey, ReactiveMapValue};
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -14,7 +13,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    pub entries: HashMap<K, V>,
+    pub entries: Vec<(K, V)>,
     pub set: Callback<(K, V)>,
     pub set_or_create: Callback<(K, V)>,
     pub remove: Callback<K>,

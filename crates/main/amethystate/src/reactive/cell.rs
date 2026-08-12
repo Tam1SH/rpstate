@@ -6,25 +6,13 @@ use uuid::Uuid;
 type Writer<T> = Arc<dyn Fn(T) -> WriteResult<()> + Send + Sync>;
 
 /// A reactive value you can read, write and subscribe to, with the primitive
-/// behind it erased.
+/// behind it erased - along with its type parameters, so fields, map entries
+/// and in-memory values share one type and one collection.
 ///
-/// Fields, map entries and plain in-memory values all become a `ReactiveCell`,
-/// so a `HashMap<Id, ReactiveCell<u64>>` can hold a mix of them. Erasing the
-/// primitive erases its type parameters with it - the store backend, the access
-/// mode, a map's key type - none of which a holder of the value should have to
-/// name.
-///
-/// Writes always go where the value actually lives. There is no way to get a
-/// cell whose writes land in a cache and are silently dropped.
+/// Writes always reach where the value lives.
 pub struct ReactiveCell<T> {
-    /// Reads and subscriptions come straight from here, with no indirection.
-    /// Only the primitive that created the cell writes to it - for a stored
-    /// cell that is the store subscription, and nobody else.
     cache: Signal<T>,
     writer: Writer<T>,
-    /// Holds the subscription that feeds `cache` when nothing else does.
-    /// Without it the cell keeps answering `get()` with a value that has quietly
-    /// stopped being updated.
     _keepalive: Option<Arc<dyn Send + Sync>>,
 }
 
@@ -42,9 +30,6 @@ impl<T> ReactiveCell<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// Builds a cell over an existing cache and whatever writes through to
-    /// where the value lives.
-    ///
     /// `keepalive` must hold the subscription feeding `cache` unless something
     /// captured by `writer` already does.
     pub(crate) fn from_parts(
@@ -59,11 +44,7 @@ where
         }
     }
 
-    /// An in-memory cell, backed by nothing but itself.
-    ///
-    /// Use it for reactive values that are not persisted - a column width being
-    /// dragged, a filter someone is typing - so they speak the same type as the
-    /// persisted ones and can be mixed with them.
+    /// An in-memory cell, for reactive values that are not persisted.
     pub fn new(initial: T) -> Self {
         let cache = Signal::new(initial);
         let sink = cache.clone();
@@ -82,18 +63,14 @@ where
         self.cache.get()
     }
 
-    /// Writes through to wherever the value lives, and fails if that write
-    /// fails - rejected by an interceptor, or the store refusing it.
-    ///
-    /// The cache is not updated here: for a stored cell the store decides what
-    /// was actually committed and says so through its subscription. That is
-    /// what keeps a cell from reporting a value the store never accepted.
+    /// Fails if the write is refused - by an interceptor, or by the store.
+    /// The cache is left to the store subscription, so a refused write never
+    /// shows up in `get()`.
     pub fn set(&self, value: T) -> WriteResult<()> {
         (self.writer)(value)
     }
 
-    /// Reads, transforms, writes. Not atomic - another writer can land in
-    /// between - so treat it as a convenience, not a compare-and-swap.
+    /// Read-modify-write, not atomic.
     pub fn update<F>(&self, f: F) -> WriteResult<T>
     where
         F: FnOnce(T) -> T,

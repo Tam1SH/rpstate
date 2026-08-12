@@ -8,6 +8,10 @@ pub type StoreCallback = Arc<dyn Fn(&StoreEvent) + Send + Sync + 'static>;
 pub enum StoreOp {
     Set,
     Delete,
+
+    /// Everything under a prefix went away as one operation. The event path is
+    /// the prefix.
+    DeletePrefix,
 }
 
 #[derive(Debug, Clone)]

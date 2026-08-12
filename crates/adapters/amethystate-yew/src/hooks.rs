@@ -6,7 +6,6 @@ use amethystate::core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use amethystate::reactive::FieldValue;
 use futures::channel::mpsc;
 use serde::Deserialize;
-use std::collections::HashMap;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
@@ -160,7 +159,7 @@ where
         Callback::from(move |(key, val): (K, V)| {
             let old = (*state).clone();
             let mut next = old.clone();
-            next.insert(key.clone(), val.clone());
+            upsert(&mut next, key.clone(), val.clone());
             state.set(next);
 
             let map = map.clone();
@@ -179,7 +178,7 @@ where
         Callback::from(move |(key, val): (K, V)| {
             let old = (*state).clone();
             let mut next = old.clone();
-            next.insert(key.clone(), val.clone());
+            upsert(&mut next, key.clone(), val.clone());
             state.set(next);
 
             let map = map.clone();
@@ -198,7 +197,7 @@ where
         Callback::from(move |key: K| {
             let old = (*state).clone();
             let mut next = old.clone();
-            next.remove(&key);
+            next.retain(|(k, _)| k != &key);
             state.set(next);
 
             let map = map.clone();
@@ -216,7 +215,7 @@ where
         let map = map.clone();
         Callback::from(move |_: ()| {
             let old = (*state).clone();
-            state.set(HashMap::new());
+            state.set(Vec::new());
 
             let map = map.clone();
             let state = state.clone();
@@ -288,4 +287,17 @@ where
             std::any::type_name::<S>()
         )
     })
+}
+
+fn upsert<K: ReactiveMapKey, V: ReactiveMapValue>(entries: &mut Vec<(K, V)>, key: K, value: V) {
+    match entries.iter_mut().find(|(k, _)| *k == key) {
+        Some(slot) => slot.1 = value,
+        None => {
+            let at = entries
+                .iter()
+                .position(|(k, _)| k.to_string() > key.to_string())
+                .unwrap_or(entries.len());
+            entries.insert(at, (key, value));
+        }
+    }
 }
