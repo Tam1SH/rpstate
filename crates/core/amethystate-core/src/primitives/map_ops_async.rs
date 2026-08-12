@@ -201,7 +201,10 @@ where
         .run_interceptors(context_path, change)
         .map_err(|_| ReactiveMapError::Intercepted)?;
 
-    map_apply_remote_change(core, &processed);
+    // Writes carry the provenance the change came with, as the sync path does.
+    // Without it a handle's own write comes back looking like somebody else's,
+    // and anything answering external changes with a write of its own echoes.
+    let source = processed.source();
 
     match &processed {
         MapChange::Insert { key, value, .. }
@@ -210,21 +213,31 @@ where
             new_value: value,
             ..
         } => {
-            backend.set(&format!("{}.{}", path, key), value).await?;
+            backend
+                .set_with_source(&format!("{}.{}", path, key), value, source)
+                .await?;
         }
         MapChange::Remove { key, .. } => {
-            backend.delete(&format!("{}.{}", path, key)).await?;
+            backend
+                .delete_with_source(&format!("{}.{}", path, key), source)
+                .await?;
         }
         MapChange::Clear { .. } => {
             let prefix = format!("{}.", path);
             let kvs = backend.scan_prefix(&prefix).await?;
             for (full_path, _) in kvs {
-                backend.delete(&full_path).await?;
+                backend.delete_with_source(&full_path, source).await?;
             }
         }
     }
 
-    core.notify(&processed);
+    // After the write, not before. Updating first meant a failure below left
+    // the cache holding a value the backend never took, with nothing to undo
+    // it - and values() and get_sync read the cache alone.
+    //
+    // Subscribers are told by the backend's subscription, as in the sync path;
+    // notifying here as well delivered every change twice.
+    map_apply_remote_change(core, &processed);
 
     Ok(())
 }

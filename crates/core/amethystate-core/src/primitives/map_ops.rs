@@ -70,7 +70,6 @@ pub fn map_set_existing<B, K, V>(
     path: Arc<str>,
     key: K,
     value: &V,
-    notify_after_commit: bool,
     source: Option<Uuid>,
 ) -> ReactiveMapResult<(), B::Error>
 where
@@ -91,7 +90,7 @@ where
         source,
     };
 
-    map_apply_change(backend, core, path, change, notify_after_commit)
+    map_apply_change(backend, core, path, change)
 }
 
 pub fn map_set_or_create<B, K, V>(
@@ -100,7 +99,6 @@ pub fn map_set_or_create<B, K, V>(
     path: Arc<str>,
     key: K,
     value: &V,
-    notify_after_commit: bool,
     source: Option<Uuid>,
 ) -> ReactiveMapResult<(), B::Error>
 where
@@ -125,7 +123,7 @@ where
         }
     };
 
-    map_apply_change(backend, core, path, change, notify_after_commit)
+    map_apply_change(backend, core, path, change)
 }
 
 pub fn map_remove<B, K, V>(
@@ -133,7 +131,6 @@ pub fn map_remove<B, K, V>(
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,
     key: K,
-    notify_after_commit: bool,
     source: Option<Uuid>,
 ) -> ReactiveMapResult<Option<V>, B::Error>
 where
@@ -154,7 +151,7 @@ where
             old_value: old_value.clone(),
             source,
         };
-        map_apply_change(backend, core, path, change, notify_after_commit)?;
+        map_apply_change(backend, core, path, change)?;
         Ok(Some(old_value))
     } else {
         core.cache.lock().unwrap().remove(&key);
@@ -166,7 +163,6 @@ pub fn map_clear<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,
-    notify_after_commit: bool,
     source: Option<Uuid>,
 ) -> ReactiveMapResult<(), B::Error>
 where
@@ -174,13 +170,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    map_apply_change(
-        backend,
-        core,
-        path,
-        MapChange::Clear { source },
-        notify_after_commit,
-    )
+    map_apply_change(backend, core, path, MapChange::Clear { source })
 }
 
 pub fn map_apply_change<B, K, V>(
@@ -188,7 +178,6 @@ pub fn map_apply_change<B, K, V>(
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,
     change: MapChange<K, V>,
-    notify_after_commit: bool,
 ) -> ReactiveMapResult<(), B::Error>
 where
     B: AmeBackendSync,
@@ -221,10 +210,10 @@ where
         }
     }
 
+    // Subscribers are told by the backend's subscription, not from here. One
+    // notifier means a change is reported once and always says what the store
+    // actually took, rather than what was asked for.
     map_apply_remote_change(core, &processed);
-    if notify_after_commit {
-        core.notify(&processed);
-    }
 
     Ok(())
 }

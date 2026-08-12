@@ -103,21 +103,21 @@ set("k", v2)                 → pending["k"] = v2, подписчики уве�
 Все три — [map_ops_async.rs](../crates/core/amethystate-core/src/primitives/map_ops_async.rs),
 две из них я видел сам по ходу работы над entry-ячейкой.
 
-### 6. Async теряет provenance **[видел сам]**
+### 6. Async теряет provenance — ПОЧИНЕНО (тестов нет)
 
 Строки 213/216/222: пишет через `backend.set`/`delete` **без source**, тогда как sync передаёт
 `processed.source()`. Собственная запись возвращается как «внешняя», `subscribe_any_external`
 её не отфильтрует — ровно тот класс эха, который мы вычистили из entry-ячейки.
 При этом `AmeBackendAsync` предоставляет `set_with_source`/`delete_with_source`.
 
-### 7. Async обновляет кэш **до** записи в бэкенд **[видел сам]**
+### 7. Async обновляет кэш **до** записи в бэкенд — ПОЧИНЕНО (тестов нет)
 
 Строка 204 против sync на [map_ops.rs:228](../crates/core/amethystate-core/src/primitives/map_ops.rs).
 Ошибка ввода-вывода → кэш уже очищен/перезаписан, на диске старое, уведомления об откате нет.
 `values()`/`get_sync` читают только кэш и отдают то, чего в хранилище нет. Для `Clear` ошибка
 в середине цикла оставляет частично удалённый бэкенд плюс полностью очищенный кэш.
 
-### 8. У async нет `notify_after_commit` **[не проверял]**
+### 8. У async нет `notify_after_commit` — ПОЧИНЕНО (тестов нет)
 
 Строка 227 всегда зовёт `core.notify`, тогда как sync получает флаг и передаёт `false` для
 set/remove. Если async-бэкенд тоже эмитит через `subscribe_map`, каждая запись доходит дважды.
@@ -217,7 +217,7 @@ redb/sqlite было бы нечем. Сортировка выводится и
 Тесты в [tests/map_order.rs](../crates/main/amethystate/tests/map_order.rs), прогнаны на всех
 пяти конфигурациях (redb, json, toml, ron, sqlite).
 
-### 13. Версия не двигается, если под неё нет шага **[не проверял]**
+### 13. Версия не двигается, если под неё нет шага — НЕ ПОДТВЕРДИЛОСЬ (вторая половина ПОЧИНЕНА)
 
 [migration/engine.rs:259-269](../crates/main/amethystate/src/migration/engine.rs)
 
@@ -231,7 +231,7 @@ redb/sqlite было бы нечем. Сортировка выводится и
 кода при неперемигрированных данных — `calculate_drift` на следующем запуске расхождения уже
 не увидит, диагностика по упавшему префиксу теряется навсегда.
 
-### 14. `is_initialized` привязан к scope, а не к пути мапы **[не проверял]**
+### 14. `is_initialized` привязан к scope, а не к пути мапы — ПОЧИНЕНО
 
 [primitives_factory.rs:141](../crates/main/amethystate/src/store/primitives_factory.rs)
 

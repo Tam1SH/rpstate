@@ -19,12 +19,13 @@ where
         .run_interceptors(path.clone(), value, source)
         .map_err(|_| FieldError::Intercepted)?;
 
+    // The cache is left to the backend's subscription, as in the sync path.
+    // Writing it here too made the field its own second writer: subscribers
+    // heard about one write twice, and a write the backend refused still
+    // showed up in get().
     backend
         .set_owned_with_source(path, &change.new_value, change.source)
         .await?;
-
-    core.signal
-        .set_forwarded(change.new_value.clone(), change.source);
 
     Ok(())
 }

@@ -258,7 +258,6 @@ where
             self.path.clone(),
             key,
             value,
-            false,
             Some(self.instance_id),
         )?)
     }
@@ -271,7 +270,6 @@ where
             self.path.clone(),
             key,
             value,
-            false,
             Some(self.instance_id),
         )?)
     }
@@ -283,7 +281,6 @@ where
             &self.core,
             self.path.clone(),
             key,
-            false,
             Some(self.instance_id),
         )?)
     }
@@ -294,7 +291,6 @@ where
             &backend,
             &self.core,
             self.path.clone(),
-            false,
             Some(self.instance_id),
         )?)
     }
