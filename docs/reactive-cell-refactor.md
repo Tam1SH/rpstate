@@ -1,6 +1,6 @@
 # Рефакторинг: `ReactiveCell` и единственный писатель у кэша
 
-Статус: план. Ветка: `refactor/reactive-cell`. Целевая версия: 0.10.0 (ломающая).
+Статус: этапы 1-4 сделаны. Ветка: `refactor/reactive-cell`. Целевая версия: 0.10.0 (ломающая).
 
 ## Зачем
 
@@ -78,9 +78,9 @@ pub struct ReactiveCell<T> {
 ([reactive/error.rs:4-62](../crates/main/amethystate/src/reactive/error.rs)) — плюс два почти
 посимвольно совпадающих `From`-импла.
 
-- [ ] `WriteError<E>` в ядре, `WriteError` (по `StorageError`) в main.
-- [ ] `FieldError`/`ReactiveMapError` — алиасы на него.
-- [ ] Схлопнуть два `From`-импла в один.
+- [x] `WriteError<E>` в ядре, `WriteError` (по `StorageError`) в main.
+- [x] `FieldError`/`ReactiveMapError` — алиасы на него.
+- [x] Схлопнуть два `From`-импла в один.
 
 **Приёмка:** `cargo build --workspace`, ~60 строк дублей удалено.
 **Зачем первым:** разблокирует сигнатуру `writer` в `ReactiveCell` без ассоциированного типа.
@@ -89,7 +89,7 @@ pub struct ReactiveCell<T> {
 
 - [ ] `set(value)` и `set_with_source(value, source: Uuid)` — по конвенции `Store`
       (`set`/`set_with_source` уже так).
-- [ ] `emit` принимает уже сохранённый `Arc<T>`, а не перечитывает `load_full()`.
+- [x] `emit` принимает уже сохранённый `Arc<T>`, а не перечитывает `load_full()`.
 
 **Гонка:** сейчас `set` кладёт значение и зовёт `emit`, который **перечитывает** `ArcSwap`
 ([signal.rs:70-76](../crates/core/amethystate-core/src/primitives/signal.rs)). Между этим
@@ -102,9 +102,9 @@ pub struct ReactiveCell<T> {
 
 ### 3. `ReactiveCell` + конструкторы
 
-- [ ] Тип по схеме выше.
-- [ ] `ReactiveCell::new(initial)` — volatile, закрывает дыру «in-memory значение без выдуманного `path`».
-- [ ] `Field::cell()` — **только для `WritableMode`** (по существующей машинерии `AccessMode`).
+- [x] Тип по схеме выше.
+- [x] `ReactiveCell::new(initial)` — volatile, закрывает дыру «in-memory значение без выдуманного `path`».
+- [x] `Field::cell()` — **только для `WritableMode`** (по существующей машинерии `AccessMode`).
       Writer захватывает клон `Field` → `me.set(v)`, значит `instance_id` и провенанс
       сохраняются даром ([field.rs:157](../crates/main/amethystate/src/reactive/field.rs)),
       `subscribe_external` и трейсинг продолжают работать через ячейку. `keepalive: None` —
@@ -114,12 +114,12 @@ pub struct ReactiveCell<T> {
 
 ### 4. Entry-ячейка: store-first
 
-- [ ] `MapEntrySignal` → `MapEntry` (после store-first это не «signal»).
-- [ ] `set` пишет прямо в мапу (`map.set_or_create`), кэш обновляет **только** read-подписка.
-- [ ] Выкинуть `sync_source`, write-back подписку, `.signal()`.
+- [x] `MapEntrySignal` → модуль `entry_cell`, метод `entry_cell()` (после store-first это не «signal»).
+- [x] `set` пишет прямо в мапу (`map.set_or_create`), кэш обновляет **только** read-подписка.
+- [x] Выкинуть `sync_source`, write-back подписку, `.signal()`.
 - [ ] `entry_cell(key, default) -> ReactiveCell<V>`, `keepalive: Some(read_sub)` —
       read-подписку больше никто не держит.
-- [ ] `set` возвращает `Result` — сейчас ошибка проглатывается
+- [x] `set` возвращает `Result` — сейчас ошибка проглатывается
       (`let _ = map_for_write.set_or_create(...)`,
       [entry_signal.rs:52](../crates/main/amethystate/src/reactive/entry_signal.rs)):
       интерцептор отклонил запись, а сигнал уже держит новое значение и молча врёт.
