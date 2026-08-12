@@ -27,6 +27,13 @@ impl Wake {
     fn take(&self) -> bool {
         self.ready.swap(false, Ordering::AcqRel)
     }
+
+    /// Registers `cx`'s waker. Callers must re-check their queue afterwards: a
+    /// signal landing between their check and this one would otherwise be
+    /// missed, with nothing left to wake them.
+    pub(crate) fn park(&self, cx: &Context<'_>) {
+        *self.waker.lock().unwrap() = Some(cx.waker().clone());
+    }
 }
 
 /// Resolves once there is something to [`LocalScope::drain`].

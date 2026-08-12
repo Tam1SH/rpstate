@@ -1,6 +1,10 @@
-use crate::reactive::local::LocalScope;
+use crate::reactive::local::{LocalScope, Wake};
 use amethystate_core::SignalSubscription;
+use futures_core::Stream;
+use std::collections::VecDeque;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use uuid::Uuid;
 
 /// Something a [`Watch`] can be built over.
@@ -38,8 +42,8 @@ pub struct Local<'a> {
 
 /// A subscription being configured.
 ///
-/// Built by `on_change` on the primitive, finished by [`Watch::register`] or
-/// [`Watch::register_with_source`]. Without a terminal call nothing is
+/// Built by `subscription_with` on the primitive, finished by [`Watch::register`],
+/// [`Watch::register_with_source`] or [`Watch::stream`]. Without a terminal call nothing is
 /// subscribed.
 #[must_use = "a Watch subscribes to nothing until register() is called"]
 pub struct Watch<W, D> {
@@ -146,6 +150,64 @@ impl<W: Watchable> Watch<W, Local<'_>> {
                 }
             }),
         );
+    }
+}
+
+impl<W: Watchable> Watch<W, Immediate> {
+    /// A stream of changes instead of a callback.
+    ///
+    /// For consumers with a loop of their own: nothing has to be `Send + Sync`
+    /// beyond the value itself, and no scope has to be drained. Every change is
+    /// yielded - a stream is a sequence, so coalescing is left to whoever wants
+    /// it.
+    ///
+    /// Dropping the stream ends the subscription.
+    pub fn stream(self) -> ChangeStream<W::Item> {
+        let mine = self.external.then(|| self.source.watch_id());
+        let queue: Arc<Mutex<VecDeque<W::Item>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let wake = Arc::new(Wake::default());
+
+        let sink = Arc::clone(&queue);
+        let signal = Arc::clone(&wake);
+
+        let sub = self.source.watch_raw(move |item, source| {
+            if mine.is_some() && source == mine && W::filterable(item) {
+                return;
+            }
+            sink.lock().unwrap().push_back(item.clone());
+            signal.signal();
+        });
+
+        ChangeStream {
+            queue,
+            wake,
+            _sub: sub,
+        }
+    }
+}
+
+/// A [`Stream`] of changes, built by [`Watch::stream`].
+#[must_use = "dropping the stream ends the subscription"]
+pub struct ChangeStream<T> {
+    queue: Arc<Mutex<VecDeque<T>>>,
+    wake: Arc<Wake>,
+    _sub: SignalSubscription,
+}
+
+impl<T> Stream for ChangeStream<T> {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        if let Some(item) = self.queue.lock().unwrap().pop_front() {
+            return Poll::Ready(Some(item));
+        }
+
+        self.wake.park(cx);
+
+        match self.queue.lock().unwrap().pop_front() {
+            Some(item) => Poll::Ready(Some(item)),
+            None => Poll::Pending,
+        }
     }
 }
 

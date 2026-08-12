@@ -222,3 +222,83 @@ fn external_on_a_field_filters_everything_of_its_own() {
 
     assert_eq!(*seen.lock().unwrap(), 0);
 }
+
+mod stream {
+    use super::*;
+    use futures::StreamExt;
+    use futures::executor::block_on;
+
+    #[test]
+    fn yields_each_change_in_order() {
+        let (_s, cfg) = cfg();
+        let mut changes = cfg.counter().subscription_with().stream();
+
+        for n in 1..=3 {
+            cfg.counter().set(n).unwrap();
+        }
+
+        let got: Vec<u64> = block_on(async { changes.by_ref().take(3).collect().await });
+        assert_eq!(got, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn a_write_from_another_thread_arrives() {
+        let (_s, cfg) = cfg();
+        let mut changes = cfg.counter().subscription_with().stream();
+
+        let writer = cfg.counter();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            writer.set(99).unwrap();
+        });
+
+        let got = block_on(changes.next());
+        handle.join().unwrap();
+
+        assert_eq!(got, Some(99));
+    }
+
+    #[test]
+    fn external_still_filters() {
+        let (_s, cfg) = cfg();
+        let field = cfg.counter();
+        let other = field.fork();
+
+        let mut changes = field.subscription_with().external().stream();
+
+        field.set(1).unwrap();
+        other.set(2).unwrap();
+
+        assert_eq!(block_on(changes.next()), Some(2));
+    }
+
+    #[test]
+    fn dropping_the_stream_unsubscribes() {
+        let (_s, cfg) = cfg();
+        let counter = cfg.counter();
+
+        let changes = counter.subscription_with().stream();
+        counter.set(1).unwrap();
+        drop(changes);
+
+        let mut fresh = counter.subscription_with().stream();
+        counter.set(2).unwrap();
+
+        assert_eq!(
+            block_on(fresh.next()),
+            Some(2),
+            "the dropped stream's queue must not resurface"
+        );
+    }
+
+    #[test]
+    fn map_changes_stream_too() {
+        let (_s, cfg) = cfg();
+        let mut changes = cfg.items().subscription_with().stream();
+
+        cfg.items().set_or_create("a".into(), &1).unwrap();
+
+        let got = block_on(changes.next()).unwrap();
+        assert!(matches!(got, MapChange::Insert { .. }));
+    }
+}

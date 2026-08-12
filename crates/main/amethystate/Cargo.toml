@@ -43,6 +43,7 @@ rmp-serde = { workspace = true, optional = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 directories = { workspace = true, optional = true }
 inventory = { workspace = true }
+futures-core = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 toml_edit = { version = "0.25.12", features = ["serde"], optional = true }
 tempfile = { workspace = true, optional = true }
@@ -58,6 +59,7 @@ insta.workspace = true
 serde_json = { workspace = true }
 amethystate-core = { workspace = true, features = ["test-utils"] }
 criterion = { workspace = true }
+futures = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
