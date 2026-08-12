@@ -25,7 +25,7 @@ pub use reactive::{
 };
 
 pub mod errors {
-    pub use crate::reactive::error::{FieldError, ReactiveMapError};
+    pub use crate::reactive::error::{FieldError, ReactiveMapError, WriteError, WriteResult};
     pub use crate::store::StorageError;
 }
 pub mod stores {

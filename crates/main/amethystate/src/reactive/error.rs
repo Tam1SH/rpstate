@@ -1,62 +1,42 @@
 use crate::store::StorageError;
 use thiserror::Error;
 
+/// Anything that can go wrong writing through a reactive primitive.
+///
+/// Fields and maps fail identically, so they share one error; `FieldError` and
+/// `ReactiveMapError` are aliases that keep call sites readable.
 #[derive(Error, Debug)]
-pub enum FieldError {
+pub enum WriteError {
     #[error(transparent)]
     StorageError(#[from] StorageError),
 
     #[error("Change intercepted")]
     Intercepted,
 
-    #[error("Key not found in Field: {0}")]
+    /// The addressed value is absent: a map key for maps, a store path for fields.
+    #[error("Key not found: {0}")]
     KeyNotFound(String),
 }
 
-pub type ReactiveFieldResult<T> = std::result::Result<T, FieldError>;
+pub type WriteResult<T> = std::result::Result<T, WriteError>;
 
-impl<E> From<amethystate_core::error::FieldError<E>> for FieldError
+pub type FieldError = WriteError;
+pub type ReactiveMapError = WriteError;
+
+pub type ReactiveFieldResult<T> = WriteResult<T>;
+pub type ReactiveMapResult<T> = WriteResult<T>;
+
+impl<E> From<amethystate_core::error::WriteError<E>> for WriteError
 where
     StorageError: From<E>,
 {
-    fn from(value: amethystate_core::error::FieldError<E>) -> Self {
+    fn from(value: amethystate_core::error::WriteError<E>) -> Self {
+        use amethystate_core::error::WriteError as Core;
+
         match value {
-            amethystate_core::error::FieldError::StorageError(e) => {
-                FieldError::StorageError(StorageError::from(e))
-            }
-            amethystate_core::error::FieldError::Intercepted => FieldError::Intercepted,
-            amethystate_core::error::FieldError::KeyNotFound(k) => FieldError::KeyNotFound(k),
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum ReactiveMapError {
-    #[error(transparent)]
-    StorageError(#[from] StorageError),
-
-    #[error("Change intercepted")]
-    Intercepted,
-
-    #[error("Key not found in ReactiveMap: {0}")]
-    KeyNotFound(String),
-}
-
-pub type ReactiveMapResult<T> = std::result::Result<T, ReactiveMapError>;
-
-impl<E> From<amethystate_core::error::ReactiveMapError<E>> for ReactiveMapError
-where
-    StorageError: From<E>,
-{
-    fn from(value: amethystate_core::error::ReactiveMapError<E>) -> Self {
-        match value {
-            amethystate_core::error::ReactiveMapError::StorageError(e) => {
-                ReactiveMapError::StorageError(StorageError::from(e))
-            }
-            amethystate_core::error::ReactiveMapError::Intercepted => ReactiveMapError::Intercepted,
-            amethystate_core::error::ReactiveMapError::KeyNotFound(k) => {
-                ReactiveMapError::KeyNotFound(k)
-            }
+            Core::StorageError(e) => WriteError::StorageError(StorageError::from(e)),
+            Core::Intercepted => WriteError::Intercepted,
+            Core::KeyNotFound(k) => WriteError::KeyNotFound(k),
         }
     }
 }

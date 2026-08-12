@@ -42,7 +42,10 @@ impl<T: Clone + Send + Sync + 'static> ReactiveCell<T> {
 
 // ---- static dispatch over a closed set of impls ---------------------------
 
+// `Volatile` is never constructed, but it has to exist: with a single variant
+// the match folds away and the bench stops measuring dispatch at all.
 #[derive(Clone)]
+#[allow(dead_code)]
 enum CellEnum<T> {
     Volatile(Signal<T>),
     Stored(Signal<T>),
@@ -67,9 +70,12 @@ impl<T: Clone + Send + Sync + 'static> CellEnum<T> {
 
 type Writer<T> = Arc<dyn Fn(T) + Send + Sync>;
 
+// `writer` is never read here - only `get()` is benched - but it has to be
+// carried so the type's size and clone cost match the real cell.
 #[derive(Clone)]
 struct CellCached<T> {
     cache: Signal<T>,
+    #[allow(dead_code)]
     writer: Option<Writer<T>>,
 }
 
@@ -103,9 +109,7 @@ where
     });
 
     let cell = ReactiveCell::new(initial.clone());
-    group.bench_function("cell_dyn", |b| {
-        b.iter(|| black_box(black_box(&cell).get()))
-    });
+    group.bench_function("cell_dyn", |b| b.iter(|| black_box(black_box(&cell).get())));
 
     // Same vtable call, but through a bare Arc<dyn _> with no newtype wrapper,
     // to confirm the wrapper itself costs nothing.
@@ -115,9 +119,7 @@ where
     });
 
     let en = CellEnum::Stored(Signal::new(initial.clone()));
-    group.bench_function("cell_enum", |b| {
-        b.iter(|| black_box(black_box(&en).get()))
-    });
+    group.bench_function("cell_enum", |b| b.iter(|| black_box(black_box(&en).get())));
 
     let cached = CellCached::stored(initial.clone());
     group.bench_function("cell_cached", |b| {
