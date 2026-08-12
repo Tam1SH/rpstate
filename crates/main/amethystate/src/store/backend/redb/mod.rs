@@ -192,16 +192,7 @@ impl RedbStore {
             .unwrap_or(false);
 
             if success {
-                let mut lock = pending_save.lock();
-                for (key, committed) in &changes {
-                    // Only if the buffer still holds what was just written. A
-                    // write landing while the commit was in flight is a
-                    // different value, and dropping it here would lose it: it
-                    // is not on disk, and nothing would write it later.
-                    if lock.get(key) == Some(committed) {
-                        lock.remove(key);
-                    }
-                }
+                utils::clear_committed(&mut pending_save.lock(), &changes);
             }
         });
 
@@ -222,6 +213,27 @@ impl RedbStore {
 
     pub fn close(&self) -> StorageResult<()> {
         self.inner.close()
+    }
+
+    /// The value a subscriber should see as the old one.
+    ///
+    /// The buffer wins where it has the key, since it holds the newer value;
+    /// otherwise the committed one. Reading the buffer alone reported no old
+    /// value once a flush had emptied it, though the key was on disk.
+    fn committed_or_buffered(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+        if let Some(buffered) = self.inner.pending.lock().get(path) {
+            return Ok(buffered.clone());
+        }
+
+        let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
+        let table = read_txn
+            .open_table(TABLE_DATA)
+            .map_err(RedbStoreError::from)?;
+
+        Ok(table
+            .get(path)
+            .map_err(RedbStoreError::from)?
+            .map(|v| Vec::from(&v.value()[..])))
     }
 }
 
@@ -320,10 +332,7 @@ impl Store for RedbStore {
             Ok::<Vec<u8>, RedbStoreError>(Vec::from(&b[..]))
         })?;
 
-        let old_bytes = {
-            let lock = self.inner.pending.lock();
-            lock.get(&*path).cloned().flatten()
-        };
+        let old_bytes = self.committed_or_buffered(&path)?;
 
         {
             let mut lock = self.inner.pending.lock();
@@ -398,21 +407,7 @@ impl Store for RedbStore {
         self.inner.check_debouncer();
         let path_arc: Arc<str> = Arc::from(path);
 
-        let old_bytes = {
-            let lock = self.inner.pending.lock();
-            if let Some(p) = lock.get(path) {
-                p.clone()
-            } else {
-                let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
-                let table = read_txn
-                    .open_table(TABLE_DATA)
-                    .map_err(RedbStoreError::from)?;
-                table
-                    .get(path)
-                    .map_err(RedbStoreError::from)?
-                    .map(|v| Vec::from(&v.value()[..]))
-            }
-        };
+        let old_bytes = self.committed_or_buffered(path)?;
 
         {
             let mut lock = self.inner.pending.lock();

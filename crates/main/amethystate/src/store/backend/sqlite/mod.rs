@@ -86,6 +86,27 @@ impl SqliteStoreInner {
         }
     }
 
+    /// The value a subscriber should see as the old one.
+    ///
+    /// The buffer wins where it has the key, since it holds the newer value;
+    /// otherwise the committed one. Reading the buffer alone reported no old
+    /// value once a flush had emptied it, though the key was in the database.
+    fn committed_or_buffered(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+        if let Some(buffered) = self.pending.lock().get(path) {
+            return Ok(buffered.clone());
+        }
+
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare_cached("SELECT value FROM data WHERE key = ?")
+            .map_err(SqliteStoreError::from)?;
+
+        Ok(stmt
+            .query_row([path], |row| row.get::<_, Vec<u8>>(0))
+            .optional()
+            .map_err(SqliteStoreError::from)?)
+    }
+
     fn run_migrations(&self, mset: MigrationSet) -> StorageResult<MigrationReport> {
         struct SqliteProvider<'a> {
             conn: &'a Mutex<Connection>,
@@ -168,10 +189,7 @@ impl SqliteStoreInner {
             .map_err(CodecError::from)
             .map_err(SqliteStoreError::from)?;
 
-        let old_bytes = {
-            let lock = self.pending.lock();
-            lock.get(&*path).cloned().flatten()
-        };
+        let old_bytes = self.committed_or_buffered(&path)?;
 
         {
             let mut lock = self.pending.lock();
@@ -248,20 +266,7 @@ impl SqliteStoreInner {
         self.check_debouncer();
         let path_arc: Arc<str> = Arc::from(path);
 
-        let old_bytes = {
-            let lock = self.pending.lock();
-            if let Some(p) = lock.get(path) {
-                p.clone()
-            } else {
-                let conn = self.conn.lock();
-                let mut stmt = conn
-                    .prepare_cached("SELECT value FROM data WHERE key = ?")
-                    .map_err(SqliteStoreError::from)?;
-                stmt.query_row([path], |row| row.get::<_, Vec<u8>>(0))
-                    .optional()
-                    .map_err(SqliteStoreError::from)?
-            }
-        };
+        let old_bytes = self.committed_or_buffered(path)?;
 
         {
             let mut lock = self.pending.lock();
