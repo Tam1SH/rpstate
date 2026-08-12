@@ -137,4 +137,36 @@ let _sub = state.limits().subscribe_any_external(|change| {
 });
 ```
 
-Note that `subscribe_any_external` only filters `Update` events by `instance_id`. `Insert`, `Remove`, and `Clear` events are always delivered regardless of source.
+### What `_external` filters, and what it does not
+
+The map variants filter `Update` and nothing else. `Insert`, `Remove` and `Clear` are delivered
+to every subscriber regardless of who caused them, including the actor that caused them.
+
+The distinction is between editing a value and changing what the map holds. A value you wrote
+yourself is your own business — you already know about it. But a key appearing or disappearing
+changes the shape of the map, and a view listing the keys has to rebuild whether or not it was
+the one that added the key.
+
+This has one consequence worth knowing about:
+
+```rust
+let limits = state.limits();
+let _sub = limits.subscribe_any_external(|change| {
+    println!("{change:?}");
+});
+
+limits.set_or_create("cpu".into(), &80)?;  // Insert — delivered to you
+limits.set_or_create("cpu".into(), &90)?;  // Update — filtered out
+```
+
+`set_or_create` is an `Insert` the first time and an `Update` after that, so whether your own
+call comes back to you depends on whether the key already existed. If you need every change
+including your own, use `subscribe_any`; if you need none of your own, compare
+`change.source()` against your `instance_id` yourself.
+
+### `clear` reports twice
+
+`clear()` deletes each key through the store, and the map rebuilds a `Remove` from each of
+those deletions on top of the `Clear` itself. A subscriber to a map holding two keys sees three
+events: `Remove`, `Remove`, `Clear`. Match on the variants you care about rather than assuming
+one call produces one event.

@@ -112,6 +112,17 @@ where
         self.core.subscribe_any(callback)
     }
 
+    /// Like [`ReactiveMap::subscribe_any`], but skips values this handle
+    /// rewrote itself.
+    ///
+    /// Only `Update` is filtered. A key appearing or disappearing - `Insert`,
+    /// `Remove`, `Clear` - is delivered whoever caused it: that changes what
+    /// the map holds rather than a value someone is editing, and a view
+    /// listing the keys has to rebuild either way.
+    ///
+    /// One consequence worth knowing: [`ReactiveMap::set_or_create`] comes back
+    /// to you or not depending on whether the key was already there, since it
+    /// is an `Insert` the first time and an `Update` after that.
     #[track_caller]
     pub fn subscribe_any_external<F>(&self, callback: F) -> SignalSubscription
     where
@@ -128,6 +139,11 @@ where
         })
     }
 
+    /// Like [`ReactiveMap::subscribe_key`], but skips values this handle
+    /// rewrote itself.
+    ///
+    /// Filters `Update` only, on the same reasoning as
+    /// [`ReactiveMap::subscribe_any_external`].
     #[track_caller]
     pub fn subscribe_key_external<F>(&self, key: K, callback: F) -> SignalSubscription
     where
@@ -275,6 +291,108 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tracing_test::traced_test;
+
+    /// `*_external` filters `Update` and nothing else: a value this handle
+    /// rewrote is its own business, but a key appearing or disappearing changes
+    /// what the map holds and goes to everyone.
+    ///
+    /// Pins the whole matrix, where `test_map_subscribe_external` covers only
+    /// `Insert` and `Update`.
+    #[test]
+    fn external_subscriptions_filter_own_updates_only() {
+        let store = unique_store("external-own-changes");
+        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+                &store,
+                Arc::from("test_map.external"),
+                HashMap::new(),
+                Uuid::new_v4(),
+            )
+            .expect("map should be created");
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let any = seen.clone();
+        let _any_sub = map.subscribe_any_external(move |change| {
+            any.lock().unwrap().push(match change {
+                MapChange::Insert { .. } => "insert".into(),
+                MapChange::Update { .. } => "update".into(),
+                MapChange::Remove { .. } => "remove".into(),
+                MapChange::Clear { .. } => "clear".into(),
+            });
+        });
+
+        map.set_or_create("a".to_string(), &1).unwrap(); // Insert - delivered
+        map.set("a".to_string(), &2).unwrap(); // Update - filtered
+        map.set_or_create("a".to_string(), &3).unwrap(); // Update - filtered
+        map.remove("a".to_string()).unwrap(); // Remove - delivered
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["insert".to_string(), "remove".to_string()],
+            "own updates stay hidden, own structural changes do not"
+        );
+
+        // `clear` deletes each key through the store, so the subscription
+        // rebuilds a `Remove` per key on top of the `Clear` itself.
+        seen.lock().unwrap().clear();
+        map.set_or_create("b".to_string(), &4).unwrap();
+        seen.lock().unwrap().clear();
+        map.clear().unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["remove".to_string(), "clear".to_string()],
+            "clear reports the keys it dropped as well as itself"
+        );
+
+        // Another handle is somebody else, and is heard for updates too.
+        seen.lock().unwrap().clear();
+        let other = map.fork();
+        other.set_or_create("c".to_string(), &5).unwrap();
+        other.set("c".to_string(), &6).unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["insert".to_string(), "update".to_string()],
+            "another handle's updates must arrive"
+        );
+    }
+
+    /// The keyed variant filters on the same rule, scoped to one key.
+    #[test]
+    fn external_key_subscription_filters_own_updates_only() {
+        let store = unique_store("external-own-key");
+        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+                &store,
+                Arc::from("test_map.external_key"),
+                HashMap::new(),
+                Uuid::new_v4(),
+            )
+            .expect("map should be created");
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let keyed = seen.clone();
+        let _key_sub = map.subscribe_key_external("a".to_string(), move |change| {
+            keyed.lock().unwrap().push(match change {
+                MapChange::Insert { .. } => "insert".into(),
+                MapChange::Update { .. } => "update".into(),
+                MapChange::Remove { .. } => "remove".into(),
+                MapChange::Clear { .. } => "clear".into(),
+            });
+        });
+
+        map.set_or_create("a".to_string(), &1).unwrap();
+        map.set("a".to_string(), &2).unwrap();
+        map.set_or_create("b".to_string(), &3).unwrap(); // other key, not ours
+        map.remove("a".to_string()).unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["insert".to_string(), "remove".to_string()],
+            "own update filtered, own structural changes delivered, other keys ignored"
+        );
+    }
 
     #[test]
     fn test_map_crud_logic() {

@@ -198,6 +198,16 @@ where
         .await
     }
 
+    /// Like `subscribe_any`, but skips values this handle rewrote itself.
+    ///
+    /// Only `Update` is filtered. A key appearing or disappearing - `Insert`,
+    /// `Remove`, `Clear` - is delivered whoever caused it: that changes what
+    /// the map holds rather than a value someone is editing, and a view
+    /// listing the keys has to rebuild either way.
+    ///
+    /// One consequence worth knowing: `set_or_create` comes back to you or not
+    /// depending on whether the key was already there, since it is an `Insert`
+    /// the first time and an `Update` after that.
     pub fn subscribe_any_external<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
@@ -213,6 +223,10 @@ where
         })
     }
 
+    /// Like `subscribe_key`, but skips values this handle rewrote itself.
+    ///
+    /// Filters `Update` only, on the same reasoning as
+    /// `subscribe_any_external`.
     pub fn subscribe_key_external<F>(&self, key: K, callback: F) -> SignalSubscription
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
