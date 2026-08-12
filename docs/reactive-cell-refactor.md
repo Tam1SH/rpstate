@@ -1,6 +1,7 @@
 # Рефакторинг: `ReactiveCell` и единственный писатель у кэша
 
-Статус: этапы 1-4 сделаны. Ветка: `refactor/reactive-cell`. Целевая версия: 0.10.0 (ломающая).
+Статус: сделаны этапы 1-7 (кроме guinea). Осталось: миграция guinea и находки аудита
+(см. audit-findings.md). Ветка: `refactor/reactive-cell`. Целевая версия: 0.10.0 (ломающая).
 
 ## Зачем
 
@@ -87,8 +88,9 @@ pub struct ReactiveCell<T> {
 
 ### 2. `Signal`: расщепить запись, починить гонку
 
-- [ ] `set(value)` и `set_with_source(value, source: Uuid)` — по конвенции `Store`
-      (`set`/`set_with_source` уже так).
+- [x] `set(value)` и `set_with_source(value, source: Uuid)` — по конвенции `Store`.
+      Плюс `set_forwarded(value, Option<Uuid>)` под `#[doc(hidden)]` для одиннадцати слоёв
+      распространения, которые форвардят уже существующий провенанс.
 - [x] `emit` принимает уже сохранённый `Arc<T>`, а не перечитывает `load_full()`.
 
 **Гонка:** сейчас `set` кладёт значение и зовёт `emit`, который **перечитывает** `ArcSwap`
@@ -117,8 +119,8 @@ pub struct ReactiveCell<T> {
 - [x] `MapEntrySignal` → модуль `entry_cell`, метод `entry_cell()` (после store-first это не «signal»).
 - [x] `set` пишет прямо в мапу (`map.set_or_create`), кэш обновляет **только** read-подписка.
 - [x] Выкинуть `sync_source`, write-back подписку, `.signal()`.
-- [ ] `entry_cell(key, default) -> ReactiveCell<V>`, `keepalive: Some(read_sub)` —
-      read-подписку больше никто не держит.
+- [x] `entry_cell(key, default) -> ReactiveCell<V>`, `keepalive: Some(read_sub)` —
+      read-подписку больше никто не держит. Проверено: без неё падают 5 тестов из 9.
 - [x] `set` возвращает `Result` — сейчас ошибка проглатывается
       (`let _ = map_for_write.set_or_create(...)`,
       [entry_signal.rs:52](../crates/main/amethystate/src/reactive/entry_signal.rs)):
@@ -134,12 +136,13 @@ pub struct ReactiveCell<T> {
 
 ### 5. `Signal` → `pub(crate)`
 
-Только **после** миграции guinea (этап 8) — сейчас `guinea_core::signal::Signal` это алиас
-на наш тип, и на нём стоит весь их реактивный слой.
+Сделано до guinea по решению: сначала закрываем всё внутри amethystate.
+**Guinea сломана и ждёт миграции** — `guinea_core::signal::Signal` это алиас на наш тип.
 
-- [ ] Убрать из ре-экспортов ([main lib.rs:23](../crates/main/amethystate/src/lib.rs),
-      [core lib.rs:38](../crates/core/amethystate-core/src/lib.rs)).
-- [ ] `Field::as_signal()` удалить — его роль забирает `Field::cell()`.
+- [x] Убрать из публичной поверхности `amethystate`. В `amethystate-core` `Signal` остался
+      публичным: это крейт-плумбинг, и арене он нужен — она получила прямую зависимость
+      на ядро вместо фасада.
+- [x] `Field::as_signal()` удалён — его роль забирает `Field::cell()`.
 
 **Приёмка:** снаружи `Signal` недостижим; «одностороннюю» ячейку получить нельзя в принципе.
 
@@ -161,7 +164,7 @@ pub struct ReactiveCell<T> {
 
 **Побочная находка, вынесена в этап 6.5:** `clear()` уведомляет дважды.
 
-### 6.5. `clear` нотифицирует дважды
+### 6.5. `clear` нотифицирует дважды — СДЕЛАНО (вариант в)
 
 Найдено попутно на этапе 6. `clear` — **единственная операция с `notify_after_commit: true`**
 ([map.rs:247](../crates/main/amethystate/src/reactive/map.rs)); у `set`, `set_or_create` и
@@ -198,13 +201,19 @@ pub struct ReactiveCell<T> {
 field-подписка смотрит только на `event.new` и `op` не трогает, так что новый вариант её не
 заденет. Реализаций `delete_with_source` три: redb, sqlite, text (json/toml/ron идут через text).
 
-- [ ] Выбрать вариант (данные выше говорят за **(в)** — только он делает `Clear` настоящим).
+- [x] Взят вариант **(в)**: новый `StoreOp::DeletePrefix`, `Store::delete_prefix_with_source`,
+      реализации в text (json/toml/ron), redb и sqlite. `map_apply_change` вместо цикла делает
+      одно префиксное удаление, `clear` переведён на `notify_after_commit: false`, а подписка
+      мапы превращает событие в `MapChange::Clear`.
+- [x] Проверено на всех четырёх бэкендах: было `[remove, remove, clear]` у вызвавшего и
+      `[remove, remove]` у независимого экземпляра, стало по одному `clear` у обоих.
+      Тесты в `tests/clear_events.rs`.
+- [ ] Async-путь не трогал — там своя история (пункты 6-8 аудита).
 - [ ] Проверить async: `map_apply_change_async` зовёт `core.notify` безусловно
       ([map_ops_async.rs:227](../crates/core/amethystate-core/src/primitives/map_ops_async.rs)) —
       если подписка бэкенда там тоже дублирует, лечить симметрично.
-- [ ] Переписать раздел «`clear` reports twice» в
-      [fields-and-subscriptions.md](../landing/src/content/docs/Concepts/fields-and-subscriptions.md) —
-      сейчас он описывает текущее поведение как данность.
+- [x] Раздел в [fields-and-subscriptions.md](../landing/src/content/docs/Concepts/fields-and-subscriptions.md)
+      переписан: `clear` — одно событие, и его видит каждый хендл.
 
 **Приёмка:** `clear()` на мапе из N ключей даёт подписчику ровно одно событие.
 
@@ -216,8 +225,13 @@ field-подписка смотрит только на `event.new` и `op` не
 [pipeline.rs:80](../crates/core/amethystate-core/src/primitives/pipeline.rs)).
 `emit` держит `Arc<T>` весь цикл по подписчикам — ссылка корректна по построению.
 
-- [ ] `Reactive::subscribe*` на `for<'a> Fn(&'a T, ...)`, убрать клоны в реализациях.
-- [ ] Согласовать `ArenaReactive` ([arena/pipeline.rs:27-35](../crates/main/amethystate-arena/src/pipeline.rs)) — иначе два трейта разъедутся.
+- [x] `Reactive::subscribe*` на `for<'a> Fn(&'a T, ...)`, клоны из реализаций убраны.
+- [x] `ArenaReactive` согласован.
+
+**По факту вышло меньше оценки:** около 40 мест, не 85 — большинство подписок либо игнорируют
+аргумент, либо только читают его. Клон появился явно там, где значение переживает колбэк:
+мостики через канал в адаптерах yew/dioxus/leptos и пример slint. Сигнатуры комбинаторов
+`Pipeline` не трогал — их функции принимают `T` по значению, клон там нужен по существу.
 
 **Объём:** ~85 замыканий в репо, 3 в guinea. Делать последним, когда семантика устоялась.
 **Проверить:** умеет ли арена отдать `&T` с нужным временем жизни — для `Signal`-путей доказано, для неё нет.

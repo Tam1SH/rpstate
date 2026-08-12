@@ -25,13 +25,24 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         Self { provider }
     }
 
-    pub fn ensure_snapshots(&self) -> StorageResult<()> {
+    /// Records the schema the code declares, so a later run can tell what
+    /// changed under it.
+    ///
+    /// Prefixes whose migration failed are skipped: overwriting their snapshot
+    /// with the current schema leaves `calculate_drift` nothing to compare
+    /// against, and the diagnostic for the one prefix that needs it is gone for
+    /// good.
+    pub fn ensure_snapshots(&self, failed: &[String]) -> StorageResult<()> {
         self.provider.atomic(|storage| {
             for entry in inventory::iter::<SchemaEntry> {
                 let prefix = match entry.prefix {
                     Some(p) => p,
                     None => continue,
                 };
+
+                if failed.iter().any(|p| p == prefix) {
+                    continue;
+                }
 
                 let stored = storage.get_schema_snapshot(prefix)?;
 
@@ -104,7 +115,14 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             }
         }
 
-        self.ensure_snapshots()?;
+        let failed: Vec<String> = report
+            .components
+            .iter()
+            .filter(|c| matches!(c.outcome, ComponentOutcome::Failed { .. }))
+            .flat_map(|c| c.prefixes.iter().cloned())
+            .collect();
+
+        self.ensure_snapshots(&failed)?;
 
         Ok(report)
     }
@@ -341,6 +359,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             history.push(applied.clone());
             new_steps.push(applied);
         }
+
         Ok(new_steps)
     }
 }
