@@ -68,25 +68,29 @@ impl RedbStoreInner {
         let _write_guard = self.write_lock.lock();
 
         let changes = {
-            let mut lock = self.pending.lock();
-            utils::drain_pending_prefix(&mut *lock, prefix)
+            let lock = self.pending.lock();
+            utils::pending_prefix(&lock, prefix)
         };
 
         let txn = self.db.begin_write().map_err(RedbStoreError::from)?;
         {
             let mut table = txn.open_table(TABLE_DATA).map_err(RedbStoreError::from)?;
-            for (path, opt_bytes) in changes {
+            for (path, opt_bytes) in &changes {
                 match opt_bytes {
                     Some(b) => {
-                        table.insert(&*path, &b[..]).map_err(RedbStoreError::from)?;
+                        table
+                            .insert(&**path, &b[..])
+                            .map_err(RedbStoreError::from)?;
                     }
                     None => {
-                        table.remove(&*path).map_err(RedbStoreError::from)?;
+                        table.remove(&**path).map_err(RedbStoreError::from)?;
                     }
                 }
             }
         }
         txn.commit().map_err(RedbStoreError::from)?;
+
+        utils::clear_committed(&mut self.pending.lock(), &changes);
         Ok(())
     }
 

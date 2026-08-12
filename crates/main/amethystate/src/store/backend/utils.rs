@@ -38,34 +38,41 @@ fn matches_kind(kind: &SubscriptionKind, path: &str) -> bool {
 }
 
 #[cfg(any(feature = "sqlite", feature = "redb"))]
-pub fn drain_pending_prefix(
-    pending: &mut std::collections::HashMap<std::sync::Arc<str>, Option<Vec<u8>>>,
-    prefix: &str,
-) -> std::collections::HashMap<std::sync::Arc<str>, Option<Vec<u8>>> {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+pub type Pending = std::collections::HashMap<std::sync::Arc<str>, Option<Vec<u8>>>;
 
+/// Everything buffered under `prefix`, left in place.
+///
+/// The buffer is only cleared once the write has actually landed, by
+/// [`clear_committed`]. Taking entries out first meant any error below lost
+/// them: not on disk, not in memory, and nothing left to retry.
+#[cfg(any(feature = "sqlite", feature = "redb"))]
+pub fn pending_prefix(pending: &Pending, prefix: &str) -> Pending {
     if pending.is_empty() {
-        return HashMap::new();
+        return Pending::new();
     }
 
     if prefix.is_empty() {
-        std::mem::take(pending)
-    } else {
-        let prefix_dot = format!("{}.", prefix);
-        let keys_to_remove: Vec<Arc<str>> = pending
-            .keys()
-            .filter(|k| k.starts_with(&prefix_dot) || &***k == prefix)
-            .cloned()
-            .collect();
+        return pending.clone();
+    }
 
-        let mut matched = HashMap::with_capacity(keys_to_remove.len());
-        for k in keys_to_remove {
-            if let Some(v) = pending.remove(&k) {
-                matched.insert(k, v);
-            }
+    let prefix_dot = format!("{}.", prefix);
+    pending
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix_dot) || &***k == prefix)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Drops from the buffer exactly what was committed.
+///
+/// A key whose buffered value has changed since is a write that landed while
+/// the commit was in flight; it is not on disk, so it stays for the next one.
+#[cfg(any(feature = "sqlite", feature = "redb"))]
+pub fn clear_committed(pending: &mut Pending, committed: &Pending) {
+    for (key, value) in committed {
+        if pending.get(key) == Some(value) {
+            pending.remove(key);
         }
-        matched
     }
 }
 
@@ -98,4 +105,98 @@ pub fn set_raw_pending(
     );
     debouncer.schedule();
     Ok(())
+}
+
+#[cfg(all(test, any(feature = "redb", feature = "sqlite")))]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn buffer(entries: &[(&str, Option<&[u8]>)]) -> Pending {
+        entries
+            .iter()
+            .map(|(k, v)| (Arc::from(*k), v.map(|b| b.to_vec())))
+            .collect()
+    }
+
+    #[test]
+    fn collecting_leaves_the_buffer_alone() {
+        let pending = buffer(&[("a.x", Some(b"1")), ("a.y", Some(b"2"))]);
+
+        let taken = pending_prefix(&pending, "a");
+
+        assert_eq!(taken.len(), 2);
+        assert_eq!(
+            pending.len(),
+            2,
+            "entries must survive until the write lands, or a failure below \
+             loses them from memory and disk both"
+        );
+    }
+
+    #[test]
+    fn an_empty_prefix_means_everything() {
+        let pending = buffer(&[("a.x", Some(b"1")), ("b.y", Some(b"2"))]);
+        assert_eq!(pending_prefix(&pending, "").len(), 2);
+    }
+
+    #[test]
+    fn a_prefix_matches_its_own_key_and_its_children() {
+        let pending = buffer(&[
+            ("a", Some(b"root")),
+            ("a.x", Some(b"child")),
+            ("ab", Some(b"sibling")),
+        ]);
+
+        let taken = pending_prefix(&pending, "a");
+
+        assert!(taken.contains_key("a"));
+        assert!(taken.contains_key("a.x"));
+        assert!(!taken.contains_key("ab"), "a prefix is not a substring");
+    }
+
+    #[test]
+    fn committed_entries_are_dropped() {
+        let mut pending = buffer(&[("a.x", Some(b"1")), ("a.y", Some(b"2"))]);
+        let committed = pending.clone();
+
+        clear_committed(&mut pending, &committed);
+
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_value_that_changed_during_the_commit_survives() {
+        let committed = buffer(&[("a.x", Some(b"old"))]);
+        let mut pending = buffer(&[("a.x", Some(b"new"))]);
+
+        clear_committed(&mut pending, &committed);
+
+        assert_eq!(
+            pending.get("a.x"),
+            Some(&Some(b"new".to_vec())),
+            "the newer write is not on disk, so dropping it would lose it"
+        );
+    }
+
+    #[test]
+    fn a_key_written_after_the_commit_survives() {
+        let committed = buffer(&[("a.x", Some(b"1"))]);
+        let mut pending = buffer(&[("a.x", Some(b"1")), ("a.z", Some(b"9"))]);
+
+        clear_committed(&mut pending, &committed);
+
+        assert!(!pending.contains_key("a.x"));
+        assert!(pending.contains_key("a.z"), "it was never committed");
+    }
+
+    #[test]
+    fn a_pending_delete_is_committed_like_any_other_entry() {
+        let mut pending = buffer(&[("a.x", None)]);
+        let committed = pending.clone();
+
+        clear_committed(&mut pending, &committed);
+
+        assert!(pending.is_empty());
+    }
 }

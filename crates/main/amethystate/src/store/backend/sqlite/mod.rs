@@ -46,33 +46,37 @@ impl SqliteStoreInner {
         let _write_guard = self.write_lock.lock();
 
         let changes = {
-            let mut lock = self.pending.lock();
-            utils::drain_pending_prefix(&mut *lock, prefix)
+            let lock = self.pending.lock();
+            utils::pending_prefix(&lock, prefix)
         };
 
-        let mut conn = self.conn.lock();
-        let txn = conn.transaction().map_err(SqliteStoreError::from)?;
         {
-            let mut ins = txn
-                .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
-                .map_err(SqliteStoreError::from)?;
-            let mut del = txn
-                .prepare_cached("DELETE FROM data WHERE key = ?")
-                .map_err(SqliteStoreError::from)?;
+            let mut conn = self.conn.lock();
+            let txn = conn.transaction().map_err(SqliteStoreError::from)?;
+            {
+                let mut ins = txn
+                    .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
+                    .map_err(SqliteStoreError::from)?;
+                let mut del = txn
+                    .prepare_cached("DELETE FROM data WHERE key = ?")
+                    .map_err(SqliteStoreError::from)?;
 
-            for (path, opt_bytes) in changes {
-                match opt_bytes {
-                    Some(b) => {
-                        ins.execute(rusqlite::params![&*path, &b[..]])
-                            .map_err(SqliteStoreError::from)?;
-                    }
-                    None => {
-                        del.execute([&*path]).map_err(SqliteStoreError::from)?;
+                for (path, opt_bytes) in &changes {
+                    match opt_bytes {
+                        Some(b) => {
+                            ins.execute(rusqlite::params![&**path, &b[..]])
+                                .map_err(SqliteStoreError::from)?;
+                        }
+                        None => {
+                            del.execute([&**path]).map_err(SqliteStoreError::from)?;
+                        }
                     }
                 }
             }
+            txn.commit().map_err(SqliteStoreError::from)?;
         }
-        txn.commit().map_err(SqliteStoreError::from)?;
+
+        utils::clear_committed(&mut self.pending.lock(), &changes);
         Ok(())
     }
 
@@ -442,16 +446,7 @@ impl SqliteStore {
                     }
                 }
                 if success && txn.commit().is_ok() {
-                    let mut lock = pending_save.lock();
-                    for (key, committed) in &changes {
-                        // Only if the buffer still holds what was just written.
-                        // A write landing while the commit was in flight is a
-                        // different value, and dropping it here would lose it:
-                        // it is not on disk, and nothing would write it later.
-                        if lock.get(key) == Some(committed) {
-                            lock.remove(key);
-                        }
-                    }
+                    utils::clear_committed(&mut pending_save.lock(), &changes);
                 }
             }
         });
