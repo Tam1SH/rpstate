@@ -17,14 +17,14 @@ for DatabaseConfig<S> {
     }
 }
 impl<S: ::amethystate::Store> DatabaseConfig<S> {
-    pub fn new(store: &S, namespace: &str) -> ::amethystate::Result<Self> {
+    pub fn new(store: &S, namespace: &str) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
         store: &S,
         namespace: &str,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
         ::amethystate::observability::register_instance(
             instance_id,
@@ -83,20 +83,27 @@ impl<S: ::amethystate::Store> DatabaseConfig<S> {
         let mut scope = ::amethystate::ReactiveScope::new();
         {
             let cb_clone = cb.clone();
-            scope.watch(self.host.subscribe_external(move |_| cb_clone()));
+            scope
+                .watch(
+                    self
+                        .host
+                        .subscription_with()
+                        .external()
+                        .register(move |_| cb_clone()),
+                );
         }
         scope
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for DatabaseConfig<S> {
-    fn new_node(store: &S, path: &str) -> ::amethystate::Result<Self> {
+    fn new_node(store: &S, path: &str) -> ::amethystate::StorageResult<Self> {
         Self::new(store, path)
     }
     fn new_node_with_id(
         store: &S,
         path: &str,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, path, instance_id)
     }
 }
@@ -362,7 +369,7 @@ impl DatabaseConfig_Data {
     pub fn __amethystate_load_from<S: ::amethystate::Store>(
         store: &S,
         prefix: &str,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
             host: <S as ::amethystate::Store>::get::<
                 String,
@@ -375,7 +382,7 @@ impl DatabaseConfig_Data {
         &self,
         store: &S,
         prefix: &str,
-    ) -> ::amethystate::Result<()> {
+    ) -> ::amethystate::StorageResult<()> {
         <S as ::amethystate::Store>::set(
             &store,
             &::amethystate::join_path(prefix, "host"),
@@ -385,9 +392,9 @@ impl DatabaseConfig_Data {
     }
 }
 impl ::amethystate::migration::types::AmeType for DatabaseConfig_Data {
-    const TYPE_HASH: u32 = ::amethystate::migration::types::fnv1a(
-        "DatabaseConfig_Data".as_bytes(),
-    );
+    const TYPE_HASH: u32 = 0u32
+        ^ ::amethystate::migration::types::fnv1a("host".as_bytes())
+        ^ <String as ::amethystate::migration::types::AmeType>::TYPE_HASH;
     const TYPE_NAME: &'static str = "DatabaseConfig_Data";
 }
 impl ::amethystate::migration::fields::AmeStateFields for DatabaseConfig_Data {
@@ -404,7 +411,7 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseConfig_Data {
     const MIGRATION_DEPS: &'static [&'static str] = &[];
     fn load_struct(
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
             host: ctx.get::<String>("host")?.unwrap_or_else(|| "localhost".to_string()),
         })
@@ -412,7 +419,7 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseConfig_Data {
     fn save_struct(
         &self,
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<()> {
+    ) -> ::amethystate::StorageResult<()> {
         ctx.set("host", &self.host)?;
         Ok(())
     }
@@ -420,6 +427,29 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseConfig_Data {
 impl<S: ::amethystate::Store> ::amethystate::AmeState for DatabaseConfig<S> {
     type Data = DatabaseConfig_Data;
 }
+#[allow(non_upper_case_globals)]
+const _: () = {
+    static __INVENTORY: ::inventory::Node = ::inventory::Node {
+        value: &{
+            ::amethystate::observability::SchemaEntry {
+                prefix: None,
+                struct_name: "DatabaseConfig",
+                version: 0u32,
+                schema_hash: <DatabaseConfig_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
+                fields: <DatabaseConfig_Data as ::amethystate::migration::fields::AmeStateFields>::FIELDS,
+            }
+        },
+        next: ::inventory::__private::UnsafeCell::new(
+            ::inventory::__private::Option::None,
+        ),
+    };
+    unsafe extern "C" fn __ctor() {
+        unsafe { ::inventory::ErasedNode::submit(__INVENTORY.value, &__INVENTORY) }
+    }
+    #[used]
+    #[link_section = ".CRT$XCU"]
+    static __CTOR: unsafe extern "C" fn() = __ctor;
+};
 pub struct SystemSettings<S: ::amethystate::Store = ::amethystate::DefaultStore> {
     __amethystate_instance_id: ::amethystate::uuid::Uuid,
     pub db: ::std::sync::Arc<DatabaseConfig<S>>,
@@ -441,13 +471,13 @@ impl<S: ::amethystate::Store> ::amethystate::StateScope for SystemSettings<S> {
     const PREFIX: &'static str = "sys";
 }
 impl<S: ::amethystate::Store> SystemSettings<S> {
-    pub fn new_with(store: &S) -> ::amethystate::Result<Self> {
+    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
         store: &S,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
         ::amethystate::observability::register_instance(
             instance_id,
@@ -515,20 +545,20 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
     }
 }
 impl SystemSettings<::amethystate::DefaultStore> {
-    pub fn new() -> ::amethystate::Result<Self> {
+    pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for SystemSettings<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::Result<Self> {
+    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &S,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
     }
 }
@@ -803,9 +833,10 @@ impl ::core::fmt::Debug for SystemSettings_Data {
 }
 impl SystemSettings_Data {}
 impl ::amethystate::migration::types::AmeType for SystemSettings_Data {
-    const TYPE_HASH: u32 = ::amethystate::migration::types::fnv1a(
-        "SystemSettings_Data".as_bytes(),
-    );
+    const TYPE_HASH: u32 = 0u32 ^ ::amethystate::migration::types::fnv1a("db".as_bytes())
+        ^ <<DatabaseConfig<
+            ::amethystate::DefaultStore,
+        > as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH;
     const TYPE_NAME: &'static str = "SystemSettings_Data";
 }
 impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
@@ -825,7 +856,7 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
     const MIGRATION_DEPS: &'static [&'static str] = &[];
     fn load_struct(
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
             db: {
                 let mut sub_ctx = ctx.scoped("db");
@@ -838,7 +869,7 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
     fn save_struct(
         &self,
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<()> {
+    ) -> ::amethystate::StorageResult<()> {
         {
             let mut sub_ctx = ctx.scoped("db");
             self.db.save_struct(&mut sub_ctx)?;
@@ -849,8 +880,31 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
 impl<S: ::amethystate::Store> ::amethystate::AmeState for SystemSettings<S> {
     type Data = SystemSettings_Data;
 }
+#[allow(non_upper_case_globals)]
+const _: () = {
+    static __INVENTORY: ::inventory::Node = ::inventory::Node {
+        value: &{
+            ::amethystate::observability::SchemaEntry {
+                prefix: Some("sys"),
+                struct_name: "SystemSettings",
+                version: 0u32,
+                schema_hash: <SystemSettings_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
+                fields: <SystemSettings_Data as ::amethystate::migration::fields::AmeStateFields>::FIELDS,
+            }
+        },
+        next: ::inventory::__private::UnsafeCell::new(
+            ::inventory::__private::Option::None,
+        ),
+    };
+    unsafe extern "C" fn __ctor() {
+        unsafe { ::inventory::ErasedNode::submit(__INVENTORY.value, &__INVENTORY) }
+    }
+    #[used]
+    #[link_section = ".CRT$XCU"]
+    static __CTOR: unsafe extern "C" fn() = __ctor;
+};
 impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for SystemSettings<S> {
-    fn load_slice(store: &S) -> ::amethystate::Result<Self> {
+    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope

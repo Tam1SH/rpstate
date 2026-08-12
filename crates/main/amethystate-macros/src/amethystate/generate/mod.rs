@@ -104,18 +104,11 @@ pub fn generate_code(
                         scope.watch_scope(self.#fname.subscribe_all_external(move || cb_clone()));
                     }
                 }
-            } else if e.get_map_types().is_some() {
-                quote! {
-                    {
-                        let cb_clone = cb.clone();
-                        scope.watch(self.#fname.subscribe_any_external(move |_| cb_clone()));
-                    }
-                }
             } else {
                 quote! {
                     {
                         let cb_clone = cb.clone();
-                        scope.watch(self.#fname.subscribe_external(move |_| cb_clone()));
+                        scope.watch(self.#fname.subscription_with().external().register(move |_| cb_clone()));
                     }
                 }
             }

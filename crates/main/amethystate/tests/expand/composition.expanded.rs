@@ -22,13 +22,13 @@ impl<S: ::amethystate::Store> ::amethystate::StateScope for NetworkState<S> {
     const PREFIX: &'static str = "net";
 }
 impl<S: ::amethystate::Store> NetworkState<S> {
-    pub fn new_with(store: &S) -> ::amethystate::Result<Self> {
+    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
         store: &S,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
         ::amethystate::observability::register_instance(
             instance_id,
@@ -99,30 +99,44 @@ impl<S: ::amethystate::Store> NetworkState<S> {
         let mut scope = ::amethystate::ReactiveScope::new();
         {
             let cb_clone = cb.clone();
-            scope.watch(self.port.subscribe_external(move |_| cb_clone()));
+            scope
+                .watch(
+                    self
+                        .port
+                        .subscription_with()
+                        .external()
+                        .register(move |_| cb_clone()),
+                );
         }
         {
             let cb_clone = cb.clone();
-            scope.watch(self.host.subscribe_external(move |_| cb_clone()));
+            scope
+                .watch(
+                    self
+                        .host
+                        .subscription_with()
+                        .external()
+                        .register(move |_| cb_clone()),
+                );
         }
         scope
     }
 }
 impl NetworkState<::amethystate::DefaultStore> {
-    pub fn new() -> ::amethystate::Result<Self> {
+    pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for NetworkState<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::Result<Self> {
+    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &S,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
     }
 }
@@ -431,9 +445,11 @@ impl ::core::fmt::Debug for NetworkState_Data {
 }
 impl NetworkState_Data {}
 impl ::amethystate::migration::types::AmeType for NetworkState_Data {
-    const TYPE_HASH: u32 = ::amethystate::migration::types::fnv1a(
-        "NetworkState_Data".as_bytes(),
-    );
+    const TYPE_HASH: u32 = 0u32
+        ^ ::amethystate::migration::types::fnv1a("host".as_bytes())
+        ^ <String as ::amethystate::migration::types::AmeType>::TYPE_HASH
+        ^ ::amethystate::migration::types::fnv1a("port".as_bytes())
+        ^ <u16 as ::amethystate::migration::types::AmeType>::TYPE_HASH;
     const TYPE_NAME: &'static str = "NetworkState_Data";
 }
 impl ::amethystate::migration::fields::AmeStateFields for NetworkState_Data {
@@ -455,7 +471,7 @@ impl ::amethystate::migration::fields::AmeStateFields for NetworkState_Data {
     const MIGRATION_DEPS: &'static [&'static str] = &[];
     fn load_struct(
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
             host: ctx.get::<String>("host")?.unwrap_or_else(|| "127.0.0.1".to_string()),
             port: ctx.get::<u16>("port")?.unwrap_or_else(|| 8080),
@@ -464,7 +480,7 @@ impl ::amethystate::migration::fields::AmeStateFields for NetworkState_Data {
     fn save_struct(
         &self,
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<()> {
+    ) -> ::amethystate::StorageResult<()> {
         ctx.set("host", &self.host)?;
         ctx.set("port", &self.port)?;
         Ok(())
@@ -473,8 +489,31 @@ impl ::amethystate::migration::fields::AmeStateFields for NetworkState_Data {
 impl<S: ::amethystate::Store> ::amethystate::AmeState for NetworkState<S> {
     type Data = NetworkState_Data;
 }
+#[allow(non_upper_case_globals)]
+const _: () = {
+    static __INVENTORY: ::inventory::Node = ::inventory::Node {
+        value: &{
+            ::amethystate::observability::SchemaEntry {
+                prefix: Some("net"),
+                struct_name: "NetworkState",
+                version: 0u32,
+                schema_hash: <NetworkState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
+                fields: <NetworkState_Data as ::amethystate::migration::fields::AmeStateFields>::FIELDS,
+            }
+        },
+        next: ::inventory::__private::UnsafeCell::new(
+            ::inventory::__private::Option::None,
+        ),
+    };
+    unsafe extern "C" fn __ctor() {
+        unsafe { ::inventory::ErasedNode::submit(__INVENTORY.value, &__INVENTORY) }
+    }
+    #[used]
+    #[link_section = ".CRT$XCU"]
+    static __CTOR: unsafe extern "C" fn() = __ctor;
+};
 impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for NetworkState<S> {
-    fn load_slice(store: &S) -> ::amethystate::Result<Self> {
+    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope
@@ -513,13 +552,13 @@ impl<S: ::amethystate::Store> ::amethystate::StateScope for UiState<S> {
     const PREFIX: &'static str = "ui";
 }
 impl<S: ::amethystate::Store> UiState<S> {
-    pub fn new_with(store: &S) -> ::amethystate::Result<Self> {
+    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
         store: &S,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
         ::amethystate::observability::register_instance(
             instance_id,
@@ -654,30 +693,44 @@ impl<S: ::amethystate::Store> UiState<S> {
         let mut scope = ::amethystate::ReactiveScope::new();
         {
             let cb_clone = cb.clone();
-            scope.watch(self.proxy_port.subscribe_external(move |_| cb_clone()));
+            scope
+                .watch(
+                    self
+                        .proxy_port
+                        .subscription_with()
+                        .external()
+                        .register(move |_| cb_clone()),
+                );
         }
         {
             let cb_clone = cb.clone();
-            scope.watch(self.proxy_host.subscribe_external(move |_| cb_clone()));
+            scope
+                .watch(
+                    self
+                        .proxy_host
+                        .subscription_with()
+                        .external()
+                        .register(move |_| cb_clone()),
+                );
         }
         scope
     }
 }
 impl UiState<::amethystate::DefaultStore> {
-    pub fn new() -> ::amethystate::Result<Self> {
+    pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for UiState<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::Result<Self> {
+    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &S,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
     }
 }
@@ -886,9 +939,7 @@ impl ::core::fmt::Debug for UiState_Data {
 }
 impl UiState_Data {}
 impl ::amethystate::migration::types::AmeType for UiState_Data {
-    const TYPE_HASH: u32 = ::amethystate::migration::types::fnv1a(
-        "UiState_Data".as_bytes(),
-    );
+    const TYPE_HASH: u32 = 0u32;
     const TYPE_NAME: &'static str = "UiState_Data";
 }
 impl ::amethystate::migration::fields::AmeStateFields for UiState_Data {
@@ -902,21 +953,44 @@ impl ::amethystate::migration::fields::AmeStateFields for UiState_Data {
     ];
     fn load_struct(
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<Self> {
+    ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {})
     }
     fn save_struct(
         &self,
         ctx: &mut ::amethystate::MigrationContext,
-    ) -> ::amethystate::Result<()> {
+    ) -> ::amethystate::StorageResult<()> {
         Ok(())
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::AmeState for UiState<S> {
     type Data = UiState_Data;
 }
+#[allow(non_upper_case_globals)]
+const _: () = {
+    static __INVENTORY: ::inventory::Node = ::inventory::Node {
+        value: &{
+            ::amethystate::observability::SchemaEntry {
+                prefix: Some("ui"),
+                struct_name: "UiState",
+                version: 0u32,
+                schema_hash: <UiState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
+                fields: <UiState_Data as ::amethystate::migration::fields::AmeStateFields>::FIELDS,
+            }
+        },
+        next: ::inventory::__private::UnsafeCell::new(
+            ::inventory::__private::Option::None,
+        ),
+    };
+    unsafe extern "C" fn __ctor() {
+        unsafe { ::inventory::ErasedNode::submit(__INVENTORY.value, &__INVENTORY) }
+    }
+    #[used]
+    #[link_section = ".CRT$XCU"]
+    static __CTOR: unsafe extern "C" fn() = __ctor;
+};
 impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for UiState<S> {
-    fn load_slice(store: &S) -> ::amethystate::Result<Self> {
+    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope

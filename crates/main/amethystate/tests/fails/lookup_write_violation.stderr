@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
   --> tests/fails/lookup_write_violation.rs:9:1
    |
-9  | #[amethystate(prefix = "ui")]
+ 9 | #[amethystate(prefix = "ui")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Writable<_>`, found `ReadOnly<String>`
 10 | pub struct UiState {
 11 |     #[amestate(lookup = "host", parent = NetworkState, export_mut)]
@@ -16,7 +16,7 @@ note: function defined here
    |                         ^^^^^^
    = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0599]: no method named `set` found for struct `amethystate::Field<u16, amethystate::stores::RedbStore>` in the current scope
+error[E0599]: no method named `set` found for struct `Field<u16, amethystate::stores::RedbStore>` in the current scope
   --> tests/fails/lookup_write_violation.rs:18:17
    |
 18 |     dummy_field.set(9090);

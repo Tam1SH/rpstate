@@ -18,10 +18,10 @@ pub use serde;
 pub use uuid;
 
 pub use reactive::{
-    AccessMode, AmeState, AmeStateNode, Change, Field, InterceptDisposer, IntoPipeline, MapChange,
-    Pipeline, Reactive, ReactiveCell, ReactiveMap, ReactiveMapKey, ReactiveMapValue, ReactiveScope,
-    ReadOnly, ReadOnlyField, ReadOnlyMode, SignalSubscription, StoreSubscription, Writable,
-    WritableField, WritableMode,
+    AccessMode, AmeState, AmeStateNode, Change, Field, InterceptDisposer, IntoPipeline, LocalScope,
+    MapChange, Pipeline, Reactive, ReactiveCell, ReactiveMap, ReactiveMapKey, ReactiveMapValue,
+    ReactiveScope, ReadOnly, ReadOnlyField, ReadOnlyMode, SignalSubscription, StoreSubscription,
+    Writable, WritableField, WritableMode,
 };
 
 pub mod errors {

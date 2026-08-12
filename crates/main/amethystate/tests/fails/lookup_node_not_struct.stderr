@@ -1,7 +1,7 @@
 error[E0109]: type arguments are not allowed on builtin type `u16`
   --> tests/fails/lookup_node_not_struct.rs:9:1
    |
-9  | #[amethystate(prefix = "ui")]
+ 9 | #[amethystate(prefix = "ui")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ type argument not allowed
 ...
 12 |     pub proxy_port_node: u16,
@@ -10,7 +10,7 @@ error[E0109]: type arguments are not allowed on builtin type `u16`
    = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: primitive type `u16` doesn't have generic parameters
    |
-9  - #[amethystate(prefix = "ui")]
+ 9 - #[amethystate(prefix = "ui")]
    |
 
 error[E0109]: type arguments are not allowed on builtin type `u16`

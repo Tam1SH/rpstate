@@ -1,5 +1,6 @@
 use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
+use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::sync_backend::StoreBackend;
 use crate::store::{Store, SubscriptionId};
 use crate::{AccessMode, ReadOnlyMode, WritableMode};
@@ -71,19 +72,6 @@ where
         self.path.clone()
     }
 
-    #[track_caller]
-    pub fn subscribe_external<F>(&self, callback: F) -> SignalSubscription
-    where
-        F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
-    {
-        let my_id = self.instance_id;
-        self.core.subscribe_with_source(move |val, src| {
-            if src != Some(my_id) {
-                callback(val);
-            }
-        })
-    }
-
     /// Subscribes to value changes.
     ///
     /// # Thread safety
@@ -98,7 +86,7 @@ where
     /// let (tx, rx) = std::sync::mpsc::channel();
     ///
     /// field.subscribe(move |val| {
-    ///     let _ = tx.send(val);
+    ///     let _ = tx.send(val.clone());
     /// });
     ///
     /// // drain rx in your framework's event loop
@@ -109,6 +97,32 @@ where
         F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
     {
         self.core.subscribe(callback)
+    }
+
+    /// Configures a subscription: filtering, provenance, and where the callback
+    /// runs. See [`Watch`].
+    pub fn subscription_with(&self) -> Watch<Self, Immediate> {
+        Watch::new(self.clone())
+    }
+}
+
+impl<TValue, S, M> Watchable for Field<TValue, S, M>
+where
+    TValue: FieldValue,
+    S: Store,
+    M: AccessMode,
+{
+    type Item = TValue;
+
+    fn watch_id(&self) -> Uuid {
+        self.instance_id
+    }
+
+    fn watch_raw<F>(&self, callback: F) -> SignalSubscription
+    where
+        F: Fn(&TValue, Option<Uuid>) + Send + Sync + 'static,
+    {
+        self.core.subscribe_with_source(callback)
     }
 }
 
@@ -443,7 +457,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let c_clone = calls.clone();
 
-        let _sub = field.subscribe_external(move |_| {
+        let _sub = field.subscription_with().external().register(move |_| {
             c_clone.fetch_add(1, Ordering::SeqCst);
         });
 
@@ -486,7 +500,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let c_clone = calls.clone();
 
-        let _sub = field.subscribe_external(move |_| {
+        let _sub = field.subscription_with().external().register(move |_| {
             c_clone.fetch_add(1, Ordering::SeqCst);
         });
 

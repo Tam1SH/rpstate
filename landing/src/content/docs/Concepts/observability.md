@@ -1,7 +1,7 @@
 ---
 title: Observability
 sidebar:
-  order: 6
+  order: 7
 ---
 
 `amethystate` emits structured trace events via the [`tracing`](https://docs.rs/tracing) crate. All events use the target `amethystate`, so you can filter them independently of the rest of your application.

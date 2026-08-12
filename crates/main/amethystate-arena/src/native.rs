@@ -93,7 +93,7 @@ impl<S: Store> Arena<S> {
         F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.with_item::<Field<T, S, M>, _, _>(handle.key, "Field", |field| {
-            field.subscribe_external(callback)
+            field.subscription_with().external().register(callback)
         })
     }
 
@@ -229,7 +229,7 @@ impl<S: Store> Arena<S> {
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
         self.with_item::<ReactiveMap<K, V, S, M>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.subscribe_any_external(callback)
+            map.subscription_with().external().register(callback)
         })
     }
 
@@ -246,7 +246,10 @@ impl<S: Store> Arena<S> {
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
         self.with_item::<ReactiveMap<K, V, S, M>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.subscribe_key_external(key, callback)
+            map.subscription_with()
+                .key(key)
+                .external()
+                .register(callback)
         })
     }
 

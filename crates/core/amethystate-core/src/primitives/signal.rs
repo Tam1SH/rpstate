@@ -31,6 +31,9 @@ impl<T> Clone for Signal<T> {
     }
 }
 
+/// Dropping this ends the subscription, so it has to be held for as long as the
+/// callback should keep firing.
+#[must_use = "dropping a subscription unsubscribes; bind it to keep it alive"]
 #[derive(Clone)]
 pub struct SignalSubscription {
     pub id: u64,

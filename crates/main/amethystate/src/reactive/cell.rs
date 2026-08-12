@@ -1,6 +1,7 @@
 use crate::reactive::error::WriteResult;
+use crate::reactive::local::LocalScope;
 use amethystate_core::{Signal, SignalSubscription};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 type Writer<T> = Arc<dyn Fn(T) -> WriteResult<()> + Send + Sync>;
@@ -106,6 +107,35 @@ where
         F: Fn(&T, Option<Uuid>) + Send + Sync + 'static,
     {
         self.cache.subscribe_with_source(callback)
+    }
+
+    /// Subscribes with a callback that runs on the draining thread, so it need
+    /// not be `Send + Sync`.
+    ///
+    /// The value is a state rather than a stream of events, so changes coalesce:
+    /// however many times it moved since the last [`LocalScope::drain`], the
+    /// callback sees the newest once.
+    #[track_caller]
+    pub fn subscribe_local<F>(&self, scope: &mut LocalScope, mut callback: F)
+    where
+        F: FnMut(&T) + 'static,
+    {
+        let slot: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&slot);
+
+        let sub = self.cache.subscribe(move |value: &T| {
+            *sink.lock().unwrap() = Some(value.clone());
+        });
+
+        scope.add(
+            sub,
+            Box::new(move || {
+                let pending = slot.lock().unwrap().take();
+                if let Some(value) = pending {
+                    callback(&value);
+                }
+            }),
+        );
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::Store;
 use crate::store::sync_backend::StoreBackend;
 use crate::{AccessMode, DefaultStore, Field, ReadOnlyMode, StoreSubscription, WritableMode};
@@ -134,60 +135,87 @@ where
         self.core.subscribe_any(callback)
     }
 
-    /// Like [`ReactiveMap::subscribe_any`], but skips values this handle
-    /// rewrote itself.
-    ///
-    /// Only `Update` is filtered. A key appearing or disappearing - `Insert`,
-    /// `Remove`, `Clear` - is delivered whoever caused it: that changes what
-    /// the map holds rather than a value someone is editing, and a view
-    /// listing the keys has to rebuild either way.
-    ///
-    /// One consequence worth knowing: [`ReactiveMap::set_or_create`] comes back
-    /// to you or not depending on whether the key was already there, since it
-    /// is an `Insert` the first time and an `Update` after that.
-    #[track_caller]
-    pub fn subscribe_any_external<F>(&self, callback: F) -> SignalSubscription
-    where
-        F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
-    {
-        let my_id = self.instance_id;
-        self.core.subscribe_any(move |change| match change {
-            MapChange::Update { source, .. } => {
-                if *source != Some(my_id) {
-                    callback(change);
-                }
-            }
-            _ => callback(change),
-        })
-    }
-
-    /// Like [`ReactiveMap::subscribe_key`], but skips values this handle
-    /// rewrote itself.
-    ///
-    /// Filters `Update` only, on the same reasoning as
-    /// [`ReactiveMap::subscribe_any_external`].
-    #[track_caller]
-    pub fn subscribe_key_external<F>(&self, key: K, callback: F) -> SignalSubscription
-    where
-        F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
-    {
-        let my_id = self.instance_id;
-        self.core.subscribe_key(key, move |change| match change {
-            MapChange::Update { source, .. } => {
-                if *source != Some(my_id) {
-                    callback(change);
-                }
-            }
-            _ => callback(change),
-        })
-    }
-
     #[track_caller]
     pub fn subscribe_key<F>(&self, key: K, callback: F) -> SignalSubscription
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
         self.core.subscribe_key(key, callback)
+    }
+
+    /// Configures a subscription. See [`Watch`].
+    ///
+    /// Map changes are events rather than a state, so pair `local` with
+    /// [`Watch::every`] unless dropping the intermediate ones is what you want.
+    pub fn subscription_with(&self) -> Watch<Self, Immediate> {
+        Watch::new(self.clone())
+    }
+}
+
+/// One key of a map, as a [`Watch`] source. Built by [`Watch::key`].
+pub struct KeyOf<K, V, S: Store, M: AccessMode> {
+    map: ReactiveMap<K, V, S, M>,
+    key: K,
+}
+
+impl<K, V, S: Store, M: AccessMode> KeyOf<K, V, S, M> {
+    pub(crate) fn new(map: ReactiveMap<K, V, S, M>, key: K) -> Self {
+        Self { map, key }
+    }
+}
+
+impl<K, V, S, M> Watchable for KeyOf<K, V, S, M>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+    S: Store,
+    M: AccessMode,
+{
+    type Item = MapChange<K, V>;
+
+    fn filterable(item: &MapChange<K, V>) -> bool {
+        matches!(item, MapChange::Update { .. })
+    }
+
+    fn watch_id(&self) -> Uuid {
+        self.map.instance_id
+    }
+
+    fn watch_raw<F>(&self, callback: F) -> SignalSubscription
+    where
+        F: Fn(&MapChange<K, V>, Option<Uuid>) + Send + Sync + 'static,
+    {
+        self.map
+            .core
+            .subscribe_key(self.key.clone(), move |change| {
+                callback(change, change.source())
+            })
+    }
+}
+
+impl<K, V, S, M> Watchable for ReactiveMap<K, V, S, M>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+    S: Store,
+    M: AccessMode,
+{
+    type Item = MapChange<K, V>;
+
+    fn filterable(item: &MapChange<K, V>) -> bool {
+        matches!(item, MapChange::Update { .. })
+    }
+
+    fn watch_id(&self) -> Uuid {
+        self.instance_id
+    }
+
+    fn watch_raw<F>(&self, callback: F) -> SignalSubscription
+    where
+        F: Fn(&MapChange<K, V>, Option<Uuid>) + Send + Sync + 'static,
+    {
+        self.core
+            .subscribe_any(move |change| callback(change, change.source()))
     }
 }
 
@@ -334,7 +362,7 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let any = seen.clone();
-        let _any_sub = map.subscribe_any_external(move |change| {
+        let _any_sub = map.subscription_with().external().register(move |change| {
             any.lock().unwrap().push(match change {
                 MapChange::Insert { .. } => "insert".into(),
                 MapChange::Update { .. } => "update".into(),
@@ -392,14 +420,18 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let keyed = seen.clone();
-        let _key_sub = map.subscribe_key_external("a".to_string(), move |change| {
-            keyed.lock().unwrap().push(match change {
-                MapChange::Insert { .. } => "insert".into(),
-                MapChange::Update { .. } => "update".into(),
-                MapChange::Remove { .. } => "remove".into(),
-                MapChange::Clear { .. } => "clear".into(),
+        let _key_sub = map
+            .subscription_with()
+            .key("a".to_string())
+            .external()
+            .register(move |change| {
+                keyed.lock().unwrap().push(match change {
+                    MapChange::Insert { .. } => "insert".into(),
+                    MapChange::Update { .. } => "update".into(),
+                    MapChange::Remove { .. } => "remove".into(),
+                    MapChange::Clear { .. } => "clear".into(),
+                });
             });
-        });
 
         map.set_or_create("a".to_string(), &1).unwrap();
         map.set("a".to_string(), &2).unwrap();
@@ -794,7 +826,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let c_clone = calls.clone();
 
-        let _sub = map.subscribe_any_external(move |_| {
+        let _sub = map.subscription_with().external().register(move |_| {
             c_clone.fetch_add(1, Ordering::SeqCst);
         });
 

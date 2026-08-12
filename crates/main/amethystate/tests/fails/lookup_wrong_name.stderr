@@ -5,8 +5,3 @@ error[E0599]: no method named `__schema_field_porrt` found for reference `&Netwo
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
   = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
-help: there is a method `__schema_field_port` with a similar name
-  |
-9 - #[amethystate(prefix = "ui")]
-9 + __schema_field_port
-  |
