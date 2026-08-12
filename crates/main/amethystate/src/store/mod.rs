@@ -3,6 +3,7 @@ pub mod builder;
 pub mod config;
 pub mod default;
 mod error;
+pub mod kv;
 pub mod meta;
 mod primitives_factory;
 mod state_slice;
@@ -12,6 +13,7 @@ mod types;
 pub mod util;
 
 pub use error::{StorageError, StorageResult};
+pub use kv::Kv;
 pub use primitives_factory::*;
 pub use state_slice::*;
 pub use traits::*;

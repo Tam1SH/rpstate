@@ -86,5 +86,10 @@ pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()>;
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool>;
+
+    /// Reactive values addressed by path, without declaring a struct. See [`Kv`].
+    fn kv(&self) -> crate::store::Kv<Self> {
+        crate::store::Kv::new(self.clone())
+    }
     fn mark_initialized(&self, namespace: &str) -> StorageResult<()>;
 }
