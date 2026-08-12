@@ -223,6 +223,7 @@ name = "amethystate-arena"
 version = "0.9.5"
 dependencies = [
  "amethystate",
+ "amethystate-core",
  "amethystate-macros-arena",
  "amethystate-tauri",
  "anyhow",

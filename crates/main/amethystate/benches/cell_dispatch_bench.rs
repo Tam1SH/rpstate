@@ -7,7 +7,8 @@
 //! `CellBackend`/`ReactiveCell` here are stand-ins for the proposed types - they
 //! model the dispatch shape, nothing else.
 
-use amethystate::{DefaultStore, Field, Signal, WritableMode};
+use amethystate::{DefaultStore, Field, WritableMode};
+use amethystate_core::Signal;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;

@@ -148,7 +148,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&events);
         let _sub = address.subscribe(move |value| {
-            seen.lock().unwrap().push(value);
+            seen.lock().unwrap().push(value.clone());
         });
 
         assert_eq!(display_port.get(), ":8080");

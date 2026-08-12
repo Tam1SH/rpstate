@@ -142,10 +142,9 @@ where
 
     fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.cache
-            .subscribe_with_source(move |value: &T, source| callback(value.clone(), source))
+        self.cache.subscribe_with_source(callback)
     }
 
     fn keepalive(&self) -> Option<Arc<dyn Send + Sync>> {

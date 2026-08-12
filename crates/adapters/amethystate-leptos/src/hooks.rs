@@ -71,7 +71,7 @@ where
     let (signal, set_signal) = signal(arena.get_field(handle));
 
     let sub = arena.subscribe_field(handle, move |val| {
-        set_signal.set(val);
+        set_signal.set(val.clone());
     });
     on_cleanup(move || drop(sub));
 
@@ -110,7 +110,7 @@ where
     let (signal, set_signal) = signal(arena.get_field(handle));
 
     let sub = arena.subscribe_field(handle, move |val| {
-        set_signal.set(val);
+        set_signal.set(val.clone());
     });
     on_cleanup(move || drop(sub));
 
@@ -140,7 +140,7 @@ where
     let (signal, set_signal) = signal(arena.get_pipeline(handle));
 
     let sub = arena.subscribe_pipeline(handle, move |val| {
-        set_signal.set(val);
+        set_signal.set(val.clone());
     });
     on_cleanup(move || drop(sub));
 

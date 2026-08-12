@@ -35,7 +35,7 @@ fn test_arena_field_and_pipeline() -> anyhow::Result<()> {
     let last_val_clone = last_val.clone();
 
     let _sub = arena.subscribe_field(username_handle, move |val| {
-        *last_val_clone.lock().unwrap() = val;
+        *last_val_clone.lock().unwrap() = val.clone();
     });
 
     arena.set_field(username_handle, "Charlie".to_string())?;
@@ -72,7 +72,7 @@ fn test_subscribe_pipeline() -> anyhow::Result<()> {
     let notified_val_clone = notified_val.clone();
 
     let _sub = arena.subscribe_pipeline(pipe_handle, move |val| {
-        *notified_val_clone.lock().unwrap() = val;
+        *notified_val_clone.lock().unwrap() = val.clone();
     });
 
     arena.set_field(port_handle, 9090)?;

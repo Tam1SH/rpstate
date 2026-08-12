@@ -90,7 +90,7 @@ impl<S: Store> Arena<S> {
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
         M: AccessMode,
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.with_item::<Field<T, S, M>, _, _>(handle.key, "Field", |field| {
             field.subscribe_external(callback)
@@ -105,7 +105,7 @@ impl<S: Store> Arena<S> {
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
         M: AccessMode,
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.with_item::<Field<T, S, M>, _, _>(handle.key, "Field", |field| {
             field.subscribe(callback)
@@ -119,7 +119,7 @@ impl<S: Store> Arena<S> {
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
         M: AccessMode,
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
         self.with_item::<Field<T, S, M>, _, _>(handle.key, "Field", |field| {
             field.subscribe_with_source(callback)
@@ -151,7 +151,7 @@ impl<S: Store> Arena<S> {
     ) -> SignalSubscription
     where
         T: Clone + Send + Sync + 'static,
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.with_item::<Pipeline<T>, _, _>(handle.key, "Pipeline", |pipe| pipe.subscribe(callback))
     }

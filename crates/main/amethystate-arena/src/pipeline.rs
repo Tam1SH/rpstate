@@ -1,5 +1,6 @@
 use crate::{DefaultArena, FieldHandle};
-use amethystate::{AccessMode, Pipeline, Signal, SignalSubscription};
+use amethystate::{AccessMode, Pipeline, SignalSubscription};
+use amethystate_core::Signal;
 use serde::{Serialize, de::DeserializeOwned};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -25,11 +26,11 @@ where
 
     fn subscribe_with_source<F>(&self, arena: &DefaultArena, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static;
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static;
 
     fn subscribe<F>(&self, arena: &DefaultArena, callback: F) -> SignalSubscription
     where
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.subscribe_with_source(arena, move |v, _src| callback(v))
     }
@@ -46,7 +47,7 @@ where
 
     fn subscribe_with_source<F>(&self, arena: &DefaultArena, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
         arena.subscribe_field_with_source(*self, callback)
     }
@@ -69,7 +70,7 @@ where
         let signal = Arc::new(Signal::new(initial));
         let target = Arc::clone(&signal);
         let sub = self.subscribe_with_source(&pipeline_arena(), move |val, source| {
-            target.set_forwarded(val, source);
+            target.set_forwarded(val.clone(), source);
         });
         Pipeline::from_signal(signal, vec![sub], vec![])
     }

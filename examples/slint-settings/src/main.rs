@@ -41,6 +41,9 @@ fn main() -> Result<(), slint::PlatformError> {
     let ui_weak = ui.as_weak();
     scope.watch(address.subscribe(move |address| {
         let ui_weak = ui_weak.clone();
+        // Subscribers borrow the value; this one outlives the callback by
+        // hopping onto the event loop, so it needs its own copy.
+        let address = address.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_address(address.into());

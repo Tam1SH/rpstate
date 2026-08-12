@@ -3,7 +3,7 @@ use super::error::{FieldError, ReactiveFieldResult};
 use crate::store::sync_backend::StoreBackend;
 use crate::store::{Store, SubscriptionId};
 use crate::{AccessMode, ReadOnlyMode, WritableMode};
-use amethystate_core::{Change, FieldCore, InterceptDisposer, Signal, SignalSubscription};
+use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -71,14 +71,10 @@ where
         self.path.clone()
     }
 
-    pub fn as_signal(&self) -> Signal<TValue> {
-        self.core.signal.clone()
-    }
-
     #[track_caller]
     pub fn subscribe_external<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(TValue) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
     {
         let my_id = self.instance_id;
         self.core.subscribe_with_source(move |val, src| {
@@ -110,7 +106,7 @@ where
     #[track_caller]
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(TValue) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
     {
         self.core.subscribe(callback)
     }
@@ -233,14 +229,14 @@ where
 
     fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(TValue, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a TValue, Option<Uuid>) + Send + Sync + 'static,
     {
         self.core.subscribe_with_source(callback)
     }
 
     fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(TValue) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
     {
         self.subscribe(callback)
     }
@@ -281,7 +277,7 @@ mod tests {
         let callback_val = Arc::new(Mutex::new(0i32));
         let cap = callback_val.clone();
         let _sub = field.subscribe(move |v| {
-            *cap.lock().unwrap() = v;
+            *cap.lock().unwrap() = *v;
         });
 
         field.core.signal.set(22);
@@ -329,24 +325,19 @@ mod tests {
         );
     }
 
+    /// A cell hands out the field's own cache rather than a copy of it, so a
+    /// write landing in the field is visible through the cell.
     #[test]
-    fn field_as_signal_returns_same_arc() {
-        let store = unique_store("as-signal");
-        let core = FieldCore::new(100i32);
-        let sub_id = store.subscribe(crate::store::SubscriptionKind::Any, Arc::new(|_| {}));
-        let field: Field<i32, DefaultStore> = Field {
-            core: core.clone(),
-            path: Arc::from("some.path"),
-            store_sub: Some(Arc::new(StoreSubscription {
-                store: store.clone(),
-                id: sub_id,
-            })),
-            instance_id: Default::default(),
-            _mode: Default::default(),
-        };
+    fn field_cell_shares_the_field_cache() {
+        let store = unique_store("cell-shares-cache");
+        let field =
+            crate::store::field::<UiScope, i32, DefaultStore>(&store, "shared", 1, Uuid::new_v4())
+                .expect("field should be created");
 
-        let extracted = field.as_signal();
-        assert!(Arc::ptr_eq(&core.signal.value, &extracted.value));
+        let cell = field.cell();
+        field.set(7).unwrap();
+
+        assert_eq!(cell.get(), 7);
     }
 
     #[test]
@@ -366,7 +357,7 @@ mod tests {
 
         let _sub = field.subscribe(move |val| {
             *c_count.lock().unwrap() += 1;
-            *l_val.lock().unwrap() = val;
+            *l_val.lock().unwrap() = *val;
         });
 
         field.set(true).expect("Volatile set should work");

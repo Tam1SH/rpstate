@@ -2,6 +2,13 @@ use crate::primitives::signal::{Signal, SignalSubscription};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+/// Something you can read and subscribe to.
+///
+/// Subscribers are handed `&T`, not an owned value. Delivery is synchronous and
+/// the emitter holds the value for the whole dispatch, so the reference is
+/// sound by construction; taking it by value only meant every implementation
+/// cloned for every subscriber on every emit, whether or not anyone needed to
+/// own the value. Callers who do need one call `.clone()` themselves.
 pub trait Reactive<T>: Clone + Send + Sync + 'static
 where
     T: Clone + Send + Sync + 'static,
@@ -10,11 +17,11 @@ where
 
     fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static;
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static;
 
     fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.subscribe_with_source(move |v, _src| callback(v))
     }
@@ -73,16 +80,14 @@ where
 
     pub fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.inner
-            .signal
-            .subscribe_with_source(move |val, src| callback(val.clone(), src))
+        self.inner.signal.subscribe_with_source(callback)
     }
 
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.subscribe_with_source(move |val, _src| callback(val))
     }
@@ -99,7 +104,7 @@ where
         let mapper = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
-            target.set_forwarded(mapper(value), source);
+            target.set_forwarded(mapper(value.clone()), source);
         });
 
         Pipeline {
@@ -123,7 +128,7 @@ where
         let mapper = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
-            if let Some(mapped) = mapper(value) {
+            if let Some(mapped) = mapper(value.clone()) {
                 target.set_forwarded(mapped, source);
             }
         });
@@ -150,8 +155,8 @@ where
         let inspector = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
-            inspector(&value);
-            target.set_forwarded(value, source);
+            inspector(value);
+            target.set_forwarded(value.clone(), source);
         });
 
         Pipeline {
@@ -175,9 +180,9 @@ where
 
         let sub = self.subscribe_with_source(move |value, source| {
             let mut last = last_seen.lock().unwrap();
-            if *last != value {
+            if *last != *value {
                 *last = value.clone();
-                target.set_forwarded(value, source);
+                target.set_forwarded(value.clone(), source);
             }
         });
 
@@ -201,7 +206,7 @@ where
 
     fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
         self.subscribe_with_source(callback)
     }
@@ -252,7 +257,7 @@ where
         let signal = Arc::new(Signal::new(initial));
         let target = Arc::clone(&signal);
         let sub = self.subscribe_with_source(move |value, source| {
-            target.set_forwarded(value, source);
+            target.set_forwarded(value.clone(), source);
         });
 
         Pipeline {

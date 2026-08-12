@@ -145,14 +145,14 @@ where
 
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         self.core.subscribe(callback)
     }
 
     pub fn subscribe_external<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
         let my_id = self.instance_id;
         self.core.subscribe_with_source(move |val, src| {
@@ -181,7 +181,7 @@ where
 
     fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
         self.core.subscribe_with_source(callback)
     }

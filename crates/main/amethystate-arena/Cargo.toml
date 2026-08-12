@@ -16,6 +16,7 @@ rust-version.workspace = true
 amethystate.workspace = true
 amethystate-tauri = { workspace = true, optional = true }
 amethystate-macros-arena.workspace = true
+amethystate-core.workspace = true
 slotmap = "1.0"
 serde.workspace = true
 parking_lot = "0.12.5"

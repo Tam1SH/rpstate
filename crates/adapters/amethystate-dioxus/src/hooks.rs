@@ -93,7 +93,7 @@ where
 
     use_hook(move || {
         let sub = arena.subscribe_field(handle, move |val| {
-            let _ = tx.send(val);
+            let _ = tx.send(val.clone());
         });
         Arc::new(sub)
     });
@@ -127,7 +127,7 @@ where
 
     use_hook(move || {
         let sub = arena.subscribe_field(handle, move |val| {
-            let _ = tx.send(val);
+            let _ = tx.send(val.clone());
         });
         Arc::new(sub)
     });
@@ -181,7 +181,7 @@ where
 
     use_hook(move || {
         let sub = arena.subscribe_pipeline(handle, move |val| {
-            let _ = tx.send(val);
+            let _ = tx.send(val.clone());
         });
         Arc::new(sub)
     });

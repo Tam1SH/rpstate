@@ -61,21 +61,17 @@ impl<T: Clone + 'static> FieldCore<T> {
     #[track_caller]
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
-        self.signal.subscribe(move |val: &T| {
-            callback(val.clone());
-        })
+        self.signal.subscribe(callback)
     }
 
     #[track_caller]
     pub fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.signal.subscribe_with_source(move |val: &T, src| {
-            callback(val.clone(), src);
-        })
+        self.signal.subscribe_with_source(callback)
     }
 
     pub fn intercept<F>(&self, path: Arc<str>, callback: F) -> InterceptDisposer

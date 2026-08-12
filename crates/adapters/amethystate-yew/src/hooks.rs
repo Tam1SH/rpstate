@@ -24,7 +24,7 @@ where
             let (tx, mut rx) = mpsc::unbounded::<T>();
 
             let sub = field.subscribe(move |val| {
-                let _ = tx.unbounded_send(val);
+                let _ = tx.unbounded_send(val.clone());
             });
 
             spawn_local(async move {
@@ -56,7 +56,7 @@ where
             let (tx, mut rx) = mpsc::unbounded::<T>();
 
             let sub = pipeline.subscribe(move |val| {
-                let _ = tx.unbounded_send(val);
+                let _ = tx.unbounded_send(val.clone());
             });
 
             spawn_local(async move {
@@ -88,7 +88,7 @@ where
             let (tx, mut rx) = mpsc::unbounded::<T>();
 
             let sub = field.subscribe_external(move |val| {
-                let _ = tx.unbounded_send(val);
+                let _ = tx.unbounded_send(val.clone());
             });
 
             spawn_local(async move {
@@ -259,7 +259,7 @@ where
                     }
                     MapChange::Remove { .. } | MapChange::Clear { .. } => None,
                 };
-                let _ = tx.unbounded_send(val);
+                let _ = tx.unbounded_send(val.clone());
             });
 
             spawn_local(async move {
