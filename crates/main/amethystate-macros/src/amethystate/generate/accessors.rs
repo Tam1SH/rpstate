@@ -23,6 +23,21 @@ pub(crate) fn schema_methods<'a>(
     })
 }
 
+/// The stored type of one field, as it appears in the reactive struct.
+pub(crate) fn field_type(crate_name: &TokenStream2, e: &StoreFieldEntry) -> TokenStream2 {
+    let ty = &e.ty;
+
+    if e.nested || e.lookup_node.is_some() {
+        quote! { ::std::sync::Arc<#ty<S>> }
+    } else if let Some((k, v)) = e.get_map_types() {
+        let mode = field_mode(crate_name, e);
+        quote! { #crate_name::ReactiveMap<#k, #v, S, #mode> }
+    } else {
+        let mode = field_mode(crate_name, e);
+        quote! { #crate_name::Field<#ty, S, #mode> }
+    }
+}
+
 pub(crate) fn struct_fields<'a>(
     crate_name: &'a TokenStream2,
     entries: &'a [StoreFieldEntry],
@@ -30,17 +45,9 @@ pub(crate) fn struct_fields<'a>(
     entries.iter().map(move |e| {
         let fname = e.ident.as_ref().unwrap();
         let fvis = &e.vis;
-        let ty = &e.ty;
+        let ty = field_type(crate_name, e);
 
-        if e.nested || e.lookup_node.is_some() {
-            quote! { #fvis #fname: ::std::sync::Arc<#ty<S>> }
-        } else if let Some((k, v)) = e.get_map_types() {
-            let mode = field_mode(crate_name, e);
-            quote! { #fvis #fname: #crate_name::ReactiveMap<#k, #v, S, #mode> }
-        } else {
-            let mode = field_mode(crate_name, e);
-            quote! { #fvis #fname: #crate_name::Field<#ty, S, #mode> }
-        }
+        quote! { #fvis #fname: #ty }
     })
 }
 

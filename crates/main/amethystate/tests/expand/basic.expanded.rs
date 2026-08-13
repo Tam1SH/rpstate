@@ -18,6 +18,18 @@ for AppConfig<S> {
         }
     }
 }
+impl<S: ::amethystate::Store> ::std::fmt::Debug for AppConfig<S>
+where
+    ::amethystate::Field<u16, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+    ::amethystate::Field<String, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("port", &self.port)
+            .field("session_id", &self.session_id)
+            .finish()
+    }
+}
 impl<S: ::amethystate::Store> ::amethystate::StateScope for AppConfig<S> {
     const PREFIX: &'static str = "app";
 }
@@ -391,19 +403,6 @@ impl ::core::clone::Clone for AppConfig_Data {
         AppConfig_Data {
             port: ::core::clone::Clone::clone(&self.port),
         }
-    }
-}
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for AppConfig_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::debug_struct_field1_finish(
-            f,
-            "AppConfig_Data",
-            "port",
-            &&self.port,
-        )
     }
 }
 impl AppConfig_Data {}

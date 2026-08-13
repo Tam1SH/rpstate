@@ -32,6 +32,20 @@ pub struct Field<TValue, S: Store, M: AccessMode = ReadOnlyMode> {
 pub type ReadOnlyField<TValue, S> = Field<TValue, S, ReadOnlyMode>;
 pub type WritableField<TValue, S> = Field<TValue, S, WritableMode>;
 
+impl<TValue, S, M> std::fmt::Debug for Field<TValue, S, M>
+where
+    TValue: FieldValue + std::fmt::Debug,
+    S: Store,
+    M: AccessMode,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Field")
+            .field("path", &self.path)
+            .field("value", &self.get())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<TValue, S: Store, M: AccessMode> Clone for Field<TValue, S, M> {
     fn clone(&self) -> Self {
         Self {

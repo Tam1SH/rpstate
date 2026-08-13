@@ -16,6 +16,14 @@ for DatabaseConfig<S> {
         }
     }
 }
+impl<S: ::amethystate::Store> ::std::fmt::Debug for DatabaseConfig<S>
+where
+    ::amethystate::Field<String, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("DatabaseConfig").field("host", &self.host).finish()
+    }
+}
 impl<S: ::amethystate::Store> DatabaseConfig<S> {
     pub fn new(store: &S, namespace: &str) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
@@ -351,19 +359,6 @@ impl ::core::clone::Clone for DatabaseConfig_Data {
         }
     }
 }
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for DatabaseConfig_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::debug_struct_field1_finish(
-            f,
-            "DatabaseConfig_Data",
-            "host",
-            &&self.host,
-        )
-    }
-}
 impl DatabaseConfig_Data {
     #[doc(hidden)]
     pub fn __amethystate_load_from<S: ::amethystate::Store>(
@@ -465,6 +460,14 @@ for SystemSettings<S> {
             ),
             db: ::core::clone::Clone::clone(&self.db),
         }
+    }
+}
+impl<S: ::amethystate::Store> ::std::fmt::Debug for SystemSettings<S>
+where
+    ::std::sync::Arc<DatabaseConfig<S>>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("SystemSettings").field("db", &self.db).finish()
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::StateScope for SystemSettings<S> {
@@ -816,19 +819,6 @@ impl ::core::clone::Clone for SystemSettings_Data {
         SystemSettings_Data {
             db: ::core::clone::Clone::clone(&self.db),
         }
-    }
-}
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for SystemSettings_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::debug_struct_field1_finish(
-            f,
-            "SystemSettings_Data",
-            "db",
-            &&self.db,
-        )
     }
 }
 impl SystemSettings_Data {}

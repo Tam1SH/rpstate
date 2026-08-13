@@ -236,6 +236,17 @@ pub fn generate_code(
         quote! {}
     };
 
+    // Bound per field, so a field type that cannot be printed leaves the struct
+    // without Debug instead of failing to compile.
+    let debug_bounds = entries
+        .iter()
+        .map(|e| accessors::field_type(&crate_name, e));
+
+    let debug_fields = entries.iter().map(|e| {
+        let fname = e.ident.as_ref().unwrap();
+        quote! { .field(stringify!(#fname), &self.#fname) }
+    });
+
     match rp_mode {
         RpMode::Reactive | RpMode::Both => {
             quote! {
@@ -243,6 +254,17 @@ pub fn generate_code(
                 #(#attrs)* #vis struct #name<S: #crate_name::Store = #crate_name::DefaultStore> {
                     __amethystate_instance_id: #crate_name::uuid::Uuid,
                     #(#struct_fields,)*
+                }
+
+                impl<S: #crate_name::Store> ::std::fmt::Debug for #name<S>
+                where
+                    #(#debug_bounds: ::std::fmt::Debug,)*
+                {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                        f.debug_struct(stringify!(#name))
+                            #(#debug_fields)*
+                            .finish()
+                    }
                 }
                 #scope
                 impl<S: #crate_name::Store> #name<S> {

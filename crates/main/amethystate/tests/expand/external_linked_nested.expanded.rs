@@ -18,6 +18,18 @@ for ConnectionPool<S> {
         }
     }
 }
+impl<S: ::amethystate::Store> ::std::fmt::Debug for ConnectionPool<S>
+where
+    ::amethystate::Field<u32, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+    ::amethystate::Field<u32, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("ConnectionPool")
+            .field("max_connections", &self.max_connections)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
 impl<S: ::amethystate::Store> ConnectionPool<S> {
     pub fn new(store: &S, namespace: &str) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
@@ -442,21 +454,6 @@ impl ::core::clone::Clone for ConnectionPool_Data {
         }
     }
 }
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for ConnectionPool_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::debug_struct_field2_finish(
-            f,
-            "ConnectionPool_Data",
-            "max_connections",
-            &self.max_connections,
-            "timeout_secs",
-            &&self.timeout_secs,
-        )
-    }
-}
 impl ConnectionPool_Data {
     #[doc(hidden)]
     pub fn __amethystate_load_from<S: ::amethystate::Store>(
@@ -576,6 +573,14 @@ for DatabaseState<S> {
             ),
             pool: ::core::clone::Clone::clone(&self.pool),
         }
+    }
+}
+impl<S: ::amethystate::Store> ::std::fmt::Debug for DatabaseState<S>
+where
+    ::std::sync::Arc<ConnectionPool<S>>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("DatabaseState").field("pool", &self.pool).finish()
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::StateScope for DatabaseState<S> {
@@ -929,19 +934,6 @@ impl ::core::clone::Clone for DatabaseState_Data {
         }
     }
 }
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for DatabaseState_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::debug_struct_field1_finish(
-            f,
-            "DatabaseState_Data",
-            "pool",
-            &&self.pool,
-        )
-    }
-}
 impl DatabaseState_Data {}
 impl ::amethystate::migration::types::AmeType for DatabaseState_Data {
     const TYPE_HASH: u32 = 0u32
@@ -1047,6 +1039,16 @@ for InspectorState<S> {
             ),
             db_pool_view: ::core::clone::Clone::clone(&self.db_pool_view),
         }
+    }
+}
+impl<S: ::amethystate::Store> ::std::fmt::Debug for InspectorState<S>
+where
+    ::std::sync::Arc<ConnectionPool<S>>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("InspectorState")
+            .field("db_pool_view", &self.db_pool_view)
+            .finish()
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::StateScope for InspectorState<S> {
@@ -1359,14 +1361,6 @@ impl ::core::clone::Clone for InspectorState_Data {
     #[inline]
     fn clone(&self) -> InspectorState_Data {
         InspectorState_Data {}
-    }
-}
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for InspectorState_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::write_str(f, "InspectorState_Data")
     }
 }
 impl InspectorState_Data {}

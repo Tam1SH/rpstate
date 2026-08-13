@@ -18,6 +18,18 @@ for NetworkState<S> {
         }
     }
 }
+impl<S: ::amethystate::Store> ::std::fmt::Debug for NetworkState<S>
+where
+    ::amethystate::Field<u16, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+    ::amethystate::Field<String, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("NetworkState")
+            .field("port", &self.port)
+            .field("host", &self.host)
+            .finish()
+    }
+}
 impl<S: ::amethystate::Store> ::amethystate::StateScope for NetworkState<S> {
     const PREFIX: &'static str = "net";
 }
@@ -428,21 +440,6 @@ impl ::core::clone::Clone for NetworkState_Data {
         }
     }
 }
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for NetworkState_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::debug_struct_field2_finish(
-            f,
-            "NetworkState_Data",
-            "host",
-            &self.host,
-            "port",
-            &&self.port,
-        )
-    }
-}
 impl NetworkState_Data {}
 impl ::amethystate::migration::types::AmeType for NetworkState_Data {
     const TYPE_HASH: u32 = 0u32
@@ -546,6 +543,18 @@ for UiState<S> {
             proxy_port: ::core::clone::Clone::clone(&self.proxy_port),
             proxy_host: ::core::clone::Clone::clone(&self.proxy_host),
         }
+    }
+}
+impl<S: ::amethystate::Store> ::std::fmt::Debug for UiState<S>
+where
+    ::amethystate::Field<u16, S, ::amethystate::ReadOnlyMode>: ::std::fmt::Debug,
+    ::amethystate::Field<String, S, ::amethystate::ReadOnlyMode>: ::std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("UiState")
+            .field("proxy_port", &self.proxy_port)
+            .field("proxy_host", &self.proxy_host)
+            .finish()
     }
 }
 impl<S: ::amethystate::Store> ::amethystate::StateScope for UiState<S> {
@@ -927,14 +936,6 @@ impl ::core::clone::Clone for UiState_Data {
     #[inline]
     fn clone(&self) -> UiState_Data {
         UiState_Data {}
-    }
-}
-#[automatically_derived]
-#[allow(non_camel_case_types)]
-impl ::core::fmt::Debug for UiState_Data {
-    #[inline]
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        ::core::fmt::Formatter::write_str(f, "UiState_Data")
     }
 }
 impl UiState_Data {}
