@@ -112,6 +112,12 @@ pub struct RedbStore {
     inner: Arc<RedbStoreInner>,
 }
 
+impl std::fmt::Debug for RedbStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedbStore").finish_non_exhaustive()
+    }
+}
+
 impl PartialEq for RedbStore {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)

@@ -406,6 +406,12 @@ pub struct SqliteStore {
     inner: Arc<SqliteStoreInner>,
 }
 
+impl std::fmt::Debug for SqliteStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteStore").finish_non_exhaustive()
+    }
+}
+
 impl PartialEq for SqliteStore {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)

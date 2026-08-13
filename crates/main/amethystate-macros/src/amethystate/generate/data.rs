@@ -23,6 +23,13 @@ pub(crate) fn data_impl(
     macro_args: &MacroArgs,
     rp_mode: RpMode,
 ) -> TokenStream2 {
+    // Only `derive` is forwarded: the rest of the user's attributes belong to
+    // the struct they wrote, not to this schema carrier.
+    let forwarded_derives: Vec<&syn::Attribute> = attrs
+        .iter()
+        .filter(|a| a.path().is_ident("derive"))
+        .collect();
+
     let mut p_fields = persistent_fields(entries);
 
     p_fields.sort_by(|a, b| {
@@ -244,14 +251,6 @@ pub(crate) fn data_impl(
                     prefix: ::std::sync::Arc<str>,
                 }
 
-                impl<S: #crate_name::Store> ::std::fmt::Debug for #name<S> {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        f.debug_struct(stringify!(#name))
-                            .field("inner", &self.inner)
-                            .finish()
-                    }
-                }
-
                 impl<S: #crate_name::Store> ::std::ops::Deref for #name<S> {
                     type Target = #data_struct_name;
 
@@ -308,18 +307,11 @@ pub(crate) fn data_impl(
             quote! {
                 #[allow(non_camel_case_types)]
                 #[derive(Clone)]
+                #(#forwarded_derives)*
                 pub struct #persisted_struct_name<S: #crate_name::Store = #crate_name::DefaultStore> {
                     inner: #data_struct_name,
                     store: S,
                     prefix: ::std::sync::Arc<str>,
-                }
-
-                impl<S: #crate_name::Store> ::std::fmt::Debug for #persisted_struct_name<S> {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        f.debug_struct(stringify!(#persisted_struct_name))
-                            .field("inner", &self.inner)
-                            .finish()
-                    }
                 }
 
                 impl<S: #crate_name::Store> ::std::ops::Deref for #persisted_struct_name<S> {
@@ -405,16 +397,9 @@ pub(crate) fn data_impl(
         quote! {}
     };
 
-    // Persistent mode hands this struct to the user, so it derives Debug and
-    // field types have to be printable. In reactive mode it only carries the
-    // schema, so deriving it there would impose Debug for nothing.
-    let data_debug = match rp_mode {
-        RpMode::Reactive => quote! {},
-        RpMode::Persistent | RpMode::Both => quote! { , Debug },
-    };
-
     quote! {
-        #[derive(#crate_name::serde::Serialize, #crate_name::serde::Deserialize, Default, Clone #data_debug)]
+        #[derive(#crate_name::serde::Serialize, #crate_name::serde::Deserialize, Default, Clone)]
+        #(#forwarded_derives)*
         #[serde(crate = "::amethystate::serde")]
         #[doc(hidden)]
         #[allow(non_camel_case_types)]

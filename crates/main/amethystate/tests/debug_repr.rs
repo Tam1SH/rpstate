@@ -99,3 +99,38 @@ fn the_instance_id_stays_out_of_the_output() {
         "internals leaked: {shown}"
     );
 }
+
+#[amethystate(prefix = "dbg_p_opaque", mode = "persistent")]
+pub struct PersistentOpaque {
+    #[amestate(default = Opaque { inner: 3 })]
+    pub opaque: Opaque,
+}
+
+#[derive(Debug)]
+#[amethystate(prefix = "dbg_p_shown", mode = "persistent")]
+pub struct PersistentShown {
+    #[amestate(default = 5)]
+    pub port: u16,
+}
+
+#[test]
+fn a_persistent_struct_needs_no_debug_either() {
+    let store = StoreBuilder::new(unique_path("dbg_p_opaque"))
+        .build()
+        .unwrap();
+    let state = PersistentOpaque::load_with(&store).unwrap();
+
+    assert_eq!(state.opaque.inner, 3);
+}
+
+#[test]
+fn a_persistent_struct_prints_when_asked() {
+    let store = StoreBuilder::new(unique_path("dbg_p_shown"))
+        .build()
+        .unwrap();
+    let state = PersistentShown::load_with(&store).unwrap();
+
+    let shown = format!("{state:?}");
+    assert!(shown.contains("PersistentShown"), "{shown}");
+    assert!(shown.contains("5"), "{shown}");
+}
