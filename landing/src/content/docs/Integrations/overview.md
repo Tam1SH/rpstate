@@ -38,6 +38,14 @@ The signals differ in ownership model: Dioxus and Leptos use arena-allocated `Co
 - [Leptos](./leptos)
 - [Yew](./yew)
 
+### Hooks with a UI-thread marshaller (windows-reactor)
+
+Reactor re-renders components from hook state on a single UI thread, and the host exposes a marshaller for getting work onto that thread. That covers the whole problem the other bridges solve by hand: a subscription writes the new value into a hook slot through the marshaller, and the framework re-renders. No channel, no background task, no arena.
+
+**Reactive mode** is required.
+
+- [windows-reactor](./windows-reactor)
+
 ### Webview bridge (Tauri)
 
 Tauri splits the application into a Rust backend and a frontend communicating over commands and events. `amethystate` provides a dedicated plugin that handles this boundary — state is loaded on the Rust side, and generated bindings expose it to the frontend. Both TypeScript and Rust frontend clients are supported.
