@@ -79,6 +79,8 @@ ui.drain();
 
 The scope is neither `Send` nor `Sync`, so a callback registered on it cannot reach another thread — the compiler will not let the scope move. Dropping the scope ends every subscription in it.
 
+Most GUI frameworks give you hooks rather than a place to own things, so keep one `LocalScope` in the context the framework already threads through your app, and drain it once a frame. Anything in the tree can then register into it without inventing an owner of its own.
+
 Changes **coalesce**: however many arrived since the last drain, the callback sees the newest once. That is what a frame wants from a value. For map changes, which are events rather than a state, add `.every()` to keep them all.
 
 A callback that writes to what it listens to cannot spin: its own write lands in the next drain, not the current one.
