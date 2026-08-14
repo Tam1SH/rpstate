@@ -1,6 +1,7 @@
 ---
-title: Durability
+title: "Durability: availability over consistency"
 sidebar:
+  label: Durability
   order: 9
 ---
 
