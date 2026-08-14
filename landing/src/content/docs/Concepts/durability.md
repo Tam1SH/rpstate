@@ -50,7 +50,7 @@ state.port().subscribe(|port| {
 
 ## Forcing a flush
 
-Call `save_now()` to write everything, or `flush_prefix()` to write one branch. Both return after storage has committed:
+Call `save_now()` to write everything, or `flush_prefix()` to write one branch. Both return after storage has committed. How much else rides along depends on the backend — a text store rewrites its whole document either way, while `redb` and `sqlite` write only what you asked for:
 
 ```rust
 store.set("settings.port", &8080)?;
@@ -58,7 +58,16 @@ store.save_now()?;
 // Now it is on disk.
 ```
 
-Reach for these at points where losing the last few hundred milliseconds actually matters — before launching an external process, after a step the user cannot repeat. Calling `save_now()` after every write gives back the cheap writes you came for.
+On a field, `set_durable()` does both in one call, and `set_durable_async()` does it without blocking — the write lands immediately, and the future resolves once it is on disk:
+
+```rust
+state.port().set_durable(8080)?;
+
+// or, off the UI thread:
+state.port().set_durable_async(8080)?.await?;
+```
+
+Reach for these at points where losing the last few hundred milliseconds actually matters — before launching an external process, after a step the user cannot repeat. Calling them on every write gives back the cheap writes you came for.
 
 ## Everything follows these rules
 

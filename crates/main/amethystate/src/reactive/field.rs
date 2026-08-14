@@ -207,6 +207,32 @@ where
         Ok(())
     }
 
+    /// Writes the value and returns once it is on disk.
+    ///
+    /// Blocks for the length of one commit. `set` alone leaves the value in
+    /// the write buffer, where a crash loses it.
+    pub fn set_durable(&self, value: TValue) -> ReactiveFieldResult<()> {
+        self.set(value)?;
+
+        if let Some(sub) = &self.store_sub {
+            sub.store.flush_prefix(&self.path)?;
+        }
+        Ok(())
+    }
+
+    /// Writes the value and resolves once it is on disk, without blocking.
+    ///
+    /// The write itself lands immediately, so subscribers see it at once; only
+    /// the durability is awaited.
+    pub fn set_durable_async(&self, value: TValue) -> ReactiveFieldResult<crate::store::Commit> {
+        self.set(value)?;
+
+        Ok(match &self.store_sub {
+            Some(sub) => crate::store::durable::commit_branch_async(&sub.store, self.path.clone()),
+            None => crate::store::durable::already_durable(),
+        })
+    }
+
     pub fn intercept<F>(&self, callback: F) -> InterceptDisposer
     where
         F: Fn(Change<TValue>) -> Option<Change<TValue>> + Send + Sync + 'static,

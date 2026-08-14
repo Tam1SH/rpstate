@@ -2,6 +2,7 @@ pub mod backend;
 pub mod builder;
 pub mod config;
 pub mod default;
+pub mod durable;
 mod error;
 pub mod kv;
 pub mod meta;
@@ -12,6 +13,7 @@ mod traits;
 mod types;
 pub mod util;
 
+pub use durable::Commit;
 pub use error::{StorageError, StorageResult};
 pub use kv::Kv;
 pub use primitives_factory::*;
