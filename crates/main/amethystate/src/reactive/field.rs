@@ -228,8 +228,8 @@ where
         self.set(value)?;
 
         Ok(match &self.store_sub {
-            Some(sub) => crate::store::durable::commit_branch_async(&sub.store, self.path.clone()),
-            None => crate::store::durable::already_durable(),
+            Some(sub) => sub.store.flush_async(),
+            None => crate::store::durable::Commit::already_durable(),
         })
     }
 

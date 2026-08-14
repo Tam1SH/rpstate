@@ -85,6 +85,12 @@ pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
     /// (such as `json`, `toml`) will serialize and rewrite the entire file.
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()>;
 
+    /// Commits without blocking; the future resolves once a flush has landed.
+    ///
+    /// Waiters ride on the flush the store was going to do anyway, so several
+    /// of them cost one commit rather than one each.
+    fn flush_async(&self) -> crate::store::durable::Commit;
+
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool>;
 
     /// Reactive values addressed by path, without declaring a struct. See [`Kv`].

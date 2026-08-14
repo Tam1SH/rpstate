@@ -82,6 +82,9 @@ impl Store for JsonStore {
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
         self.0.flush_prefix(prefix)
     }
+    fn flush_async(&self) -> crate::store::durable::Commit {
+        self.0.flush_async()
+    }
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
         self.0.is_initialized(namespace)
     }

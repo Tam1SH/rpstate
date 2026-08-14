@@ -6,8 +6,16 @@ use std::thread;
 use std::time::Duration;
 use tracing::debug;
 
+/// Why the thread was woken: `Schedule` restarts the quiet period, `Now`
+/// cuts it short for a caller that is waiting on the commit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Trigger {
+    Schedule,
+    Now,
+}
+
 pub struct Debouncer {
-    tx: Option<mpsc::Sender<()>>,
+    tx: Option<mpsc::Sender<Trigger>>,
     handle: Option<thread::JoinHandle<()>>,
     guard: Arc<Mutex<()>>,
     #[cfg(test)]
@@ -19,7 +27,7 @@ impl Debouncer {
     where
         F: FnMut() + Send + 'static,
     {
-        let (tx, rx) = mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel::<Trigger>();
         let guard = Arc::new(Mutex::new(()));
         let dead = Arc::new((Mutex::new(false), Condvar::new()));
         let guard_inner = guard.clone();
@@ -32,10 +40,17 @@ impl Debouncer {
             let _notify = DeadNotifier(dead_inner);
             let _hold = guard_inner.lock().unwrap();
 
-            while rx.recv().is_ok() {
+            while let Ok(first) = rx.recv() {
+                if first == Trigger::Now {
+                    debug!("debouncer trigger: asked for immediately");
+                    op();
+                    continue;
+                }
+
                 loop {
                     match rx.recv_timeout(interval) {
-                        Ok(()) => continue,
+                        Ok(Trigger::Schedule) => continue,
+                        Ok(Trigger::Now) => break,
                         Err(RecvTimeoutError::Timeout) => break,
                         Err(RecvTimeoutError::Disconnected) => return,
                     }
@@ -58,11 +73,20 @@ impl Debouncer {
     }
 
     pub fn schedule(&self) {
+        self.send(Trigger::Schedule);
+    }
+
+    /// Runs the operation without waiting out the quiet period.
+    pub fn flush_now(&self) {
+        self.send(Trigger::Now);
+    }
+
+    fn send(&self, trigger: Trigger) {
         if self.guard.is_poisoned() {
             panic!("debouncer is poisoned");
         }
         if let Some(ref tx) = self.tx
-            && let Err(e) = tx.send(())
+            && let Err(e) = tx.send(trigger)
         {
             panic!("failed to schedule debounced operation: channel closed ({e})");
         }

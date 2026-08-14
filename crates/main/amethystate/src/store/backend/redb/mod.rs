@@ -48,6 +48,7 @@ struct RedbStoreInner {
     db: Arc<Database>,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
+    commits: Arc<crate::store::durable::CommitSignal>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -96,6 +97,7 @@ impl RedbStoreInner {
         txn.commit().map_err(RedbStoreError::from)?;
 
         utils::clear_committed(&mut self.pending.lock(), &changes);
+        self.commits.finished(true);
         Ok(())
     }
 
@@ -159,10 +161,12 @@ impl RedbStore {
 
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
         let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
+        let commits = Arc::new(crate::store::durable::CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
 
         let db_save = db.clone();
         let pending_save = pending.clone();
+        let commits_save = commits.clone();
 
         let write_lock = Arc::new(Mutex::new(()));
         let write_lock_save = write_lock.clone();
@@ -211,12 +215,14 @@ impl RedbStore {
             if success {
                 utils::clear_committed(&mut pending_save.lock(), &changes);
             }
+            commits_save.finished(success);
         });
 
         let inner = Arc::new(RedbStoreInner {
             db,
             pending,
             initialized,
+            commits,
             debouncer: Arc::new(debouncer),
             subscriptions,
             next_sub_id: Arc::new(AtomicU64::new(1)),
@@ -544,6 +550,12 @@ impl Store for RedbStore {
 
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
         self.inner.flush_prefix(prefix)
+    }
+
+    fn flush_async(&self) -> crate::store::durable::Commit {
+        let commit = crate::store::durable::Commit::awaiting(self.inner.commits.clone());
+        self.inner.debouncer.flush_now();
+        commit
     }
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {

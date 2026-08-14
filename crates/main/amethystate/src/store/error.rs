@@ -17,6 +17,9 @@ pub enum StorageError {
 
     #[error(transparent)]
     Migration(#[from] MigrationError),
+
+    #[error("the flush this commit was waiting on did not complete")]
+    CommitFailed,
 }
 
 pub type StorageResult<T> = std::result::Result<T, StorageError>;

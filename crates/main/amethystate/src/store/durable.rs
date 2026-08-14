@@ -1,60 +1,100 @@
-use crate::StorageResult;
-use crate::reactive::local::Wake;
-use crate::store::traits::Store;
+use crate::store::error::{StorageError, StorageResult};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::{Context, Poll, Waker};
 
-/// Resolves once the branch it was asked about is on disk.
+/// Announces that a flush finished, to whoever is waiting on one.
 ///
-/// The flush runs on its own thread rather than through the debouncer, which
-/// only ever fires on its timer: a caller asking for durability wants it now,
-/// not within the next interval. No executor is involved, so this stays usable
-/// under any runtime.
+/// Waiters key off a counter rather than their own write, so several of them
+/// riding on one flush all resolve from the same commit instead of forcing a
+/// commit each.
+#[derive(Default)]
+pub struct CommitSignal {
+    generation: AtomicU64,
+    last_failed: AtomicBool,
+    waiters: Mutex<Vec<Waker>>,
+}
+
+impl CommitSignal {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Called after every flush attempt, successful or not. A failed attempt
+    /// still has to wake its waiters, or they would hang on a store that never
+    /// manages to write.
+    pub(crate) fn finished(&self, ok: bool) {
+        self.last_failed.store(!ok, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+
+        let woken = std::mem::take(&mut *self.waiters.lock().unwrap());
+        for waker in woken {
+            waker.wake();
+        }
+    }
+
+    fn failed(&self) -> bool {
+        self.last_failed.load(Ordering::Acquire)
+    }
+
+    fn park(&self, cx: &Context<'_>) {
+        self.waiters.lock().unwrap().push(cx.waker().clone());
+    }
+}
+
+/// Resolves once a flush has completed since it was created.
 pub struct Commit {
-    wake: Arc<Wake>,
-    slot: Arc<Mutex<Option<StorageResult<()>>>>,
+    signal: Option<Arc<CommitSignal>>,
+    start: u64,
+}
+
+impl Commit {
+    pub(crate) fn awaiting(signal: Arc<CommitSignal>) -> Self {
+        let start = signal.generation();
+        Self {
+            signal: Some(signal),
+            start,
+        }
+    }
+
+    /// For a value no store stands behind: there is nothing to commit.
+    pub(crate) fn already_durable() -> Self {
+        Self {
+            signal: None,
+            start: 0,
+        }
+    }
 }
 
 impl Future for Commit {
     type Output = StorageResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(result) = self.slot.lock().unwrap().take() {
-            return Poll::Ready(result);
+        let Some(signal) = self.signal.as_ref() else {
+            return Poll::Ready(Ok(()));
+        };
+
+        if signal.generation() > self.start {
+            return Poll::Ready(outcome(signal));
         }
 
-        self.wake.park(cx);
+        signal.park(cx);
 
-        match self.slot.lock().unwrap().take() {
-            Some(result) => Poll::Ready(result),
-            None => Poll::Pending,
+        if signal.generation() > self.start {
+            Poll::Ready(outcome(signal))
+        } else {
+            Poll::Pending
         }
     }
 }
 
-/// Writes the branch at `path` to disk, off the calling thread.
-pub(crate) fn commit_branch_async<S: Store>(store: &S, path: Arc<str>) -> Commit {
-    let wake = Arc::new(Wake::default());
-    let slot = Arc::new(Mutex::new(None));
-
-    let store = store.clone();
-    let wake_worker = Arc::clone(&wake);
-    let slot_worker = Arc::clone(&slot);
-
-    std::thread::spawn(move || {
-        let result = store.flush_prefix(&path);
-        *slot_worker.lock().unwrap() = Some(result);
-        wake_worker.signal();
-    });
-
-    Commit { wake, slot }
-}
-
-/// A branch that was never backed by a store is already as durable as it gets.
-pub(crate) fn already_durable() -> Commit {
-    let wake = Arc::new(Wake::default());
-    let slot = Arc::new(Mutex::new(Some(Ok(()))));
-    Commit { wake, slot }
+fn outcome(signal: &CommitSignal) -> StorageResult<()> {
+    if signal.failed() {
+        Err(StorageError::CommitFailed)
+    } else {
+        Ok(())
+    }
 }

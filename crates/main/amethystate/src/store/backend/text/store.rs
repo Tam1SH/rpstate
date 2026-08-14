@@ -136,6 +136,7 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     pub(crate) subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     pub(crate) next_id: Arc<AtomicU64>,
     pub(crate) debouncer: Arc<Debouncer>,
+    pub(crate) commits: Arc<crate::store::durable::CommitSignal>,
     /// Bumped by every mutation, and compared against `persisted` to tell
     /// whether the document differs from the file. A flag could not do this:
     /// checking it and acting on it are two steps, and a write landing in
@@ -234,16 +235,25 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let files_debounce = files.clone();
         let writes_debounce = writes.clone();
         let persisted_debounce = persisted.clone();
+        let commits = Arc::new(crate::store::durable::CommitSignal::default());
+        let commits_save = commits.clone();
+
         let debouncer = Debouncer::new(config.save_debounce, move || {
             // Read the generation before serializing. A write landing during
             // the persist bumps it past this, so it stays pending instead of
             // being marked saved without having been written.
             let saving = writes_debounce.load(Ordering::Acquire);
-            if let Err(e) = files_debounce.persist() {
-                warn!("store persist failed: {e:#}");
-            } else {
-                persisted_debounce.store(saving, Ordering::Release);
-            }
+            let landed = match files_debounce.persist() {
+                Err(e) => {
+                    warn!("store persist failed: {e:#}");
+                    false
+                }
+                Ok(()) => {
+                    persisted_debounce.store(saving, Ordering::Release);
+                    true
+                }
+            };
+            commits_save.finished(landed);
         });
 
         let files_watch = files.clone();
@@ -304,6 +314,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             subscriptions,
             next_id: Arc::new(AtomicU64::new(1)),
             debouncer: Arc::new(debouncer),
+            commits,
             writes,
             persisted,
             _watch_debouncer: watch_debouncer,
@@ -624,6 +635,12 @@ impl<D: TextDocument + Send + 'static> Store for TextStore<D> {
 
     fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
         self.inner.decode(bytes)
+    }
+
+    fn flush_async(&self) -> crate::store::durable::Commit {
+        let commit = crate::store::durable::Commit::awaiting(self.inner.commits.clone());
+        self.inner.debouncer.flush_now();
+        commit
     }
 
     fn flush_prefix(&self, _prefix: &str) -> StorageResult<()> {

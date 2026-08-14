@@ -182,6 +182,9 @@ impl From<RpError> for ConfyError {
                     }
                 }
             }
+            RpError::CommitFailed => {
+                panic!("Unexpected commit failure during confy emulation");
+            }
             #[cfg(feature = "redb")]
             RpError::RedbStore(redb_err) => {
                 panic!(

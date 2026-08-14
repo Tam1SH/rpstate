@@ -30,6 +30,7 @@ struct SqliteStoreInner {
     conn: Arc<Mutex<Connection>>,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
+    commits: Arc<crate::store::durable::CommitSignal>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -88,6 +89,7 @@ impl SqliteStoreInner {
         }
 
         utils::clear_committed(&mut self.pending.lock(), &changes);
+        self.commits.finished(true);
         Ok(())
     }
 
@@ -385,6 +387,12 @@ impl SqliteStoreInner {
         }
     }
 
+    fn flush_async(&self) -> crate::store::durable::Commit {
+        let commit = crate::store::durable::Commit::awaiting(self.commits.clone());
+        self.debouncer.flush_now();
+        commit
+    }
+
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
         if self.initialized.lock().contains(namespace) {
             return Ok(true);
@@ -466,11 +474,13 @@ impl SqliteStore {
         let conn_arc = Arc::new(Mutex::new(conn));
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
         let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
+        let commits = Arc::new(crate::store::durable::CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
         let next_sub_id = Arc::new(AtomicU64::new(1));
         let write_lock = Arc::new(Mutex::new(()));
 
         let conn_save = conn_arc.clone();
+        let commits_save = commits.clone();
         let pending_save = pending.clone();
         let write_lock_save = write_lock.clone();
 
@@ -539,9 +549,11 @@ impl SqliteStore {
                         }
                     }
                 }
-                if success && txn.commit().is_ok() {
+                let landed = success && txn.commit().is_ok();
+                if landed {
                     utils::clear_committed(&mut pending_save.lock(), &changes);
                 }
+                commits_save.finished(landed);
             }
         });
 
@@ -549,6 +561,7 @@ impl SqliteStore {
             conn: conn_arc,
             pending,
             initialized,
+            commits,
             debouncer: Arc::new(debouncer),
             subscriptions,
             next_sub_id,
@@ -645,6 +658,10 @@ impl Store for SqliteStore {
 
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
         self.inner.flush_prefix(prefix)
+    }
+
+    fn flush_async(&self) -> crate::store::durable::Commit {
+        self.inner.flush_async()
     }
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
