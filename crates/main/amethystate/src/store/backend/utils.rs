@@ -1,14 +1,9 @@
 use crate::SubscriptionKind;
-#[cfg(any(feature = "redb", feature = "sqlite"))]
-use crate::store::util::debouncer::Debouncer;
 use crate::store::{StoreEvent, SubscriptionEntry};
-#[cfg(any(feature = "redb", feature = "sqlite"))]
-use crate::{StorageResult, StoreOp};
-#[cfg(any(feature = "redb", feature = "sqlite"))]
-use parking_lot::Mutex;
 use parking_lot::RwLock;
+
 #[cfg(any(feature = "redb", feature = "sqlite"))]
-use std::sync::Arc;
+pub use buffered::*;
 
 pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent) {
     let callbacks = {
@@ -37,74 +32,106 @@ fn matches_kind(kind: &SubscriptionKind, path: &str) -> bool {
     }
 }
 
-#[cfg(any(feature = "sqlite", feature = "redb"))]
-pub type Pending = std::collections::HashMap<std::sync::Arc<str>, Option<Vec<u8>>>;
+#[cfg(any(feature = "redb", feature = "sqlite"))]
+mod buffered {
+    use super::{SubscriptionEntry, emit_events};
+    use crate::store::StoreEvent;
+    use crate::store::util::debouncer::Debouncer;
+    use crate::{StorageResult, StoreOp};
+    use parking_lot::{Mutex, RwLock};
+    use std::sync::Arc;
 
-/// Everything buffered under `prefix`, left in place.
-///
-/// The buffer is only cleared once the write has actually landed, by
-/// [`clear_committed`]. Taking entries out first meant any error below lost
-/// them: not on disk, not in memory, and nothing left to retry.
-#[cfg(any(feature = "sqlite", feature = "redb"))]
-pub fn pending_prefix(pending: &Pending, prefix: &str) -> Pending {
-    if pending.is_empty() {
-        return Pending::new();
+    /// One buffered write, waiting for the next flush.
+    ///
+    /// `MarkInit` targets the metadata table rather than the data one; keeping it
+    /// in the same buffer is what makes a namespace flag land in the same
+    /// transaction as the values it vouches for.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum PendingOp {
+        Set(Vec<u8>),
+        Delete,
+        MarkInit,
     }
 
-    if prefix.is_empty() {
-        return pending.clone();
-    }
+    impl PendingOp {
+        /// The value a reader should see, or `None` where the key is gone.
+        pub fn value(&self) -> Option<&[u8]> {
+            match self {
+                Self::Set(bytes) => Some(bytes),
+                Self::Delete | Self::MarkInit => None,
+            }
+        }
 
-    let prefix_dot = format!("{}.", prefix);
-    pending
-        .iter()
-        .filter(|(k, _)| k.starts_with(&prefix_dot) || &***k == prefix)
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
-}
-
-/// Drops from the buffer exactly what was committed.
-///
-/// A key whose buffered value has changed since is a write that landed while
-/// the commit was in flight; it is not on disk, so it stays for the next one.
-#[cfg(any(feature = "sqlite", feature = "redb"))]
-pub fn clear_committed(pending: &mut Pending, committed: &Pending) {
-    for (key, value) in committed {
-        if pending.get(key) == Some(value) {
-            pending.remove(key);
+        pub fn is_data(&self) -> bool {
+            matches!(self, Self::Set(_) | Self::Delete)
         }
     }
-}
 
-#[cfg(any(feature = "redb", feature = "sqlite"))]
-pub fn set_raw_pending(
-    pending: &Mutex<std::collections::HashMap<Arc<str>, Option<Vec<u8>>>>,
-    subscriptions: &RwLock<Vec<SubscriptionEntry>>,
-    debouncer: &Debouncer,
-    key: &str,
-    value: &[u8],
-) -> StorageResult<()> {
-    let key_arc: Arc<str> = Arc::from(key);
-    let old_bytes = {
-        let lock = pending.lock();
-        lock.get(&*key_arc).cloned().flatten()
-    };
-    {
-        let mut lock = pending.lock();
-        lock.insert(key_arc.clone(), Some(value.to_vec()));
+    pub type Pending = std::collections::HashMap<std::sync::Arc<str>, PendingOp>;
+
+    /// Everything buffered under `prefix`, left in place.
+    ///
+    /// The buffer is only cleared once the write has actually landed, by
+    /// [`clear_committed`]. Taking entries out first meant any error below lost
+    /// them: not on disk, not in memory, and nothing left to retry.
+    pub fn pending_prefix(pending: &Pending, prefix: &str) -> Pending {
+        if pending.is_empty() {
+            return Pending::new();
+        }
+
+        if prefix.is_empty() {
+            return pending.clone();
+        }
+
+        let prefix_dot = format!("{}.", prefix);
+        pending
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix_dot) || &***k == prefix)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
-    emit_events(
-        subscriptions,
-        StoreEvent {
-            path: key_arc,
-            op: StoreOp::Set,
-            old: old_bytes,
-            new: Some(value.to_vec()),
-            source: None,
-        },
-    );
-    debouncer.schedule();
-    Ok(())
+
+    /// Drops from the buffer exactly what was committed.
+    ///
+    /// A key whose buffered value has changed since is a write that landed while
+    /// the commit was in flight; it is not on disk, so it stays for the next one.
+    pub fn clear_committed(pending: &mut Pending, committed: &Pending) {
+        for (key, value) in committed {
+            if pending.get(key) == Some(value) {
+                pending.remove(key);
+            }
+        }
+    }
+
+    pub fn set_raw_pending(
+        pending: &Mutex<Pending>,
+        subscriptions: &RwLock<Vec<SubscriptionEntry>>,
+        debouncer: &Debouncer,
+        key: &str,
+        value: &[u8],
+    ) -> StorageResult<()> {
+        let key_arc: Arc<str> = Arc::from(key);
+        let old_bytes = {
+            let lock = pending.lock();
+            lock.get(&*key_arc).and_then(|op| op.value().map(Vec::from))
+        };
+        {
+            let mut lock = pending.lock();
+            lock.insert(key_arc.clone(), PendingOp::Set(value.to_vec()));
+        }
+        emit_events(
+            subscriptions,
+            StoreEvent {
+                path: key_arc,
+                op: StoreOp::Set,
+                old: old_bytes,
+                new: Some(value.to_vec()),
+                source: None,
+            },
+        );
+        debouncer.schedule();
+        Ok(())
+    }
 }
 
 #[cfg(all(test, any(feature = "redb", feature = "sqlite")))]
@@ -115,7 +142,15 @@ mod tests {
     fn buffer(entries: &[(&str, Option<&[u8]>)]) -> Pending {
         entries
             .iter()
-            .map(|(k, v)| (Arc::from(*k), v.map(|b| b.to_vec())))
+            .map(|(k, v)| {
+                (
+                    Arc::from(*k),
+                    match v {
+                        Some(b) => PendingOp::Set(b.to_vec()),
+                        None => PendingOp::Delete,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -174,7 +209,7 @@ mod tests {
 
         assert_eq!(
             pending.get("a.x"),
-            Some(&Some(b"new".to_vec())),
+            Some(&PendingOp::Set(b"new".to_vec())),
             "the newer write is not on disk, so dropping it would lose it"
         );
     }

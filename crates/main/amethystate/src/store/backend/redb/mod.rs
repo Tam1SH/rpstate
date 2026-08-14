@@ -7,7 +7,7 @@ use migration::RedbMigrationBackend;
 use redb::{Database, ReadableDatabase};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
 use crate::store::config::StoreConfig;
@@ -46,7 +46,8 @@ thread_local! {
 
 struct RedbStoreInner {
     db: Arc<Database>,
-    pending: Arc<Mutex<HashMap<Arc<str>, Option<Vec<u8>>>>>,
+    pending: Arc<Mutex<utils::Pending>>,
+    initialized: Arc<Mutex<HashSet<Arc<str>>>>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -71,19 +72,23 @@ impl RedbStoreInner {
             let lock = self.pending.lock();
             utils::pending_prefix(&lock, prefix)
         };
-
         let txn = self.db.begin_write().map_err(RedbStoreError::from)?;
         {
             let mut table = txn.open_table(TABLE_DATA).map_err(RedbStoreError::from)?;
-            for (path, opt_bytes) in &changes {
-                match opt_bytes {
-                    Some(b) => {
+            let mut meta = txn.open_table(TABLE_META).map_err(RedbStoreError::from)?;
+            for (path, op) in &changes {
+                match op {
+                    utils::PendingOp::Set(b) => {
                         table
                             .insert(&**path, &b[..])
                             .map_err(RedbStoreError::from)?;
                     }
-                    None => {
+                    utils::PendingOp::Delete => {
                         table.remove(&**path).map_err(RedbStoreError::from)?;
+                    }
+                    utils::PendingOp::MarkInit => {
+                        meta.insert(format!("__init::{path}").as_str(), &[][..])
+                            .map_err(RedbStoreError::from)?;
                     }
                 }
             }
@@ -152,7 +157,8 @@ impl RedbStore {
         }
         write_txn.commit().map_err(RedbStoreError::from)?;
 
-        let pending = Arc::new(Mutex::new(HashMap::<Arc<str>, Option<Vec<u8>>>::new()));
+        let pending = Arc::new(Mutex::new(utils::Pending::new()));
+        let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
 
         let db_save = db.clone();
@@ -166,11 +172,11 @@ impl RedbStore {
 
             let changes = {
                 let lock = pending_save.lock();
-                if lock.is_empty() {
-                    return;
-                }
                 lock.clone()
             };
+            if changes.is_empty() {
+                return;
+            }
 
             let success = (|| -> Option<bool> {
                 #[cfg(test)]
@@ -181,13 +187,18 @@ impl RedbStore {
                 let txn = db_save.begin_write().ok()?;
                 {
                     let mut table = txn.open_table(TABLE_DATA).ok()?;
-                    for (path, opt_bytes) in &changes {
-                        match opt_bytes {
-                            Some(b) => {
+                    let mut meta = txn.open_table(TABLE_META).ok()?;
+                    for (path, op) in &changes {
+                        match op {
+                            utils::PendingOp::Set(b) => {
                                 table.insert(&**path, &b[..]).ok()?;
                             }
-                            None => {
+                            utils::PendingOp::Delete => {
                                 table.remove(&**path).ok()?;
+                            }
+                            utils::PendingOp::MarkInit => {
+                                meta.insert(format!("__init::{path}").as_str(), &[][..])
+                                    .ok()?;
                             }
                         }
                     }
@@ -205,6 +216,7 @@ impl RedbStore {
         let inner = Arc::new(RedbStoreInner {
             db,
             pending,
+            initialized,
             debouncer: Arc::new(debouncer),
             subscriptions,
             next_sub_id: Arc::new(AtomicU64::new(1)),
@@ -227,8 +239,8 @@ impl RedbStore {
     /// otherwise the committed one. Reading the buffer alone reported no old
     /// value once a flush had emptied it, though the key was on disk.
     fn committed_or_buffered(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
-        if let Some(buffered) = self.inner.pending.lock().get(path) {
-            return Ok(buffered.clone());
+        if let Some(op) = self.inner.pending.lock().get(path).filter(|o| o.is_data()) {
+            return Ok(op.value().map(Vec::from));
         }
 
         let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
@@ -276,8 +288,8 @@ impl Store for RedbStore {
     fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
         {
             let lock = self.inner.pending.lock();
-            if let Some(opt_bytes) = lock.get(path) {
-                return match opt_bytes {
+            if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
+                return match op.value() {
                     Some(bytes) => Ok(Some(
                         rmp_serde::from_slice(bytes)
                             .map_err(CodecError::from)
@@ -342,7 +354,7 @@ impl Store for RedbStore {
 
         {
             let mut lock = self.inner.pending.lock();
-            lock.insert(path.clone(), Some(bytes.clone()));
+            lock.insert(path.clone(), utils::PendingOp::Set(bytes.clone()));
         }
 
         utils::emit_events(
@@ -386,9 +398,9 @@ impl Store for RedbStore {
         let mut pending_map = HashMap::new();
         {
             let lock = self.inner.pending.lock();
-            for (k, opt_v) in lock.iter() {
+            for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
                 if k.starts_with(prefix) {
-                    pending_map.insert(k.to_string(), opt_v.clone());
+                    pending_map.insert(k.to_string(), op.value().map(Vec::from));
                 }
             }
         }
@@ -428,11 +440,11 @@ impl Store for RedbStore {
 
         {
             let lock = self.inner.pending.lock();
-            for (k, opt_v) in lock.iter() {
+            for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
                 if !k.starts_with(prefix) {
                     continue;
                 }
-                match opt_v {
+                match op.value() {
                     Some(_) if !keys.iter().any(|existing| existing == &**k) => {
                         keys.push(k.to_string())
                     }
@@ -454,7 +466,7 @@ impl Store for RedbStore {
 
         {
             let mut lock = self.inner.pending.lock();
-            lock.insert(path_arc.clone(), None);
+            lock.insert(path_arc.clone(), utils::PendingOp::Delete);
         }
 
         utils::emit_events(
@@ -480,7 +492,7 @@ impl Store for RedbStore {
         {
             let mut lock = self.inner.pending.lock();
             for (path, _) in keys {
-                lock.insert(Arc::from(path.as_str()), None);
+                lock.insert(Arc::from(path.as_str()), utils::PendingOp::Delete);
             }
         }
 
@@ -535,29 +547,39 @@ impl Store for RedbStore {
     }
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
+        if self.inner.initialized.lock().contains(namespace) {
+            return Ok(true);
+        }
+
         let key = format!("__init::{namespace}");
         let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
         let table = read_txn
             .open_table(TABLE_META)
             .map_err(RedbStoreError::from)?;
-        Ok(table
+        let found = table
             .get(key.as_str())
             .map_err(RedbStoreError::from)?
-            .is_some())
+            .is_some();
+
+        if found {
+            self.inner.initialized.lock().insert(Arc::from(namespace));
+        }
+        Ok(found)
     }
 
     fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        let key = format!("__init::{namespace}");
-        let write_txn = self.inner.db.begin_write().map_err(RedbStoreError::from)?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_META)
-                .map_err(RedbStoreError::from)?;
-            table
-                .insert(key.as_str(), &[][..])
-                .map_err(RedbStoreError::from)?;
+        if self.inner.initialized.lock().contains(namespace) {
+            return Ok(());
         }
-        write_txn.commit().map_err(RedbStoreError::from)?;
+
+        self.inner.check_debouncer();
+        let key: Arc<str> = Arc::from(namespace);
+        self.inner
+            .pending
+            .lock()
+            .insert(Arc::clone(&key), utils::PendingOp::MarkInit);
+        self.inner.initialized.lock().insert(key);
+        self.inner.debouncer.schedule();
         Ok(())
     }
 }
