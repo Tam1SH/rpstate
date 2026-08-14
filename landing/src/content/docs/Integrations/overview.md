@@ -26,24 +26,17 @@ Reactive mode is required.
 - [Slint](./slint)
 - [GTK 4](./gtk4)
 
-### Signal-based (Dioxus, Leptos, Yew)
+### Signal / hook-based (Dioxus, Leptos, Yew, windows-reactor)
 
-These frameworks use fine-grained signals: components subscribe to sources and re-render only when their inputs change. The integration pattern is the same across all three — subscribe to a `Field<T>` and write the new value into a framework signal. Components read the signal, not the `Field<T>` directly.
+These frameworks re-render from state a component subscribes to, and only when that state changes. The integration pattern is the same throughout — subscribe to a `Field<T>` and write the new value into whatever the framework re-renders from. Components read that, not the `Field<T>` directly.
 
-The signals differ in ownership model: Dioxus and Leptos use arena-allocated `Copy` handles; Yew uses RC-based handles that are passed by clone. The bridge looks slightly different in each case but the concept is identical.
+What differs is where the value is kept and who owns it. Dioxus and Leptos use arena-allocated `Copy` signal handles; Yew uses RC-based ones passed by clone; windows-reactor keeps hook state on a single UI thread and hands out a marshaller for getting work onto it, which removes the channel and the background task the others need. The bridge looks different in each case, the concept does not.
 
 **Reactive mode** is required.
 
 - [Dioxus](./dioxus)
 - [Leptos](./leptos)
 - [Yew](./yew)
-
-### Hooks with a UI-thread marshaller (windows-reactor)
-
-Reactor re-renders components from hook state on a single UI thread, and the host exposes a marshaller for getting work onto that thread. That covers the whole problem the other bridges solve by hand: a subscription writes the new value into a hook slot through the marshaller, and the framework re-renders. No channel, no background task, no arena.
-
-**Reactive mode** is required.
-
 - [windows-reactor](./windows-reactor)
 
 ### Webview bridge (Tauri)
