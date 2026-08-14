@@ -6,6 +6,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 
+/// A view over a primitive whose writes return only once they are on disk.
+///
+/// Every write the primitive offers has a form here, so the guarantee never
+/// costs a second call the caller could be preempted between - or forget.
+pub struct Durable<'a, T>(pub(crate) &'a T);
+
 /// Announces that a flush finished, to whoever is waiting on one.
 ///
 /// Waiters key off a counter rather than their own write, so several of them

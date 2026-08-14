@@ -250,6 +250,14 @@ where
         }
     }
 
+    /// The same writes, each returning only once the change is on disk.
+    ///
+    /// `set` and friends leave the change in the write buffer, where a crash
+    /// loses it; these pay a commit to close that window.
+    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
+        crate::store::Durable(self)
+    }
+
     pub fn set(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         let backend = StoreBackend::new(self.store.clone());
         Ok(amethystate_core::map_set_existing(
@@ -319,6 +327,99 @@ impl<K, V, S: Store, M: AccessMode> PartialEq for ReactiveMap<K, V, S, M> {
 }
 
 impl<K, V, S: Store, M: AccessMode> Eq for ReactiveMap<K, V, S, M> {}
+
+impl<K, V, S> crate::store::Durable<'_, ReactiveMap<K, V, S, WritableMode>>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+    S: Store,
+{
+    fn commit(&self) -> ReactiveMapResult<()> {
+        self.0.store.flush_prefix(&self.0.path)?;
+        Ok(())
+    }
+
+    async fn commit_async(&self) -> ReactiveMapResult<()> {
+        self.0.store.flush_async().await?;
+        Ok(())
+    }
+
+    pub fn set(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.set(key, value)?;
+        self.commit()
+    }
+
+    pub async fn set_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.set(key, value)?;
+        self.commit_async().await
+    }
+
+    pub fn set_or_create(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.set_or_create(key, value)?;
+        self.commit()
+    }
+
+    pub async fn set_or_create_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.set_or_create(key, value)?;
+        self.commit_async().await
+    }
+
+    pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
+        let previous = self.0.remove(key)?;
+        self.commit()?;
+        Ok(previous)
+    }
+
+    pub async fn remove_async(&self, key: K) -> ReactiveMapResult<Option<V>> {
+        let previous = self.0.remove(key)?;
+        self.commit_async().await?;
+        Ok(previous)
+    }
+
+    pub fn clear(&self) -> ReactiveMapResult<()> {
+        self.0.clear()?;
+        self.commit()
+    }
+
+    pub async fn clear_async(&self) -> ReactiveMapResult<()> {
+        self.0.clear()?;
+        self.commit_async().await
+    }
+
+    pub fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    where
+        F: FnOnce(V) -> V,
+    {
+        let value = self.0.update(key, f)?;
+        self.commit()?;
+        Ok(value)
+    }
+
+    pub async fn update_async<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    where
+        F: FnOnce(V) -> V,
+    {
+        let value = self.0.update(key, f)?;
+        self.commit_async().await?;
+        Ok(value)
+    }
+
+    pub fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
+    where
+        F: FnOnce(&mut V),
+    {
+        self.0.modify(key, f)?;
+        self.commit()
+    }
+
+    pub async fn modify_async<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
+    where
+        F: FnOnce(&mut V),
+    {
+        self.0.modify(key, f)?;
+        self.commit_async().await
+    }
+}
 
 #[cfg(test)]
 mod tests {

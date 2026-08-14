@@ -1,4 +1,4 @@
-use amethystate::{StoreBuilder, amethystate};
+use amethystate::{ReactiveMap, StoreBuilder, amethystate};
 use amethystate_core::test_utils::unique_path;
 
 #[amethystate(prefix = "durable")]
@@ -8,6 +8,12 @@ pub struct Settings {
 
     #[amestate(default = 0)]
     pub retries: u8,
+}
+
+#[amethystate(prefix = "durable_map")]
+pub struct Mapped {
+    #[amestate(default = { "cpu": 70 })]
+    pub limits: ReactiveMap<String, u8>,
 }
 
 #[amethystate(prefix = "durable_vol")]
@@ -23,8 +29,8 @@ fn a_volatile_field_is_already_durable() {
         .unwrap();
     let state = Volatile::new_with(&store).unwrap();
 
-    state.scratch().set_durable(3).unwrap();
-    futures::executor::block_on(state.scratch().set_durable_async(4)).unwrap();
+    state.scratch().durable().set(3).unwrap();
+    futures::executor::block_on(state.scratch().durable().set_async(4)).unwrap();
 
     assert_eq!(
         state.scratch().get(),
@@ -42,7 +48,8 @@ fn nothing_happens_until_the_future_is_polled() {
     let state = Settings::new_with(&store).unwrap();
 
     let retries = state.retries();
-    let commit = retries.set_durable_async(7);
+    let durable = retries.durable();
+    let commit = durable.set_async(7);
 
     assert_eq!(
         state.retries().get(),
@@ -77,10 +84,10 @@ mod on_disk {
             "a plain set leaves it buffered, and the debouncer is a minute away"
         );
 
-        state.port().set_durable(9090).unwrap();
+        state.port().durable().set(9090).unwrap();
         assert!(
             contents(&path).contains("\"port\": 9090"),
-            "set_durable committed before returning, with no close and no timer"
+            "the durable write committed before returning, with no close and no timer"
         );
     }
 
@@ -90,12 +97,63 @@ mod on_disk {
         let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
         let state = Settings::new_with(&store).unwrap();
 
-        futures::executor::block_on(state.retries().set_durable_async(7)).unwrap();
+        futures::executor::block_on(state.retries().durable().set_async(7)).unwrap();
 
         let found = contents(&path);
         assert!(
             found.contains("\"retries\": 7"),
             "resolving the future means the value is on disk, got: {found}"
+        );
+    }
+
+    #[test]
+    fn a_durable_map_write_commits_before_it_returns() {
+        let path = unique_path("durable_map_set");
+        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let state = Mapped::new_with(&store).unwrap();
+
+        state
+            .limits()
+            .durable()
+            .set_or_create("gpu".into(), &90)
+            .unwrap();
+
+        assert!(
+            contents(&path).contains("\"gpu\": 90"),
+            "on disk without waiting for the debouncer"
+        );
+    }
+
+    #[test]
+    fn a_durable_removal_commits_before_it_returns() {
+        let path = unique_path("durable_map_remove");
+        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let state = Mapped::new_with(&store).unwrap();
+
+        state
+            .limits()
+            .durable()
+            .set_or_create("gpu".into(), &90)
+            .unwrap();
+        state.limits().durable().remove("gpu".into()).unwrap();
+
+        assert!(
+            !contents(&path).contains("gpu"),
+            "the removal is on disk too, not just the write that preceded it"
+        );
+    }
+
+    #[test]
+    fn a_durable_kv_write_commits_before_it_returns() {
+        let path = unique_path("durable_kv");
+        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let kv = amethystate::Store::kv(&store);
+
+        kv.durable().set("scratch.answer", &42u8).unwrap();
+
+        assert!(
+            contents(&path).contains("42"),
+            "Kv writes commit the same way"
         );
     }
 }

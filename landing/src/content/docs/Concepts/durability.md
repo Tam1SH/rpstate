@@ -58,13 +58,15 @@ store.save_now()?;
 // Now it is on disk.
 ```
 
-On a field, `set_durable()` does both in one call, and `set_durable_async()` does it without blocking. Being a future, the latter does nothing until awaited — the write included, so reach for plain `set()` when the value should land now:
+Fields, maps and `Kv` each offer a `durable()` view: the same writes, every one of them returning only once the change is on disk. That keeps the guarantee to a single call, with no window between writing and committing for you to be preempted in — or to forget:
 
 ```rust
-state.port().set_durable(8080)?;
+state.port().durable().set(8080)?;
+state.limits().durable().remove("cpu")?;
 
-// or, off the UI thread:
-state.port().set_durable_async(8080).await?;
+// or, off the UI thread - lazy like any future, so nothing
+// happens, the write included, until it is awaited:
+state.port().durable().set_async(8080).await?;
 ```
 
 Reach for these at points where losing the last few hundred milliseconds actually matters — before launching an external process, after a step the user cannot repeat. Calling them on every write gives back the cheap writes you came for.

@@ -13,7 +13,7 @@ mod traits;
 mod types;
 pub mod util;
 
-pub use durable::Commit;
+pub use durable::{Commit, Durable};
 pub use error::{StorageError, StorageResult};
 pub use kv::Kv;
 pub use primitives_factory::*;

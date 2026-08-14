@@ -42,6 +42,11 @@ impl<S: Store> Kv<S> {
         self.store.get(path)
     }
 
+    /// The same writes, each returning only once the change is on disk.
+    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
+        crate::store::Durable(self)
+    }
+
     pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
         self.guard(path)?;
         self.store
@@ -138,5 +143,31 @@ impl<S: Store> Kv<S> {
             }),
             _ => Ok(()),
         }
+    }
+}
+
+impl<S: Store> crate::store::Durable<'_, Kv<S>> {
+    pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
+        self.0.set(path, value)?;
+        self.0.store.flush_prefix(path)?;
+        Ok(())
+    }
+
+    pub async fn set_async<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
+        self.0.set(path, value)?;
+        self.0.store.flush_async().await?;
+        Ok(())
+    }
+
+    pub fn remove(&self, path: &str) -> WriteResult<()> {
+        self.0.remove(path)?;
+        self.0.store.flush_prefix(path)?;
+        Ok(())
+    }
+
+    pub async fn remove_async(&self, path: &str) -> WriteResult<()> {
+        self.0.remove(path)?;
+        self.0.store.flush_async().await?;
+        Ok(())
     }
 }

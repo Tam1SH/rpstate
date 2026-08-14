@@ -207,30 +207,12 @@ where
         Ok(())
     }
 
-    /// Writes the value and returns once it is on disk.
+    /// The same writes, each returning only once the value is on disk.
     ///
-    /// Blocks for the length of one commit. `set` alone leaves the value in
-    /// the write buffer, where a crash loses it.
-    pub fn set_durable(&self, value: TValue) -> ReactiveFieldResult<()> {
-        self.set(value)?;
-
-        if let Some(sub) = &self.store_sub {
-            sub.store.flush_prefix(&self.path)?;
-        }
-        Ok(())
-    }
-
-    /// Writes the value and resolves once it is on disk, without blocking.
-    ///
-    /// Lazy like any other future: nothing runs until it is awaited, the write
-    /// included. Use [`set`](Self::set) where the value should land now.
-    pub async fn set_durable_async(&self, value: TValue) -> ReactiveFieldResult<()> {
-        self.set(value)?;
-
-        if let Some(sub) = &self.store_sub {
-            sub.store.flush_async().await?;
-        }
-        Ok(())
+    /// `set` and friends leave the value in the write buffer, where a crash
+    /// loses it; these pay a commit to close that window.
+    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
+        crate::store::Durable(self)
     }
 
     pub fn intercept<F>(&self, callback: F) -> InterceptDisposer
@@ -287,6 +269,70 @@ where
         F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
     {
         self.subscribe(callback)
+    }
+}
+
+impl<TValue, S> crate::store::Durable<'_, Field<TValue, S, WritableMode>>
+where
+    TValue: FieldValue,
+    S: Store,
+{
+    fn commit(&self) -> ReactiveFieldResult<()> {
+        if let Some(sub) = &self.0.store_sub {
+            sub.store.flush_prefix(&self.0.path)?;
+        }
+        Ok(())
+    }
+
+    async fn commit_async(&self) -> ReactiveFieldResult<()> {
+        if let Some(sub) = &self.0.store_sub {
+            sub.store.flush_async().await?;
+        }
+        Ok(())
+    }
+
+    pub fn set(&self, value: TValue) -> ReactiveFieldResult<()> {
+        self.0.set(value)?;
+        self.commit()
+    }
+
+    pub async fn set_async(&self, value: TValue) -> ReactiveFieldResult<()> {
+        self.0.set(value)?;
+        self.commit_async().await
+    }
+
+    pub fn update<F>(&self, f: F) -> ReactiveFieldResult<TValue>
+    where
+        F: FnOnce(TValue) -> TValue,
+    {
+        let value = self.0.update(f)?;
+        self.commit()?;
+        Ok(value)
+    }
+
+    pub async fn update_async<F>(&self, f: F) -> ReactiveFieldResult<TValue>
+    where
+        F: FnOnce(TValue) -> TValue,
+    {
+        let value = self.0.update(f)?;
+        self.commit_async().await?;
+        Ok(value)
+    }
+
+    pub fn modify<F>(&self, f: F) -> ReactiveFieldResult<()>
+    where
+        F: FnOnce(&mut TValue),
+    {
+        self.0.modify(f)?;
+        self.commit()
+    }
+
+    pub async fn modify_async<F>(&self, f: F) -> ReactiveFieldResult<()>
+    where
+        F: FnOnce(&mut TValue),
+    {
+        self.0.modify(f)?;
+        self.commit_async().await
     }
 }
 
