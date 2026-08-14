@@ -1,6 +1,8 @@
 use amethystate_macros::amethystate;
 pub struct NetworkState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub port: ::amethystate::Field<u16, S, ::amethystate::WritableMode>,
     pub host: ::amethystate::Field<String, S, ::amethystate::WritableMode>,
 }
@@ -42,12 +44,12 @@ impl<S: ::amethystate::Store> NetworkState<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             port: ::amethystate::store::field::<
                 Self,
                 u16,
@@ -82,7 +84,10 @@ impl<S: ::amethystate::Store> NetworkState<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             port: self.port.fork_with_id(new_id),
             host: self.host.fork_with_id(new_id),
         }
@@ -527,7 +532,9 @@ impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for NetworkState<S
     }
 }
 pub struct UiState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub proxy_port: ::amethystate::Field<u16, S, ::amethystate::ReadOnlyMode>,
     pub proxy_host: ::amethystate::Field<String, S, ::amethystate::ReadOnlyMode>,
 }
@@ -569,12 +576,12 @@ impl<S: ::amethystate::Store> UiState<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             proxy_port: {
                 const _: fn() = || {
                     trait TypeCheck<T> {}
@@ -673,7 +680,10 @@ impl<S: ::amethystate::Store> UiState<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             proxy_port: self.proxy_port.fork_with_id(new_id),
             proxy_host: self.proxy_host.fork_with_id(new_id),
         }

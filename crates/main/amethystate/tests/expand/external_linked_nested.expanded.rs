@@ -1,6 +1,8 @@
 use amethystate_macros::amethystate;
 pub struct ConnectionPool<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub max_connections: ::amethystate::Field<u32, S, ::amethystate::WritableMode>,
     pub timeout_secs: ::amethystate::Field<u32, S, ::amethystate::WritableMode>,
 }
@@ -40,12 +42,12 @@ impl<S: ::amethystate::Store> ConnectionPool<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             max_connections: ::amethystate::store::field_with_path(
                 store,
                 ::std::sync::Arc::from(
@@ -98,7 +100,10 @@ impl<S: ::amethystate::Store> ConnectionPool<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             max_connections: self.max_connections.fork_with_id(new_id),
             timeout_secs: self.timeout_secs.fork_with_id(new_id),
         }
@@ -559,7 +564,9 @@ const _: () = {
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
 pub struct DatabaseState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub pool: ::std::sync::Arc<ConnectionPool<S>>,
 }
 #[automatically_derived]
@@ -595,12 +602,12 @@ impl<S: ::amethystate::Store> DatabaseState<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             pool: {
                 let prefix = <Self as ::amethystate::StateScope>::PREFIX;
                 let path = if prefix == "." {
@@ -631,7 +638,10 @@ impl<S: ::amethystate::Store> DatabaseState<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             pool: ::std::sync::Arc::new(self.pool.fork_with_id(new_id)),
         }
     }
@@ -1025,7 +1035,9 @@ impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for DatabaseState<
     }
 }
 pub struct InspectorState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub db_pool_view: ::std::sync::Arc<ConnectionPool<S>>,
 }
 #[automatically_derived]
@@ -1063,12 +1075,12 @@ impl<S: ::amethystate::Store> InspectorState<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             db_pool_view: {
                 const _: fn() = || {
                     fn assert_node_type<T>(_: ::amethystate::ReadOnly<T>) {}
@@ -1118,7 +1130,10 @@ impl<S: ::amethystate::Store> InspectorState<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             db_pool_view: ::std::sync::Arc::new(self.db_pool_view.fork_with_id(new_id)),
         }
     }

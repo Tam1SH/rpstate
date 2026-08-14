@@ -1,6 +1,8 @@
 use amethystate_macros::amethystate;
 pub struct DatabaseConfig<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub host: ::amethystate::Field<String, S, ::amethystate::WritableMode>,
 }
 #[automatically_derived]
@@ -34,12 +36,12 @@ impl<S: ::amethystate::Store> DatabaseConfig<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             host: ::amethystate::store::field_with_path(
                 store,
                 ::std::sync::Arc::from(
@@ -67,7 +69,10 @@ impl<S: ::amethystate::Store> DatabaseConfig<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             host: self.host.fork_with_id(new_id),
         }
     }
@@ -446,7 +451,9 @@ const _: () = {
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
 pub struct SystemSettings<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub db: ::std::sync::Arc<DatabaseConfig<S>>,
 }
 #[automatically_derived]
@@ -482,12 +489,12 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             db: {
                 let prefix = <Self as ::amethystate::StateScope>::PREFIX;
                 let path = if prefix == "." {
@@ -518,7 +525,10 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             db: ::std::sync::Arc::new(self.db.fork_with_id(new_id)),
         }
     }

@@ -227,7 +227,10 @@ pub fn generate_code(
             #[doc(hidden)]
             pub fn fork_with_id(&self, new_id: #crate_name::uuid::Uuid) -> Self {
                 Self {
-                    __amethystate_instance_id: new_id,
+                    __amethystate_instance_id: #crate_name::observability::InstanceGuard::new(
+                        new_id,
+                        ::std::any::type_name::<Self>(),
+                    ),
                     #(#fork_fields,)*
                 }
             }
@@ -252,7 +255,7 @@ pub fn generate_code(
             quote! {
                 #[derive(Clone)]
                 #(#attrs)* #vis struct #name<S: #crate_name::Store = #crate_name::DefaultStore> {
-                    __amethystate_instance_id: #crate_name::uuid::Uuid,
+                    __amethystate_instance_id: ::std::sync::Arc<#crate_name::observability::InstanceGuard>,
                     #(#struct_fields,)*
                 }
 

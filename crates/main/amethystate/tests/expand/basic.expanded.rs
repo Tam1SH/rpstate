@@ -1,6 +1,8 @@
 use amethystate_macros::amethystate;
 pub struct AppConfig<S: ::amethystate::Store = ::amethystate::DefaultStore> {
-    __amethystate_instance_id: ::amethystate::uuid::Uuid,
+    __amethystate_instance_id: ::std::sync::Arc<
+        ::amethystate::observability::InstanceGuard,
+    >,
     pub port: ::amethystate::Field<u16, S, ::amethystate::WritableMode>,
     pub session_id: ::amethystate::Field<String, S, ::amethystate::WritableMode>,
 }
@@ -42,12 +44,12 @@ impl<S: ::amethystate::Store> AppConfig<S> {
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::Store;
-        ::amethystate::observability::register_instance(
+        let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
         );
         let result = Self {
-            __amethystate_instance_id: instance_id,
+            __amethystate_instance_id: __amethystate_guard,
             port: ::amethystate::store::field::<
                 Self,
                 u16,
@@ -95,7 +97,10 @@ impl<S: ::amethystate::Store> AppConfig<S> {
     #[doc(hidden)]
     pub fn fork_with_id(&self, new_id: ::amethystate::uuid::Uuid) -> Self {
         Self {
-            __amethystate_instance_id: new_id,
+            __amethystate_instance_id: ::amethystate::observability::InstanceGuard::new(
+                new_id,
+                ::std::any::type_name::<Self>(),
+            ),
             port: self.port.fork_with_id(new_id),
             session_id: self.session_id.fork_with_id(new_id),
         }

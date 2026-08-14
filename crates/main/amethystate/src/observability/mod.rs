@@ -31,6 +31,29 @@ pub fn register_instance(id: Uuid, struct_type_name: &'static str) {
     }
 }
 
+/// Keeps an instance in the registry for as long as any clone of the state
+/// struct is alive, and drops it from the registry when the last one goes.
+pub struct InstanceGuard {
+    id: Uuid,
+}
+
+impl InstanceGuard {
+    pub fn new(id: Uuid, struct_type_name: &'static str) -> Arc<Self> {
+        register_instance(id, struct_type_name);
+        Arc::new(Self { id })
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+}
+
+impl Drop for InstanceGuard {
+    fn drop(&mut self) {
+        deregister_instance(self.id);
+    }
+}
+
 pub fn deregister_instance(id: Uuid) {
     if let Ok(mut map) = INSTANCE_REGISTRY.write() {
         map.remove(&id);
