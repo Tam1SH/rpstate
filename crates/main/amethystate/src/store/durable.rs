@@ -47,25 +47,14 @@ impl CommitSignal {
 
 /// Resolves once a flush has completed since it was created.
 pub struct Commit {
-    signal: Option<Arc<CommitSignal>>,
+    signal: Arc<CommitSignal>,
     start: u64,
 }
 
 impl Commit {
     pub(crate) fn awaiting(signal: Arc<CommitSignal>) -> Self {
         let start = signal.generation();
-        Self {
-            signal: Some(signal),
-            start,
-        }
-    }
-
-    /// For a value no store stands behind: there is nothing to commit.
-    pub(crate) fn already_durable() -> Self {
-        Self {
-            signal: None,
-            start: 0,
-        }
+        Self { signal, start }
     }
 }
 
@@ -73,9 +62,7 @@ impl Future for Commit {
     type Output = StorageResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Some(signal) = self.signal.as_ref() else {
-            return Poll::Ready(Ok(()));
-        };
+        let signal = &self.signal;
 
         if signal.generation() > self.start {
             return Poll::Ready(outcome(signal));

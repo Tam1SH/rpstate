@@ -222,15 +222,15 @@ where
 
     /// Writes the value and resolves once it is on disk, without blocking.
     ///
-    /// The write itself lands immediately, so subscribers see it at once; only
-    /// the durability is awaited.
-    pub fn set_durable_async(&self, value: TValue) -> ReactiveFieldResult<crate::store::Commit> {
+    /// Lazy like any other future: nothing runs until it is awaited, the write
+    /// included. Use [`set`](Self::set) where the value should land now.
+    pub async fn set_durable_async(&self, value: TValue) -> ReactiveFieldResult<()> {
         self.set(value)?;
 
-        Ok(match &self.store_sub {
-            Some(sub) => sub.store.flush_async(),
-            None => crate::store::durable::Commit::already_durable(),
-        })
+        if let Some(sub) = &self.store_sub {
+            sub.store.flush_async().await?;
+        }
+        Ok(())
     }
 
     pub fn intercept<F>(&self, callback: F) -> InterceptDisposer

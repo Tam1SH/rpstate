@@ -24,7 +24,7 @@ fn a_volatile_field_is_already_durable() {
     let state = Volatile::new_with(&store).unwrap();
 
     state.scratch().set_durable(3).unwrap();
-    futures::executor::block_on(state.scratch().set_durable_async(4).unwrap()).unwrap();
+    futures::executor::block_on(state.scratch().set_durable_async(4)).unwrap();
 
     assert_eq!(
         state.scratch().get(),
@@ -34,22 +34,24 @@ fn a_volatile_field_is_already_durable() {
 }
 
 #[test]
-fn the_async_write_lands_without_awaiting_it() {
+fn nothing_happens_until_the_future_is_polled() {
     let store = StoreBuilder::new(unique_path("durable_visible"))
         .debounce(60_000)
         .build()
         .unwrap();
     let state = Settings::new_with(&store).unwrap();
 
-    let commit = state.retries().set_durable_async(7).unwrap();
+    let retries = state.retries();
+    let commit = retries.set_durable_async(7);
 
     assert_eq!(
         state.retries().get(),
-        7,
-        "the value is live before the commit is awaited"
+        0,
+        "an async fn runs nothing until it is polled, the write included"
     );
 
     futures::executor::block_on(commit).unwrap();
+    assert_eq!(state.retries().get(), 7);
 }
 
 /// Only a text backend lets the file be read while the store still holds it,
@@ -88,8 +90,7 @@ mod on_disk {
         let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
         let state = Settings::new_with(&store).unwrap();
 
-        let commit = state.retries().set_durable_async(7).unwrap();
-        futures::executor::block_on(commit).unwrap();
+        futures::executor::block_on(state.retries().set_durable_async(7)).unwrap();
 
         let found = contents(&path);
         assert!(
