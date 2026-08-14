@@ -6,6 +6,14 @@ use uuid::Uuid;
 
 type Writer<T> = Arc<dyn Fn(T) -> WriteResult<()> + Send + Sync>;
 
+/// How a cell commits, for the primitives that have somewhere to commit to.
+/// A cell holding a value in memory has none, and needs none.
+#[derive(Clone)]
+pub(crate) struct CellCommit {
+    pub(crate) now: Arc<dyn Fn() -> WriteResult<()> + Send + Sync>,
+    pub(crate) start: Arc<dyn Fn() -> crate::store::Commit + Send + Sync>,
+}
+
 /// A reactive value you can read, write and subscribe to, with the primitive
 /// behind it erased - along with its type parameters, so fields, map entries
 /// and in-memory values share one type and one collection.
@@ -15,6 +23,7 @@ pub struct ReactiveCell<T> {
     cache: Signal<T>,
     writer: Writer<T>,
     origin: Uuid,
+    commit: Option<CellCommit>,
     _keepalive: Option<Arc<dyn Send + Sync>>,
 }
 
@@ -24,6 +33,7 @@ impl<T> Clone for ReactiveCell<T> {
             cache: self.cache.clone(),
             writer: Arc::clone(&self.writer),
             origin: self.origin,
+            commit: self.commit.clone(),
             _keepalive: self._keepalive.clone(),
         }
     }
@@ -39,12 +49,14 @@ where
         cache: Signal<T>,
         writer: Writer<T>,
         origin: Uuid,
+        commit: Option<CellCommit>,
         keepalive: Option<Arc<dyn Send + Sync>>,
     ) -> Self {
         Self {
             cache,
             writer,
             origin,
+            commit,
             _keepalive: keepalive,
         }
     }
@@ -61,12 +73,21 @@ where
                 Ok(())
             }),
             origin: Uuid::new_v4(),
+            commit: None,
             _keepalive: None,
         }
     }
 
     pub fn get(&self) -> T {
         self.cache.get()
+    }
+
+    /// The same writes, each returning only once the value is on disk.
+    ///
+    /// A cell over a value held in memory has nothing to commit to, and its
+    /// writes here behave as the plain ones do.
+    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
+        crate::store::Durable(self)
     }
 
     /// Fails if the write is refused - by an interceptor, or by the store.
@@ -164,6 +185,70 @@ impl<T: std::fmt::Debug + Clone + Send + Sync + 'static> std::fmt::Debug for Rea
         f.debug_struct("ReactiveCell")
             .field("value", &self.get())
             .finish_non_exhaustive()
+    }
+}
+
+impl<T> crate::store::Durable<'_, ReactiveCell<T>>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn commit(&self) -> WriteResult<()> {
+        match &self.0.commit {
+            Some(commit) => (commit.now)(),
+            None => Ok(()),
+        }
+    }
+
+    async fn commit_async(&self) -> WriteResult<()> {
+        let pending = self.0.commit.as_ref().map(|commit| (commit.start)());
+        match pending {
+            Some(commit) => Ok(commit.await?),
+            None => Ok(()),
+        }
+    }
+
+    pub fn set(&self, value: T) -> WriteResult<()> {
+        self.0.set(value)?;
+        self.commit()
+    }
+
+    pub async fn set_async(&self, value: T) -> WriteResult<()> {
+        self.0.set(value)?;
+        self.commit_async().await
+    }
+
+    pub fn update<F>(&self, f: F) -> WriteResult<T>
+    where
+        F: FnOnce(T) -> T,
+    {
+        let value = self.0.update(f)?;
+        self.commit()?;
+        Ok(value)
+    }
+
+    pub async fn update_async<F>(&self, f: F) -> WriteResult<T>
+    where
+        F: FnOnce(T) -> T,
+    {
+        let value = self.0.update(f)?;
+        self.commit_async().await?;
+        Ok(value)
+    }
+
+    pub fn modify<F>(&self, f: F) -> WriteResult<()>
+    where
+        F: FnOnce(&mut T),
+    {
+        self.0.modify(f)?;
+        self.commit()
+    }
+
+    pub async fn modify_async<F>(&self, f: F) -> WriteResult<()>
+    where
+        F: FnOnce(&mut T),
+    {
+        self.0.modify(f)?;
+        self.commit_async().await
     }
 }
 

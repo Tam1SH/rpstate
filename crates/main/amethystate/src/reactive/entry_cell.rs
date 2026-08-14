@@ -39,10 +39,19 @@ where
         let map = self.clone();
         let write_key = key;
 
+        let flush_store = self.store.clone();
+        let flush_path = self.path.clone();
+        let start_store = self.store.clone();
+        let commit = crate::reactive::cell::CellCommit {
+            now: Arc::new(move || Ok(flush_store.flush_prefix(&flush_path)?)),
+            start: Arc::new(move || start_store.flush_async()),
+        };
+
         ReactiveCell::from_parts(
             cache,
             Arc::new(move |value: V| Ok(map.set_or_create(write_key.clone(), &value)?)),
             origin,
+            Some(commit),
             Some(Arc::new(read)),
         )
     }

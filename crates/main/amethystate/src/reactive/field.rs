@@ -151,10 +151,22 @@ where
     pub fn cell(&self) -> ReactiveCell<TValue> {
         let me = self.clone();
 
+        let commit = self.store_sub.as_ref().map(|sub| {
+            let flush_store = sub.store.clone();
+            let flush_path = self.path.clone();
+            let start_store = sub.store.clone();
+
+            crate::reactive::cell::CellCommit {
+                now: Arc::new(move || Ok(flush_store.flush_prefix(&flush_path)?)),
+                start: Arc::new(move || start_store.flush_async()),
+            }
+        });
+
         ReactiveCell::from_parts(
             self.core.signal.clone(),
             Arc::new(move |value| me.set(value)),
             self.instance_id,
+            commit,
             None,
         )
     }

@@ -156,4 +156,52 @@ mod on_disk {
             "Kv writes commit the same way"
         );
     }
+
+    #[test]
+    fn a_cell_over_a_field_commits() {
+        let path = unique_path("durable_cell");
+        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let state = Settings::new_with(&store).unwrap();
+
+        let cell = state.port().cell();
+        cell.durable().set(7070).unwrap();
+
+        assert!(
+            contents(&path).contains("\"port\": 7070"),
+            "the erased cell still knows where to commit"
+        );
+    }
+
+    #[test]
+    fn a_cell_over_a_map_entry_commits() {
+        let path = unique_path("durable_entry");
+        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let state = Mapped::new_with(&store).unwrap();
+
+        state
+            .limits()
+            .entry_cell("cpu".into(), 0)
+            .durable()
+            .set(55)
+            .unwrap();
+
+        assert!(
+            contents(&path).contains("\"cpu\": 55"),
+            "map entries commit too"
+        );
+    }
+}
+
+#[test]
+fn an_in_memory_cell_has_nothing_to_commit() {
+    let cell = amethystate::ReactiveCell::new(1u8);
+
+    cell.durable().set(2).unwrap();
+    futures::executor::block_on(cell.durable().set_async(3)).unwrap();
+
+    assert_eq!(
+        cell.get(),
+        3,
+        "the writes still land, there is just no disk"
+    );
 }

@@ -58,7 +58,7 @@ store.save_now()?;
 // Now it is on disk.
 ```
 
-Fields, maps and `Kv` each offer a `durable()` view: the same writes, every one of them returning only once the change is on disk. That keeps the guarantee to a single call, with no window between writing and committing for you to be preempted in — or to forget:
+Fields, maps, cells and `Kv` each offer a `durable()` view: the same writes, every one of them returning only once the change is on disk. That keeps the guarantee to a single call, with no window between writing and committing for you to be preempted in — or to forget:
 
 ```rust
 state.port().durable().set(8080)?;
