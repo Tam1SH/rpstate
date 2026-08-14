@@ -22,6 +22,18 @@ the data's shape.
 `amethystate` is that layer, built once. Fields persist automatically, fire subscriptions on change, and flush to disk
 in the background. Schema versions are explicit, migrations run on startup, and drift is detected and logged.
 
+### Features
+
+- **Struct-defined state** — one attribute, persisted reactive fields with defaults
+- **A reactive layer, not a config file** — subscriptions, derived values via `.pipe()`, interceptors that can refuse a write
+- **Read and write every frame** — writes are buffered and batched, reads answer from memory
+- **Dynamic state stays in the system** — keys unknown at compile time are still reactive and persisted, no escape hatch
+- **Migrations** — explicit versions, run at startup; drift is logged
+- **Three backends, five formats** — `redb`, `sqlite`, and text as `json`/`toml`/`ron`; text files reload on external edits
+- **[Integrations](https://uniproc-dev.github.io/amethystate/integrations/overview)** — Tauri (+TS bindings), Leptos, Dioxus, Yew, GPUI, windows-reactor, egui/iced/ratatui
+- **Tracing** — structured events, each write tagged with its source struct
+- **confy compat** — reads an existing confy config in place
+
 ```rust
 #[amethystate(prefix = "network")]
 pub struct NetworkState {
@@ -47,18 +59,6 @@ fn main() -> amethystate::Result<()> {
     Ok(())
 }
 ```
-
-### Features
-
-- **Struct-defined state** — one attribute, persisted reactive fields with defaults
-- **A reactive layer, not a config file** — subscriptions, derived values via `.pipe()`, interceptors that can refuse a write
-- **Read and write every frame** — writes are buffered and batched, reads answer from memory
-- **Dynamic state stays in the system** — keys unknown at compile time are still reactive and persisted, no escape hatch
-- **Migrations** — explicit versions, run at startup; drift is logged
-- **Three backends, five formats** — `redb`, `sqlite`, and text as `json`/`toml`/`ron`; text files reload on external edits
-- **[Integrations](https://uniproc-dev.github.io/amethystate/integrations/overview)** — Tauri (+TS bindings), Leptos, Dioxus, Yew, GPUI, windows-reactor, egui/iced/ratatui
-- **Tracing** — structured events, each write tagged with its source struct
-- **confy compat** — reads an existing confy config in place
 
 ---
 
