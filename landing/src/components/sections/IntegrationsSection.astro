@@ -47,23 +47,18 @@ const groups = [
         mode: 'Reactive',
         subgroups: [
             {
-                label: 'Signal-based',
+                label: 'Signal / Hook-based',
                 frameworks: [
-                    { id: 'dioxus', label: 'dioxus', logo: 'dioxus-logo.png' },
-                    { id: 'leptos', label: 'leptos', logo: 'leptos-logo.svg'  },
-                    { id: 'yew',    label: 'yew',    logo: 'yew-logo.svg'    },
+                    { id: 'dioxus',  label: 'dioxus',          logo: 'dioxus-logo.png' },
+                    { id: 'leptos',  label: 'leptos',          logo: 'leptos-logo.svg' },
+                    { id: 'yew',     label: 'yew',             logo: 'yew-logo.svg'    },
+                    { id: 'reactor', label: 'windows-reactor'                          },
                 ],
             },
             {
                 label: 'Webview IPC',
                 frameworks: [
                     { id: 'tauri', label: 'tauri', logo: 'tauri-logo.svg' },
-                ],
-            },
-            {
-                label: 'Hooks / UI-thread marshaller',
-                frameworks: [
-                    { id: 'reactor', label: 'windows-reactor' },
                 ],
             },
             {
