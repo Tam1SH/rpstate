@@ -9,6 +9,17 @@ const snippets: Record<string, string> = {
     leptos: `#[component]\nfn Settings(state: Handle<AppSettings>) -> impl IntoView {\n    let (username, set_username) = use_field(state.username);\n    view! {\n        <input prop:value=username on:input=move |e| set_username.set(event_target_value(&e)) />\n    }\n}`,
     yew: `#[function_component(Counter)]\nfn counter(props: &CounterProps) -> Html {\n    let (count, set_count) = use_field(props.state.counter.clone());\n    html! {\n        <button onclick={Callback::from(move |_| set_count.emit(count + 1))}>\n            {format!("count: {count}")}\n        </button>\n    }\n}`,
     tauri: `import { AppSettings } from "./bindings/amethystate";\n\nconst settings = await AppSettings.load();\nconsole.log(settings.username.value);\nsettings.username.value = "Alice";\nawait settings.save();`,
+    reactor: `fn app(cx: &mut RenderCx) -> Element {
+    let state: NetworkState = cx.use_ame_state();
+    let port = cx.use_ame(&state.port());
+
+    let bump = state.port();
+    vstack((
+        text_block(format!("port = {port}")).bold(),
+        button("+1").on_click(move || { let _ = bump.set(port + 1); }),
+    ))
+    .into()
+}`,
     gpui: `impl CounterView {\n    fn new(cx: &mut Context<Self>) -> Self {\n        Self { state: cx.new_amethystate(CounterState::new).unwrap() }\n    }\n}\nfn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {\n    div().child(format!("Count: {}", self.state.read(cx).count().get()))\n}`,
     ratatui: `#[amethystate(prefix = "app", mode = "persistent")]\npub struct TuiSettings {\n    pub username: String,\n    pub theme: String,\n}\n\nlet mut state = TuiSettings::load_with(&store)?;\n\nloop {\n    let username = &state.username;\n    let theme = &state.theme;\n\n    terminal.draw(|f| {\n        let text = vec![\n            Line::from(format!("Username: {username}")),\n            Line::from(format!("Theme:    {theme}")),\n        ];\n        f.render_widget(\n            Paragraph::new(text).block(Block::default().borders(Borders::ALL)),\n            f.area(),\n        );\n    })?;\n}`,
 };
@@ -50,6 +61,12 @@ const groups = [
                 ],
             },
             {
+                label: 'Hooks / UI-thread marshaller',
+                frameworks: [
+                    { id: 'reactor', label: 'windows-reactor' },
+                ],
+            },
+            {
                 label: 'Entity / Observer',
                 frameworks: [
                     { id: 'gpui', label: 'gpui', logo: 'zed-logo.svg' },
@@ -62,7 +79,7 @@ const groups = [
 const langs: Record<string, string> = {
     egui: 'rust', iced: 'rust', dioxus: 'rust',
     leptos: 'rust', yew: 'rust', tauri: 'ts',
-    gpui: 'rust', ratatui: 'rust',
+    gpui: 'rust', ratatui: 'rust', reactor: 'rust',
 };
 
 const allFrameworks = groups.flatMap(g => g.subgroups.flatMap(s => s.frameworks));
@@ -119,7 +136,7 @@ const allFrameworks = groups.flatMap(g => g.subgroups.flatMap(s => s.frameworks)
                                     <div class="int-chips">
                                         {sub.frameworks.map(fw => (
                                                 <button class="int-tab" data-fw={fw.id}>
-                                                    <span class="int-tab-icon"><img src={asset(fw.logo)} /></span>
+                                                    {fw.logo && <span class="int-tab-icon"><img src={asset(fw.logo)} /></span>}
                                                     <span>{fw.label}</span>
                                                 </button>
                                         ))}
