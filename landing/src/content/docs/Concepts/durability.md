@@ -7,11 +7,7 @@ sidebar:
 
 Most storage documentation opens with what it guarantees. This page opens with what it gives up, because that is the part you need in order to decide whether `amethystate` suits what you are building.
 
-A user interface touches its state without restraint. A list re-reads its settings while it lays itself out. A slider writes on every frame you drag it. Nobody writes that code carefully, and nobody should have to. Reading or writing state is touching a value that already lives in memory, and it should cost about that much.
-
-A store that went to disk on each of those touches would make the interface stutter, and you would end up working around your own state layer: caching it by hand, batching writes yourself, dreading the frame where it decides to flush. A persistence library that has to be avoided in the hot path is not doing its job.
-
-So `amethystate` picks a side. The parallel with CAP is loose but honest: faced with the same kind of choice, this library sacrifices consistency to stay readable and writable at frame rate. Consistency here means the agreement between what you read and what is durably stored — and that agreement is exactly what gets traded away. What you read is always the truth about your application's state. It is not always the truth about what is on disk.
+The parallel with CAP is loose but honest: faced with the same kind of choice, this library gives consistency away. Durability is what drags asynchrony — or blocking — into the paths that touch state, and a user interface wants neither. Nobody wants to await a read, and few want to await a write. Consistency here means the agreement between what you read and what is durably stored, and that agreement is what pays for keeping both paths plain synchronous calls. What you read is always the truth about your application's state. It is not always the truth about what is on disk.
 
 Everything below is the shape of that decision: what it buys, what it costs, and where you can buy the guarantee back when you need it.
 
