@@ -606,7 +606,6 @@ pub fn get_configuration_file_path<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::store::StoreExt;
     const EXTENSION: &str = crate::store::builder::default_backend().extension();
 
     use super::*;

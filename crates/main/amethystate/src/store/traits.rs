@@ -54,7 +54,7 @@ pub trait StoreBackend: Send + Sync + 'static {
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool>;
 
-    /// Same, for bytes carried by a [`StoreEvent`].
+    /// Same, for bytes carried by a [`crate::StoreEvent`].
     fn decode_erased(
         &self,
         bytes: &[u8],
@@ -65,7 +65,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     fn delete(&self, path: &str) -> StorageResult<()>;
 
     /// Removes every key under `prefix`, emitting one
-    /// [`StoreOp::DeletePrefix`] instead of a `Delete` per key.
+    /// [`crate::StoreOp::DeletePrefix`] instead of a `Delete` per key.
     fn delete_prefix_with_source(&self, prefix: &str, source: Option<Uuid>) -> StorageResult<()>;
 
     fn delete_prefix(&self, prefix: &str) -> StorageResult<()> {
@@ -167,7 +167,7 @@ pub trait StoreExt: StoreBackend {
 
 impl<S: StoreBackend + ?Sized> StoreExt for S {}
 
-/// Reactive values addressed by path, without declaring a struct. See [`Kv`].
+/// Reactive values addressed by path, without declaring a struct. See [`crate::store::Kv`].
 impl Store {
     pub fn kv(&self) -> crate::store::Kv {
         crate::store::Kv::new(self.clone())
