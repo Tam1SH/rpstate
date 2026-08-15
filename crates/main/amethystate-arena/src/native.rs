@@ -104,9 +104,7 @@ impl Arena {
         M: AccessMode,
         F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
-        self.with_item::<Field<T, M>, _, _>(handle.key, "Field", |field| {
-            field.subscribe(callback)
-        })
+        self.with_item::<Field<T, M>, _, _>(handle.key, "Field", |field| field.subscribe(callback))
     }
     pub fn subscribe_field_with_source<T, M, F>(
         &self,
@@ -176,9 +174,7 @@ impl Arena {
         V: ReactiveMapValue,
         M: AccessMode,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.get(key)
-        })
+        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| map.get(key))
     }
 
     pub fn set_map_entry<K, V>(
@@ -191,11 +187,9 @@ impl Arena {
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(
-            handle.key,
-            "ReactiveMap",
-            |map| map.set_or_create(key, &value),
-        )
+        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
+            map.set_or_create(key, &value)
+        })
     }
 
     pub fn subscribe_map_any<K, V, M, F>(
@@ -294,11 +288,9 @@ impl Arena {
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(
-            handle.key,
-            "ReactiveMap",
-            |map| map.remove(key),
-        )
+        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
+            map.remove(key)
+        })
     }
 
     pub fn clear_map<K, V>(&self, handle: WritableMapHandle<K, V>) -> ReactiveMapResult<()>
@@ -306,11 +298,9 @@ impl Arena {
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(
-            handle.key,
-            "ReactiveMap",
-            |map| map.clear(),
-        )
+        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
+            map.clear()
+        })
     }
 }
 

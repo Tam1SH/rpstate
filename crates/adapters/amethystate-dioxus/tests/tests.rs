@@ -2,7 +2,7 @@
 
 use amethystate::store::field_with_path;
 use amethystate::test_utils::unique_store;
-use amethystate::{Store, MapChange, amethystate, uuid};
+use amethystate::{MapChange, Store, amethystate, uuid};
 use amethystate_arena::{
     DefaultArena, IntoArenaPipeline, PIPELINE_ARENA, PipelineHandle, WritableHandle,
     WritableMapHandle,

@@ -1,5 +1,5 @@
 use amethystate::store::StoreBackend;
-use amethystate::{AmeStateSlice, Store, ReactiveScope};
+use amethystate::{AmeStateSlice, ReactiveScope, Store};
 use futures::StreamExt as _;
 use gpui::{App, AppContext, Entity};
 use std::marker::PhantomData;

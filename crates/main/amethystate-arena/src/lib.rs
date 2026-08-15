@@ -62,7 +62,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Type mismatch for Field")]
     fn test_field_type_mismatch_panic() {
-        use amethystate::{Store, Field, StoreBuilder};
+        use amethystate::{Field, StoreBuilder};
         let temp_dir = unique_temp_dir();
         let store = StoreBuilder::new(&temp_dir).build().unwrap();
         let field: Field<i32, WritableMode> = amethystate::store::field_with_path(

@@ -154,10 +154,8 @@ impl TextDocument for TomlDocument {
                     .unwrap_or(inner)
             }
         };
-        let de: toml_edit::de::ValueDeserializer = rendered
-            .trim()
-            .parse()
-            .map_err(|e: toml_edit::de::Error| {
+        let de: toml_edit::de::ValueDeserializer =
+            rendered.trim().parse().map_err(|e: toml_edit::de::Error| {
                 TextStoreError::Codec(CodecError::Toml(e.to_string()))
             })?;
         let mut erased = <dyn erased_serde::Deserializer>::erase(de);

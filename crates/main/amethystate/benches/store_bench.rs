@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 
-use amethystate::{Store, StoreBackend, StoreBuilder};
+use amethystate::{Store, StoreBuilder};
 use serde::Serialize;
 use std::hint::black_box;
 

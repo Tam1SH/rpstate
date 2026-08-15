@@ -31,7 +31,8 @@ pub async fn amethystate_get_prefix(
     store: State<'_, PluginState>,
     prefix: String,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
-    let raw = amethystate::StoreBackend::scan_prefix(&store.store, &prefix).map_err(|e| e.to_string())?;
+    let raw =
+        amethystate::StoreBackend::scan_prefix(&store.store, &prefix).map_err(|e| e.to_string())?;
 
     let mut map = HashMap::new();
     for (path, bytes) in raw {

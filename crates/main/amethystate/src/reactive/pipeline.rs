@@ -3,9 +3,8 @@ pub use amethystate_core::primitives::pipeline::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WritableMode;
     use crate::reactive::Field;
-    use crate::store::StoreExt;
-    use crate::{Store, WritableMode};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 

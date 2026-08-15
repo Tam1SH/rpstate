@@ -136,7 +136,6 @@ impl LocalScope {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::StoreExt;
     use super::*;
     use crate::ReactiveCell;
     use std::cell::RefCell;

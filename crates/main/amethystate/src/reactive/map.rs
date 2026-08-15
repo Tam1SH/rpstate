@@ -417,14 +417,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::store::StoreExt;
     struct TestScope;
     impl crate::StateScope for TestScope {
         const PREFIX: &'static str = "test";
     }
 
     use super::*;
-    use Store;
 
     use crate::test_utils::unique_store;
     use amethystate_core::WritableMode;

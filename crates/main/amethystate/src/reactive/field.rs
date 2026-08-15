@@ -345,10 +345,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::StoreExt;
+    use crate::SubscriptionKind;
     use crate::store::{StateScope, StoreBackend};
     use crate::test_utils::unique_store;
-    use crate::{Store, SubscriptionKind};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tracing_test::traced_test;
