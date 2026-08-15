@@ -13,7 +13,7 @@ pub struct UiState {
 }
 
 fn main() {
-    let dummy_field: amethystate::Field<u16, amethystate::DefaultStore, amethystate::ReadOnlyMode> =
+    let dummy_field: amethystate::Field<u16, amethystate::ReadOnlyMode> =
         unsafe { std::mem::zeroed() };
     dummy_field.set(9090);
 }

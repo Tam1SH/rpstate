@@ -13,7 +13,7 @@ impl ReactiveBackend for LeptosBackend {
     type ReadSignal<T: Send + Sync + 'static> = ReadSignal<T>;
 
     #[cfg(not(target_arch = "wasm32"))]
-    type Storage = DefaultStore;
+    type Storage = Store;
 
     #[cfg(target_arch = "wasm32")]
     type Storage = AmeState::tauri::TauriBackend;
@@ -36,7 +36,7 @@ pub type MapSignal<K, V> = amethystate_arena::MapSignal<LeptosBackend, K, V>;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[component]
-pub fn AmeStateProvider(store: DefaultStore, children: Children) -> impl IntoView {
+pub fn AmeStateProvider(store: Store, children: Children) -> impl IntoView {
     provide_context(DefaultArena::new());
     provide_context(store);
 

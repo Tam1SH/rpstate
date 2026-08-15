@@ -3,7 +3,7 @@ use crate::migration::set::MigrationSet;
 use crate::store::error::StorageResult;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::{CodecFormat, StoreCallback, SubscriptionId};
-use crate::{MigrationReport, SubscriptionKind};
+use crate::{MigrationReport, Store, SubscriptionKind};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -25,28 +25,40 @@ pub trait MigrationBackendAdapter {
     fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()>;
 }
 
-pub trait SchemaAwareStore: Store {
+pub trait SchemaAwareStore: StoreBackend {
     fn run_migrations(&self, mset: MigrationSet) -> StorageResult<MigrationReport>;
 }
 
-pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>>;
+pub trait StoreBackend: Send + Sync + 'static {
+    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>>;
 
-    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()>;
-    fn set_owned<T: Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
-        self.set(&path, value)
-    }
-    fn set_with_source<T: Serialize>(
+    fn set_erased(
         &self,
         path: &str,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<Uuid>,
     ) -> StorageResult<()>;
-    fn set_owned_with_source<T: Serialize>(
+
+    fn set_owned_erased(
         &self,
         path: Arc<str>,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<Uuid>,
+    ) -> StorageResult<()>;
+
+    /// Runs `f` against a deserializer positioned at `path`, in the backend's
+    /// own format. `Ok(false)` means the key is absent and `f` never ran.
+    fn get_erased(
+        &self,
+        path: &str,
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<bool>;
+
+    /// Same, for bytes carried by a [`StoreEvent`].
+    fn decode_erased(
+        &self,
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()>;
 
     fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()>;
@@ -75,8 +87,6 @@ pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId;
     fn unsubscribe(&self, id: SubscriptionId);
 
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T>;
-
     /// Flushes pending in-memory modifications under the specified prefix to disk.
     ///
     /// # Note
@@ -92,10 +102,74 @@ pub trait Store: Eq + Clone + Sized + Send + Sync + 'static {
     fn flush_async(&self) -> crate::store::durable::Commit;
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool>;
+    fn mark_initialized(&self, namespace: &str) -> StorageResult<()>;
+}
 
-    /// Reactive values addressed by path, without declaring a struct. See [`Kv`].
-    fn kv(&self) -> crate::store::Kv<Self> {
+/// The typed surface over [`StoreBackend`]. Blanket-implemented, including for
+/// `dyn StoreBackend`, so a call site never has to know which it holds.
+pub trait StoreExt: StoreBackend {
+    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
+        let mut out = None;
+        let found = self.get_erased(path, &mut |d| {
+            out = Some(erased_serde::deserialize::<T>(d).map_err(crate::codec::CodecError::from)?);
+            Ok(())
+        })?;
+        Ok(if found { out } else { None })
+    }
+
+    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
+        self.set_erased(path, &value, None)
+    }
+
+    fn set_owned<T: Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
+        self.set_owned_erased(path, &value, None)
+    }
+
+    fn set_with_source<T: Serialize>(
+        &self,
+        path: &str,
+        value: &T,
+        source: Option<Uuid>,
+    ) -> StorageResult<()> {
+        self.set_erased(path, &value, source)
+    }
+
+    fn set_owned_with_source<T: Serialize>(
+        &self,
+        path: Arc<str>,
+        value: &T,
+        source: Option<Uuid>,
+    ) -> StorageResult<()> {
+        self.set_owned_erased(path, &value, source)
+    }
+
+    /// Decode failures are not errors here: corrupted bytes or a changed type
+    /// yield `T::default()` with a warning, which is what the field would read
+    /// on the next startup anyway.
+    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
+        let mut out = None;
+        let res = self.decode_erased(bytes, &mut |d| {
+            out = Some(erased_serde::deserialize::<T>(d).map_err(crate::codec::CodecError::from)?);
+            Ok(())
+        });
+        match res {
+            Ok(()) => Ok(out.unwrap_or_default()),
+            Err(e) => {
+                tracing::warn!(
+                    target: "amethystate",
+                    "Failed to decode field. Data is corrupted or type changed.                     Using Default value. Error: {e}"
+                );
+                Ok(T::default())
+            }
+        }
+    }
+}
+
+impl<S: StoreBackend + ?Sized> StoreExt for S {}
+
+/// Reactive values addressed by path, without declaring a struct. See [`Kv`].
+impl Store {
+    pub fn kv(&self) -> crate::store::Kv {
         crate::store::Kv::new(self.clone())
     }
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()>;
 }

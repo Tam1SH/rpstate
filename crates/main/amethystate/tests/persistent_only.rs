@@ -1,5 +1,5 @@
+use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::{Store, amethystate};
 use amethystate_core::test_utils::unique_path;
 
 #[amethystate(prefix = "network", mode = "both")]

@@ -6,8 +6,8 @@ pub trait StateScope {
     const PREFIX: &'static str;
 }
 
-pub trait AmeStateSlice<S: Store>: Sized {
-    fn load_slice(store: &S) -> StorageResult<Self>;
+pub trait AmeStateSlice: Sized {
+    fn load_slice(store: &Store) -> StorageResult<Self>;
 
     fn subscribe_all<F>(&self, callback: F) -> ReactiveScope
     where

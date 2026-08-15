@@ -184,8 +184,8 @@ pub fn generate_code(
         };
 
         quote! {
-            impl<S: #crate_name::Store> #crate_name::AmeStateSlice<S> for #name<S> {
-                fn load_slice(store: &S) -> #crate_name::StorageResult<Self> {
+            impl #crate_name::AmeStateSlice for #name {
+                fn load_slice(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
                     #load_fn
                 }
 
@@ -198,7 +198,7 @@ pub fn generate_code(
 
     let global_new_impl = if is_root {
         quote! {
-            impl #name<#crate_name::DefaultStore> {
+            impl #name {
                 pub fn new() -> #crate_name::StorageResult<Self> {
                     let store = #crate_name::global_store();
                     Self::new_with(&store)
@@ -241,36 +241,51 @@ pub fn generate_code(
 
     // Bound per field, so a field type that cannot be printed leaves the struct
     // without Debug instead of failing to compile.
-    let debug_bounds = entries
-        .iter()
-        .map(|e| accessors::field_type(&crate_name, e));
-
-    let debug_fields = entries.iter().map(|e| {
+    // Autoref specialisation: a field whose type is Debug prints itself, one
+    // that is not prints a placeholder. Without it the bound would be fully
+    // concrete and rustc would demand Debug from every field type.
+    let debug_fields_auto = entries.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        quote! { .field(stringify!(#fname), &self.#fname) }
+        quote! { .field(stringify!(#fname), (&__AmeW(&self.#fname)).__ame()) }
     });
 
     match rp_mode {
         RpMode::Reactive | RpMode::Both => {
             quote! {
                 #[derive(Clone)]
-                #(#attrs)* #vis struct #name<S: #crate_name::Store = #crate_name::DefaultStore> {
+                #(#attrs)* #vis struct #name {
                     __amethystate_instance_id: ::std::sync::Arc<#crate_name::observability::InstanceGuard>,
                     #(#struct_fields,)*
                 }
 
-                impl<S: #crate_name::Store> ::std::fmt::Debug for #name<S>
-                where
-                    #(#debug_bounds: ::std::fmt::Debug,)*
-                {
+                impl ::std::fmt::Debug for #name {
                     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                        struct __AmeOpaque;
+                        impl ::std::fmt::Debug for __AmeOpaque {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                f.write_str("<opaque>")
+                            }
+                        }
+                        struct __AmeW<'a, T>(&'a T);
+                        trait __AmeViaDebug {
+                            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+                        }
+                        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+                            fn __ame(&self) -> &dyn ::std::fmt::Debug { self.0 }
+                        }
+                        trait __AmeViaFallback {
+                            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+                        }
+                        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+                            fn __ame(&self) -> &dyn ::std::fmt::Debug { &__AmeOpaque }
+                        }
                         f.debug_struct(stringify!(#name))
-                            #(#debug_fields)*
+                            #(#debug_fields_auto)*
                             .finish()
                     }
                 }
                 #scope
-                impl<S: #crate_name::Store> #name<S> {
+                impl #name {
                     #constructor #(#schema_methods)* #(#methods)*
                     #fork_impl
                     #inherent_subs

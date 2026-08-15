@@ -28,6 +28,7 @@ test-utils = ["amethystate-core/test-utils"]
 
 
 [dependencies]
+erased-serde.workspace = true
 rusqlite = { version = "0.39.0", optional = true }
 sonic-rs = { version = "0.5.8", optional = true }
 uuid = { workspace = true, features = ["v4"] }

@@ -219,15 +219,14 @@ impl<W, D> Watch<W, D> {
     }
 }
 
-impl<K, V, S, M, D> Watch<crate::ReactiveMap<K, V, S, M>, D>
+impl<K, V, M, D> Watch<crate::ReactiveMap<K, V, M>, D>
 where
     K: crate::ReactiveMapKey,
     V: crate::ReactiveMapValue,
-    S: crate::store::Store,
     M: crate::AccessMode,
 {
     /// Narrows to one key instead of every change in the map.
-    pub fn key(self, key: K) -> Watch<crate::reactive::map::KeyOf<K, V, S, M>, D> {
+    pub fn key(self, key: K) -> Watch<crate::reactive::map::KeyOf<K, V, M>, D> {
         Watch {
             source: crate::reactive::map::KeyOf::new(self.source, key),
             external: self.external,

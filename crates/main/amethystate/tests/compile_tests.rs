@@ -1,4 +1,13 @@
-#[cfg(backend = "redb")]
+// The .stderr goldens quote rustc diagnostics, and rustc qualifies type
+// paths differently once other backends are in scope. They are checked in
+// the canonical single-backend config only.
+#[cfg(all(
+    feature = "redb",
+    not(feature = "json"),
+    not(feature = "toml"),
+    not(feature = "ron"),
+    not(feature = "sqlite")
+))]
 #[test]
 fn test_macro_expansion_compilation() {
     let t = trybuild::TestCases::new();

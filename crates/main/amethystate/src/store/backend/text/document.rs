@@ -16,9 +16,15 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     fn serialize(&self) -> StorageResult<String>;
     fn empty() -> Self;
     fn deserialize_node<T: DeserializeOwned>(node: &Self::Node) -> StorageResult<T>;
-    fn serialize_node<T: Serialize>(value: &T) -> StorageResult<Self::Node>;
+    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node>;
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>>;
     fn bytes_to_node(bytes: &[u8]) -> StorageResult<Self::Node>;
+
+    /// Runs `f` against a deserializer over this format's own bytes.
+    fn with_bytes_de(
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()>;
 }
 
 pub trait Navigable: Sized + Clone {

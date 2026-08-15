@@ -1,8 +1,8 @@
 use crate::observability::SchemaEntry;
 use crate::observability::{register_instance, resolve_field};
 use crate::reactive::error::{WriteError, WriteResult};
-use crate::store::{StorageResult, Store, field_with_path, reactive_map_with_path_only};
-use crate::{ReactiveCell, ReactiveMap, WritableMode};
+use crate::store::{StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only};
+use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -21,13 +21,13 @@ use uuid::Uuid;
 /// What comes back is an ordinary [`ReactiveCell`] or [`ReactiveMap`], so
 /// subscriptions, local delivery and pipelines work exactly as they do for
 /// declared fields. Only the addressing differs.
-pub struct Kv<S: Store> {
-    store: S,
+pub struct Kv {
+    store: Store,
     instance_id: Uuid,
 }
 
-impl<S: Store> Kv<S> {
-    pub(crate) fn new(store: S) -> Self {
+impl Kv {
+    pub(crate) fn new(store: Store) -> Self {
         let instance_id = Uuid::new_v4();
         register_instance(instance_id, "amethystate::Kv");
 
@@ -78,7 +78,7 @@ impl<S: Store> Kv<S> {
         self.guard(path)?;
         self.check_type::<T>(path)?;
 
-        let field = field_with_path::<T, S, WritableMode>(
+        let field = field_with_path::<T, WritableMode>(
             &self.store,
             Arc::from(path),
             default,
@@ -89,7 +89,7 @@ impl<S: Store> Kv<S> {
     }
 
     /// A reactive map over a prefix, for a key set that is not known up front.
-    pub fn map<K, V>(&self, prefix: &str) -> WriteResult<ReactiveMap<K, V, S, WritableMode>>
+    pub fn map<K, V>(&self, prefix: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>
     where
         K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
         V: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
@@ -146,7 +146,7 @@ impl<S: Store> Kv<S> {
     }
 }
 
-impl<S: Store> crate::store::Durable<'_, Kv<S>> {
+impl crate::store::Durable<'_, Kv> {
     pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
         self.0.set(path, value)?;
         self.0.store.flush_prefix(path)?;

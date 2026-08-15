@@ -2,10 +2,8 @@ use super::toml_doc::TomlDocument;
 use crate::migration::set::MigrationSet;
 use crate::store::backend::text::store::TextStore;
 use crate::store::config::StoreConfig;
-use crate::store::{Store, StoreCallback, SubscriptionId, SubscriptionKind};
+use crate::store::{StoreBackend, StoreCallback, SubscriptionId, SubscriptionKind};
 use crate::{MigrationReport, StorageResult};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -22,31 +20,43 @@ impl TomlStore {
     }
 }
 
-impl Store for TomlStore {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
-        self.0.get(path)
+impl StoreBackend for TomlStore {
+    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+        self.0.get_raw(path)
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
-        self.0.set(path, value)
-    }
-
-    fn set_with_source<T: Serialize>(
+    fn get_erased(
         &self,
         path: &str,
-        value: &T,
-        source: Option<Uuid>,
-    ) -> StorageResult<()> {
-        self.0.set_with_source(path, value, source)
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<bool> {
+        self.0.get_erased(path, f)
     }
 
-    fn set_owned_with_source<T: Serialize>(
+    fn decode_erased(
         &self,
-        path: Arc<str>,
-        value: &T,
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        self.0.decode_erased(bytes, f)
+    }
+
+    fn set_erased(
+        &self,
+        path: &str,
+        value: &dyn erased_serde::Serialize,
         source: Option<Uuid>,
     ) -> StorageResult<()> {
-        self.0.set_owned_with_source(path, value, source)
+        self.0.set_erased(path, value, source)
+    }
+
+    fn set_owned_erased(
+        &self,
+        path: Arc<str>,
+        value: &dyn erased_serde::Serialize,
+        source: Option<Uuid>,
+    ) -> StorageResult<()> {
+        self.0.set_owned_erased(path, value, source)
     }
 
     fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()> {
@@ -79,10 +89,6 @@ impl Store for TomlStore {
 
     fn unsubscribe(&self, id: SubscriptionId) {
         self.0.unsubscribe(id)
-    }
-
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
-        self.0.decode(bytes)
     }
 
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {

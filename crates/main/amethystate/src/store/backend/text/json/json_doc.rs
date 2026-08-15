@@ -101,10 +101,19 @@ impl TextDocument for JsonDocument {
             .map_err(Into::into)
     }
 
-    fn serialize_node<T: Serialize>(value: &T) -> StorageResult<Self::Node> {
+    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node> {
         serde_json::to_value(value)
             .map_err(|e| TextStoreError::Codec(CodecError::Json(e)))
             .map_err(Into::into)
+    }
+
+    fn with_bytes_de(
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        let mut de = serde_json::Deserializer::from_slice(bytes);
+        let mut erased = <dyn erased_serde::Deserializer>::erase(&mut de);
+        f(&mut erased)
     }
 
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>> {

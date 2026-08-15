@@ -9,18 +9,16 @@ use crate::store::config::StoreConfig;
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId,
-    SubscriptionKind,
+    SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
+    SubscriptionId, SubscriptionKind,
 };
 use error::SqliteStoreError;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{info, warn};
+use tracing::info;
 
 pub mod error;
 mod inspector;
@@ -148,18 +146,11 @@ impl SqliteStoreInner {
         engine.run(mset)
     }
 
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
+    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
         {
             let lock = self.pending.lock();
             if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
-                return match op.value() {
-                    Some(bytes) => Ok(Some(
-                        sonic_rs::from_slice(bytes)
-                            .map_err(CodecError::from)
-                            .map_err(SqliteStoreError::from)?,
-                    )),
-                    None => Ok(None),
-                };
+                return Ok(op.value().map(|b| b.to_vec()));
             }
         }
 
@@ -171,34 +162,26 @@ impl SqliteStoreInner {
             .query_row([path], |row| row.get(0))
             .optional()
             .map_err(SqliteStoreError::from)?;
-
-        match res {
-            Some(bytes) => Ok(Some(
-                sonic_rs::from_slice(&bytes)
-                    .map_err(CodecError::from)
-                    .map_err(SqliteStoreError::from)?,
-            )),
-            None => Ok(None),
-        }
+        Ok(res)
     }
 
-    fn set<T: Serialize>(
+    fn set_erased(
         &self,
         path: &str,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.set_owned_with_source(Arc::from(path), value, source)
+        self.set_owned_erased(Arc::from(path), value, source)
     }
 
-    fn set_owned_with_source<T: Serialize>(
+    fn set_owned_erased(
         &self,
         path: Arc<str>,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer();
-        let vec = sonic_rs::to_vec(value)
+        let vec = sonic_rs::to_vec(&value)
             .map_err(CodecError::from)
             .map_err(SqliteStoreError::from)?;
 
@@ -375,16 +358,6 @@ impl SqliteStoreInner {
 
     fn unsubscribe(&self, id: SubscriptionId) {
         self.subscriptions.write().retain(|s| s.id != id);
-    }
-
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
-        match sonic_rs::from_slice(bytes) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                warn!("Failed to decode SQLite field. Using Default. Error: {e}");
-                Ok(T::default())
-            }
-        }
     }
 
     fn flush_async(&self) -> crate::store::durable::Commit {
@@ -585,35 +558,51 @@ impl SchemaAwareStore for SqliteStore {
     }
 }
 
-impl Store for SqliteStore {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
-        self.inner.get(path)
+impl StoreBackend for SqliteStore {
+    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+        self.inner.get_raw(path)
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
-        self.set_with_source(path, value, None)
-    }
-
-    fn set_with_source<T: Serialize>(
+    fn get_erased(
         &self,
         path: &str,
-        value: &T,
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<bool> {
+        match self.inner.get_raw(path)? {
+            Some(bytes) => {
+                self.decode_erased(&bytes, f)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn decode_erased(
+        &self,
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        let mut de = sonic_rs::Deserializer::from_slice(bytes);
+        let mut erased = <dyn erased_serde::Deserializer>::erase(&mut de);
+        f(&mut erased)
+    }
+
+    fn set_erased(
+        &self,
+        path: &str,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.inner.set(path, value, source)
+        self.inner.set_erased(path, value, source)
     }
 
-    fn set_owned<T: Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
-        self.set_owned_with_source(path, value, None)
-    }
-
-    fn set_owned_with_source<T: Serialize>(
+    fn set_owned_erased(
         &self,
         path: Arc<str>,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.inner.set_owned_with_source(path, value, source)
+        self.inner.set_owned_erased(path, value, source)
     }
 
     fn save_now(&self) -> StorageResult<()> {
@@ -652,10 +641,6 @@ impl Store for SqliteStore {
         self.inner.unsubscribe(id)
     }
 
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
-        self.inner.decode(bytes)
-    }
-
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
         self.inner.flush_prefix(prefix)
     }
@@ -676,6 +661,7 @@ impl Store for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::StoreExt;
     use amethystate_core::test_utils::unique_path;
     use serial_test::serial;
     use std::thread;

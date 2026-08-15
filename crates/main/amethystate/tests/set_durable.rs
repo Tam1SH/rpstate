@@ -75,7 +75,11 @@ mod on_disk {
     #[test]
     fn set_durable_commits_before_it_returns() {
         let path = unique_path("durable_blocking");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
         let state = Settings::new_with(&store).unwrap();
 
         state.port().set(8080).unwrap();
@@ -94,7 +98,11 @@ mod on_disk {
     #[test]
     fn set_durable_async_commits_before_it_resolves() {
         let path = unique_path("durable_async");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
         let state = Settings::new_with(&store).unwrap();
 
         futures::executor::block_on(state.retries().durable().set_async(7)).unwrap();
@@ -109,7 +117,11 @@ mod on_disk {
     #[test]
     fn a_durable_map_write_commits_before_it_returns() {
         let path = unique_path("durable_map_set");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
         let state = Mapped::new_with(&store).unwrap();
 
         state
@@ -127,7 +139,11 @@ mod on_disk {
     #[test]
     fn a_durable_removal_commits_before_it_returns() {
         let path = unique_path("durable_map_remove");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
         let state = Mapped::new_with(&store).unwrap();
 
         state
@@ -146,8 +162,12 @@ mod on_disk {
     #[test]
     fn a_durable_kv_write_commits_before_it_returns() {
         let path = unique_path("durable_kv");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
-        let kv = amethystate::Store::kv(&store);
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
+        let kv = store.kv();
 
         kv.durable().set("scratch.answer", &42u8).unwrap();
 
@@ -160,7 +180,11 @@ mod on_disk {
     #[test]
     fn a_cell_over_a_field_commits() {
         let path = unique_path("durable_cell");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
         let state = Settings::new_with(&store).unwrap();
 
         let cell = state.port().cell();
@@ -175,7 +199,11 @@ mod on_disk {
     #[test]
     fn a_cell_over_a_map_entry_commits() {
         let path = unique_path("durable_entry");
-        let store = StoreBuilder::new(&path).debounce(60_000).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(amethystate::store::builder::Backend::Json)
+            .debounce(60_000)
+            .build()
+            .unwrap();
         let state = Mapped::new_with(&store).unwrap();
 
         state

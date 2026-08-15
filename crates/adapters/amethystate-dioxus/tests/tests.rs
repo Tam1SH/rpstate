@@ -2,7 +2,7 @@
 
 use amethystate::store::field_with_path;
 use amethystate::test_utils::unique_store;
-use amethystate::{DefaultStore, MapChange, amethystate, uuid};
+use amethystate::{Store, MapChange, amethystate, uuid};
 use amethystate_arena::{
     DefaultArena, IntoArenaPipeline, PIPELINE_ARENA, PipelineHandle, WritableHandle,
     WritableMapHandle,
@@ -159,7 +159,7 @@ async fn test_use_map_requirements() {
     let store = unique_store("map");
     let arena = DefaultArena::new();
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
         std::sync::Arc::from("map_1"),
         HashMap::new(),
@@ -366,7 +366,7 @@ fn AmeStateChild(props: AmeStateProps) -> Element {
 
 #[derive(Clone, Props)]
 struct AmeStateTestWrapperProps {
-    store: DefaultStore,
+    store: Store,
     parent_probe: Probe<MyTestStateHandle>,
     child_probe: Probe<MyTestStateHandle>,
 }
@@ -450,7 +450,7 @@ async fn test_map_sub_requirements() {
     let store = unique_store("sub");
     let arena = DefaultArena::new();
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
         std::sync::Arc::from("map_2"),
         HashMap::new(),
@@ -620,7 +620,7 @@ async fn test_all_primitives_simultaneous_lifecycle() {
     .unwrap();
     let field_handle = arena.register_field(field);
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
         std::sync::Arc::from("map_all"),
         HashMap::new(),

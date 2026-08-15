@@ -26,6 +26,9 @@ pub enum CodecError {
     #[error("MessagePack decode error: {0}")]
     MessagePackDecode(#[from] rmp_serde::decode::Error),
 
+    #[error("Erased codec error: {0}")]
+    Erased(#[from] erased_serde::Error),
+
     #[error("Codec error: {0}")]
     Custom(String),
 }

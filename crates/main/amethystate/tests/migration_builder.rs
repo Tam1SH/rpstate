@@ -1,5 +1,5 @@
 use amethystate::store::builder::StoreBuilder;
-use amethystate::{AmeData, Store, migrate};
+use amethystate::{AmeData, migrate};
 use amethystate_core::test_utils::unique_path;
 use amethystate_macros::amethystate;
 

@@ -367,6 +367,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::StoreExt;
 
     use crate::migration::context::{decode, encode};
     use crate::migration::fields::FieldDescriptor;

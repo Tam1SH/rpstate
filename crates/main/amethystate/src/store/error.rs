@@ -16,6 +16,9 @@ pub enum StorageError {
     Sqlite(#[from] crate::store::backend::sqlite::error::SqliteStoreError),
 
     #[error(transparent)]
+    Codec(#[from] crate::codec::CodecError),
+
+    #[error(transparent)]
     Migration(#[from] MigrationError),
 
     #[error("the flush this commit was waiting on did not complete")]

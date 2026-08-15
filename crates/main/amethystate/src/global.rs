@@ -1,8 +1,8 @@
-use crate::{DefaultStore, MigrationReport, StoreBuilder};
+use crate::{MigrationReport, Store, StoreBuilder};
 use std::path::Path;
 use std::sync::OnceLock;
 
-static GLOBAL_STORE: OnceLock<DefaultStore> = OnceLock::new();
+static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 
 pub trait IntoGlobalStore {
     type Output;
@@ -16,7 +16,7 @@ impl IntoGlobalStore for StoreBuilder {
     fn init_global(self) -> Self::Output {
         let (store, report) = self.build_with_report().unwrap_or_else(|err| {
             panic!(
-                "amethystate: Failed to build global Store.\n\
+                "amethystate: Failed to build global StoreBackend.\n\
                      Ensure the database path is writable and not locked by another process.\n\
                      Details: {err}"
             );
@@ -53,6 +53,6 @@ pub fn init_global<T: IntoGlobalStore>(source: T) -> T::Output {
     source.init_global()
 }
 
-pub fn global_store() -> DefaultStore {
+pub fn global_store() -> Store {
     GLOBAL_STORE.get().unwrap().clone()
 }

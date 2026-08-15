@@ -9,7 +9,7 @@ pub struct Tracked {
     pub port: u16,
 }
 
-fn store(tag: &str) -> impl amethystate::Store {
+fn store(tag: &str) -> amethystate::Store {
     StoreBuilder::new(unique_path(tag)).build().unwrap()
 }
 

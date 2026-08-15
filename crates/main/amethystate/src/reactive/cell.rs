@@ -255,9 +255,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DefaultStore;
-    use crate::store::{StateScope, Store};
+    use crate::store::StoreExt;
+    use crate::store::{StateScope, StoreBackend};
     use crate::test_utils::unique_store;
+    use crate::Store;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -266,13 +267,8 @@ mod tests {
         const PREFIX: &'static str = "ui";
     }
 
-    fn stored_field(
-        store: &DefaultStore,
-        name: &'static str,
-        default: u64,
-    ) -> crate::WritableField<u64, DefaultStore> {
-        crate::store::field::<UiScope, u64, DefaultStore>(store, name, default, Uuid::new_v4())
-            .expect("field")
+    fn stored_field(store: &Store, name: &'static str, default: u64) -> crate::WritableField<u64> {
+        crate::store::field::<UiScope, u64>(store, name, default, Uuid::new_v4()).expect("field")
     }
 
     #[test]

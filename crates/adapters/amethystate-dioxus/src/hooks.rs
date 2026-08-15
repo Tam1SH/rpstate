@@ -41,9 +41,9 @@ where
         return handle;
     }
 
-    let store = try_use_context::<amethystate::DefaultStore>().unwrap_or_else(|| {
+    let store = try_use_context::<amethystate::Store>().unwrap_or_else(|| {
         panic!(
-            "amethystate-dioxus: DefaultStore not found in context while trying to initialize '{}'. \
+            "amethystate-dioxus: Store not found in context while trying to initialize '{}'. \
              Make sure AmeStateProvider is rendered at the root of your application.",
             std::any::type_name::<S>()
         );

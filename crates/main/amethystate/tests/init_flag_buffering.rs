@@ -1,4 +1,4 @@
-use amethystate::{Store, StoreBuilder};
+use amethystate::StoreBuilder;
 use amethystate_core::test_utils::unique_path;
 
 #[test]

@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub trait Backend: amethystate::Store {}
+pub trait Backend: amethystate::StoreBackend {}
 #[cfg(not(target_arch = "wasm32"))]
-impl<T: amethystate::Store> Backend for T {}
+impl<T: amethystate::StoreBackend> Backend for T {}
 
 #[cfg(target_arch = "wasm32")]
 pub trait Backend: amethystate::client::AsyncSubscriptionBackend {}
@@ -28,12 +28,12 @@ pub trait AmeStateFrameworkNested {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub trait AmeStateFramework<B: ReactiveBackend>:
-    amethystate::AmeStateSlice<B::Storage> + AmeStateFrameworkNested
+    amethystate::AmeStateSlice + AmeStateFrameworkNested
 {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<B: ReactiveBackend, T: amethystate::AmeStateSlice<B::Storage> + AmeStateFrameworkNested>
+impl<B: ReactiveBackend, T: amethystate::AmeStateSlice + AmeStateFrameworkNested>
     AmeStateFramework<B> for T
 {
 }

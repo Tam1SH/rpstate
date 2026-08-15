@@ -1,4 +1,3 @@
-use amethystate::store::Store;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;

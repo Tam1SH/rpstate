@@ -1,9 +1,9 @@
-use amethystate::DefaultStore;
+use amethystate::Store;
 use amethystate::migration::fields::FieldDescriptor;
 use amethystate::migration::set::MigrationSet;
 use amethystate::migration::{MigrationError, MigrationPlan};
+use amethystate::store::SubscriptionKind;
 use amethystate::store::config::StoreConfig;
-use amethystate::store::{Store, SubscriptionKind};
 use amethystate_core::test_utils::unique_path;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ const EMPTY_FIELDS: &[FieldDescriptor] = &[];
 #[test]
 fn test_set_get_immediate() {
     let path = unique_path("immediate");
-    let (store, _) = DefaultStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
 
     store.set("user.name", &"Alice".to_string()).unwrap();
 
@@ -25,7 +25,7 @@ fn test_set_get_immediate() {
 #[test]
 fn test_local_reactivity() {
     let path = unique_path("reactivity");
-    let (store, _) = DefaultStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
 
     let hit = Arc::new(Mutex::new(false));
     let hit_inner = hit.clone();
@@ -47,8 +47,7 @@ fn test_local_reactivity() {
 fn test_delete_flow() {
     let path = unique_path("delete");
     {
-        let (store, _) =
-            DefaultStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
+        let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
         store.set("temp.key", &1).unwrap();
         store.save_now().unwrap();
         store.delete("temp.key").unwrap();
@@ -57,14 +56,14 @@ fn test_delete_flow() {
     }
 
     let (store_reopened, _) =
-        DefaultStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
+        Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
     assert_eq!(store_reopened.get::<i32>("temp.key").unwrap(), None);
 }
 
 #[test]
 fn test_smart_recovery_decode() {
     let path = unique_path("recovery");
-    let (store, _) = DefaultStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
     let garbage = vec![0x00, 0x01, 0x02];
 
     let result: String = store.decode(&garbage).unwrap();
@@ -75,12 +74,11 @@ fn test_smart_recovery_decode() {
 fn test_deterministic_closure_and_reopen() {
     let path = unique_path("closure");
     {
-        let (store, _) =
-            DefaultStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
+        let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
         store.set("test.key", &"hello".to_string()).unwrap();
     }
 
-    let (store_reopened, _) = DefaultStore::open(StoreConfig::new(&path), MigrationSet::default())
+    let (store_reopened, _) = Store::open(StoreConfig::new(&path), MigrationSet::default())
         .expect("Database should be available immediately after close");
 
     let val: Option<String> = store_reopened.get("test.key").unwrap();
@@ -91,12 +89,11 @@ fn test_deterministic_closure_and_reopen() {
 fn test_drop_behavior_is_deterministic() {
     let path = unique_path("drop_logic");
     {
-        let (store, _) =
-            DefaultStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
+        let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
         store.set("drop.test", &42u32).unwrap();
     }
 
-    let (store_reopened, _) = DefaultStore::open(StoreConfig::new(&path), MigrationSet::default())
+    let (store_reopened, _) = Store::open(StoreConfig::new(&path), MigrationSet::default())
         .expect("Drop must release file lock deterministically");
 
     assert_eq!(store_reopened.get::<u32>("drop.test").unwrap(), Some(42));
@@ -109,25 +106,25 @@ fn test_close_saves_pending_data() {
     config.save_debounce = Duration::from_secs(3600);
 
     {
-        let (store, _) = DefaultStore::open(config, MigrationSet::default()).unwrap();
+        let (store, _) = Store::open(config, MigrationSet::default()).unwrap();
         store.set("urgent.data", &true).unwrap();
     }
 
-    let (store, _) = DefaultStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
     assert_eq!(store.get::<bool>("urgent.data").unwrap(), Some(true));
 }
 
 #[test]
 fn test_is_initialized_false_on_fresh_store() {
     let path = unique_path("init_fresh");
-    let (store, _) = DefaultStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
     assert!(!store.is_initialized("settings").unwrap());
 }
 
 #[test]
 fn test_mark_and_is_initialized() {
     let path = unique_path("init_mark");
-    let (store, _) = DefaultStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
     assert!(!store.is_initialized("settings").unwrap());
     store.mark_initialized("settings").unwrap();
     assert!(store.is_initialized("settings").unwrap());
@@ -136,7 +133,7 @@ fn test_mark_and_is_initialized() {
 #[test]
 fn test_initialized_namespaces_are_independent() {
     let path = unique_path("init_namespaces");
-    let (store, _) = DefaultStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
     store.mark_initialized("settings").unwrap();
     assert!(store.is_initialized("settings").unwrap());
     assert!(!store.is_initialized("other").unwrap());
@@ -148,7 +145,7 @@ fn test_component_atomic_rollback() {
     let mut cfg = StoreConfig::new(&path);
     cfg.save_debounce = Duration::from_millis(50);
     {
-        let (store, _) = DefaultStore::open(cfg, MigrationSet::default()).unwrap();
+        let (store, _) = Store::open(cfg, MigrationSet::default()).unwrap();
         store.set("net.ip", &"1.1.1.1".to_string()).unwrap();
         store.save_now().unwrap();
     }
@@ -171,7 +168,7 @@ fn test_component_atomic_rollback() {
             &["net"],
         );
 
-    let (store, report) = DefaultStore::open(StoreConfig::new(&path), mset).unwrap();
+    let (store, report) = Store::open(StoreConfig::new(&path), mset).unwrap();
     assert!(report.has_failures());
 
     let val: String = store.get("net.ip").unwrap().unwrap();

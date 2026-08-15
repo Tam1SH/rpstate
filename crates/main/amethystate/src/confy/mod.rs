@@ -1,7 +1,7 @@
 //! Compatibility adapter for the [`confy`](https://github.com/rust-cli/confy) crate.
 //!
 //! This module is a nearly 1-to-1 emulation of the `confy` API (v0.6 and v2.x),
-//! rewritten to route all persistence operations directly through `amethystate::Store`.
+//! rewritten to route all persistence operations directly through `amethystate::StoreBackend`.
 //!
 //! ### Limitations
 //! - Support for `yaml_conf` and `basic_toml_conf` was removed because their upstream crates
@@ -31,34 +31,19 @@ use thiserror::Error;
 
 use crate::codec::CodecError;
 use crate::store::StorageError as RpError;
-use crate::{DefaultStore, StoreBuilder};
+use crate::{Store, StoreBuilder};
 
-use crate::store::Store;
+use crate::store::StoreBackend;
 #[cfg(feature = "toml")]
 use toml_edit::de::Error as TomlDeErr;
 #[cfg(feature = "toml")]
 use toml_edit::ser::Error as TomlSerErr;
 
-#[cfg(backend = "toml")]
-const EXTENSION: &str = "toml";
-
-#[cfg(backend = "json")]
-const EXTENSION: &str = "json";
-
-#[cfg(backend = "ron")]
-const EXTENSION: &str = "ron";
-
-#[cfg(backend = "redb")]
-const EXTENSION: &str = "redb";
-
-#[cfg(backend = "sqlite")]
-const EXTENSION: &str = "redb";
-
 const DEFAULT_KEY: &str = ".";
 
 static STRATEGY: std::sync::OnceLock<std::sync::Mutex<ConfigStrategy>> = std::sync::OnceLock::new();
 static STORES: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<DefaultStore>>>,
+    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<Store>>>,
 > = std::sync::OnceLock::new();
 
 fn get_strategy() -> &'static std::sync::Mutex<ConfigStrategy> {
@@ -71,7 +56,7 @@ fn get_strategy() -> &'static std::sync::Mutex<ConfigStrategy> {
     })
 }
 
-fn get_store(path: &Path) -> Result<std::sync::Arc<DefaultStore>, ConfyError> {
+fn get_store(path: &Path) -> Result<std::sync::Arc<Store>, ConfyError> {
     let mut map = STORES
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
         .lock()
@@ -144,6 +129,7 @@ pub enum ConfyError {
 impl From<RpError> for ConfyError {
     fn from(err: RpError) -> Self {
         match err {
+            RpError::Codec(e) => ConfyError::GeneralLoadError(std::io::Error::other(e.to_string())),
             #[cfg(feature = "text")]
             RpError::TextStore(text_err) => {
                 use crate::store::backend::text::error::TextStoreError;
@@ -185,19 +171,15 @@ impl From<RpError> for ConfyError {
             RpError::CommitFailed => {
                 panic!("Unexpected commit failure during confy emulation");
             }
+            // A corrupt or foreign file is a load failure, not a reason to
+            // abort the process: `load_or_else` exists to fall back.
             #[cfg(feature = "redb")]
             RpError::RedbStore(redb_err) => {
-                panic!(
-                    "Unexpected REDB store error during confy emulation: {:?}",
-                    redb_err
-                );
+                ConfyError::GeneralLoadError(std::io::Error::other(format!("{redb_err:?}")))
             }
             #[cfg(feature = "sqlite")]
             RpError::Sqlite(sqlite) => {
-                panic!(
-                    "Unexpected Sqlite store error during confy emulation: {:?}",
-                    sqlite
-                );
+                ConfyError::GeneralLoadError(std::io::Error::other(format!("{sqlite:?}")))
             }
             RpError::Migration(mig_err) => {
                 panic!(
@@ -467,7 +449,7 @@ where
 /// not support.
 ///
 /// **Note:** Unlike the original `confy`, this implementation routes persistence
-/// through `amethystate::Store`. Calling `store` updates only the root section of the
+/// through `amethystate::StoreBackend`. Calling `store` updates only the root section of the
 /// file, leaving any `amethystate`-managed sections (e.g. `[network]`, `[ui]`) intact.
 /// Code that relies on `store` wiping the file clean will behave differently here.
 pub fn store<'a, T: Serialize>(
@@ -572,7 +554,8 @@ pub fn get_configuration_file_path<'a>(
                 ))
             })?;
             let mut p = project.config_dir();
-            p.push(format!("{config_name}.{EXTENSION}"));
+            let ext = crate::store::builder::default_backend().extension();
+            p.push(format!("{config_name}.{ext}"));
             p
         }
         #[cfg(feature = "confy-compat")]
@@ -588,7 +571,8 @@ pub fn get_configuration_file_path<'a>(
                 ))
             })?;
             let mut p = project.config_dir();
-            p.push(format!("{config_name}.{EXTENSION}"));
+            let ext = crate::store::builder::default_backend().extension();
+            p.push(format!("{config_name}.{ext}"));
             p
         }
         #[cfg(feature = "confy-compat-0-6")]
@@ -605,9 +589,15 @@ pub fn get_configuration_file_path<'a>(
                 ))
             })?;
 
-            [config_dir_str, &format!("{config_name}.{EXTENSION}")]
-                .iter()
-                .collect()
+            [
+                config_dir_str,
+                &format!(
+                    "{config_name}.{}",
+                    crate::store::builder::default_backend().extension()
+                ),
+            ]
+            .iter()
+            .collect()
         }
     };
 
@@ -616,6 +606,9 @@ pub fn get_configuration_file_path<'a>(
 
 #[cfg(test)]
 mod tests {
+    use crate::store::StoreExt;
+    const EXTENSION: &str = crate::store::builder::default_backend().extension();
+
     use super::*;
     use serde::Serializer;
     use serde::{Deserialize, Serialize};

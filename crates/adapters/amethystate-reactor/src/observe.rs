@@ -1,6 +1,6 @@
 use amethystate::{
     AccessMode, Field, ReactiveCell, ReactiveMap, ReactiveMapKey, ReactiveMapValue,
-    SignalSubscription, Store,
+    SignalSubscription, StoreBackend,
 };
 use amethystate_core::primitives::field_core::FieldValue;
 
@@ -36,10 +36,10 @@ where
     }
 }
 
-impl<T, S, M> Observe for Field<T, S, M>
+impl<T, S, M> Observe for Field<T, M>
 where
     T: FieldValue + PartialEq,
-    S: Store,
+    S: StoreBackend,
     M: AccessMode,
 {
     type Value = T;
@@ -56,11 +56,11 @@ where
     }
 }
 
-impl<K, V, S, M> Observe for ReactiveMap<K, V, S, M>
+impl<K, V, S, M> Observe for ReactiveMap<K, V, M>
 where
     K: ReactiveMapKey + PartialEq,
     V: ReactiveMapValue + PartialEq,
-    S: Store,
+    S: StoreBackend,
     M: AccessMode,
 {
     type Value = Vec<(K, V)>;
@@ -78,12 +78,12 @@ where
 }
 
 /// One key of a map, as an [`Observe`]. Built by [`entry`].
-pub struct Entry<K, V, S: Store, M: AccessMode> {
-    map: ReactiveMap<K, V, S, M>,
+pub struct Entry<K, V, S: StoreBackend, M: AccessMode> {
+    map: ReactiveMap<K, V, M>,
     key: K,
 }
 
-impl<K: Clone, V, S: Store, M: AccessMode> Clone for Entry<K, V, S, M> {
+impl<K: Clone, V, S: StoreBackend, M: AccessMode> Clone for Entry<K, V, S, M> {
     fn clone(&self) -> Self {
         Self {
             map: self.map.clone(),
@@ -93,11 +93,11 @@ impl<K: Clone, V, S: Store, M: AccessMode> Clone for Entry<K, V, S, M> {
 }
 
 /// Observes a single key. Absent keys read as `None`.
-pub fn entry<K, V, S, M>(map: &ReactiveMap<K, V, S, M>, key: K) -> Entry<K, V, S, M>
+pub fn entry<K, V, S, M>(map: &ReactiveMap<K, V, M>, key: K) -> Entry<K, V, S, M>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    S: Store,
+    S: StoreBackend,
     M: AccessMode,
 {
     Entry {
@@ -110,7 +110,7 @@ impl<K, V, S, M> Observe for Entry<K, V, S, M>
 where
     K: ReactiveMapKey + PartialEq,
     V: ReactiveMapValue + PartialEq,
-    S: Store,
+    S: StoreBackend,
     M: AccessMode,
 {
     type Value = Option<V>;

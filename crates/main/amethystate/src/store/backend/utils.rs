@@ -137,6 +137,7 @@ mod buffered {
 #[cfg(all(test, any(feature = "redb", feature = "sqlite")))]
 mod tests {
     use super::*;
+    use crate::store::StoreExt;
     use std::sync::Arc;
 
     fn buffer(entries: &[(&str, Option<&[u8]>)]) -> Pending {

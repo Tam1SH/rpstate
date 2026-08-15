@@ -1,4 +1,4 @@
-use amethystate::Store;
+use amethystate::StoreBackend;
 use amethystate::test_utils::unique_store;
 use tauri_plugin_amethystate::backend::commands::PluginState;
 

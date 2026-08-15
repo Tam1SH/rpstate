@@ -1,7 +1,6 @@
 #![cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 
 use amethystate::amethystate;
-use amethystate::store::Store;
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::unique_path;
 use std::time::Duration;

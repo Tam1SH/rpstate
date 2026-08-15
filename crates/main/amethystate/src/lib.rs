@@ -34,7 +34,7 @@ pub mod stores {
 
 pub use store::{
     AmeStateSlice, StateScope, StorageResult, StoreEvent, StoreOp, SubscriptionKind,
-    builder::StoreBuilder, config::StoreConfig, default::DefaultStore, join_path,
+    builder::StoreBuilder, config::StoreConfig, default::Store, join_path,
 };
 
 pub use migration::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
@@ -44,7 +44,8 @@ pub use global::*;
 
 #[cfg(any(feature = "tauri", feature = "json"))]
 pub use serde_json;
-pub use store::Store;
+pub use store::StoreBackend;
+pub use store::StoreExt;
 
 #[cfg(any(feature = "confy-compat", feature = "confy-compat-0-6"))]
 pub mod confy;
