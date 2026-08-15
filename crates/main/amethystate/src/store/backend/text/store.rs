@@ -12,13 +12,11 @@ use crate::store::config::StoreConfig;
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId,
-    SubscriptionKind,
+    SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
+    SubscriptionId, SubscriptionKind,
 };
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -369,20 +367,19 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
 }
 
 impl<D: TextDocument> TextStoreInner<D> {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
+    fn get_node_bytes(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
         let guard = self.files.data.doc.read();
         let parts = split_path(path);
-        if let Some(node) = guard.get(&parts) {
-            Ok(Some(D::deserialize_node(node)?))
-        } else {
-            Ok(None)
+        match guard.get(&parts) {
+            Some(node) => Ok(Some(D::node_to_bytes(node)?)),
+            None => Ok(None),
         }
     }
 
-    fn set<T: Serialize>(
+    fn set_erased_inner(
         &self,
         path: &str,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer()?;
@@ -498,20 +495,6 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.subscriptions.write().retain(|s| s.id != id);
     }
 
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
-        match D::bytes_to_node(bytes).and_then(|node| D::deserialize_node(&node)) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                warn!(
-                    target: "amethystate",
-                    "Failed to decode text field. Data is corrupted or type changed. \
-                    Using Default value. Error: {e}"
-                );
-                Ok(T::default())
-            }
-        }
-    }
-
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
         let guard = self.files.meta.doc.read();
         let parts = vec!["__init", namespace];
@@ -566,35 +549,49 @@ impl<D: TextDocument> TextStoreInner<D> {
     }
 }
 
-impl<D: TextDocument + Send + 'static> Store for TextStore<D> {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
-        self.inner.get(path)
+impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
+    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+        self.inner.get_node_bytes(path)
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
-        self.set_with_source(path, value, None)
-    }
-
-    fn set_with_source<T: Serialize>(
+    fn get_erased(
         &self,
         path: &str,
-        value: &T,
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<bool> {
+        match self.inner.get_node_bytes(path)? {
+            Some(bytes) => {
+                D::with_bytes_de(&bytes, f)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn decode_erased(
+        &self,
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        D::with_bytes_de(bytes, f)
+    }
+
+    fn set_erased(
+        &self,
+        path: &str,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.inner.set(path, value, source)
+        self.inner.set_erased_inner(path, value, source)
     }
 
-    fn set_owned<T: Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
-        self.set_owned_with_source(path, value, None)
-    }
-
-    fn set_owned_with_source<T: Serialize>(
+    fn set_owned_erased(
         &self,
         path: Arc<str>,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.set_with_source(&path, value, source)
+        self.inner.set_erased_inner(&path, value, source)
     }
 
     fn save_now(&self) -> StorageResult<()> {
@@ -631,10 +628,6 @@ impl<D: TextDocument + Send + 'static> Store for TextStore<D> {
 
     fn unsubscribe(&self, id: SubscriptionId) {
         self.inner.unsubscribe(id)
-    }
-
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
-        self.inner.decode(bytes)
     }
 
     fn flush_async(&self) -> crate::store::durable::Commit {

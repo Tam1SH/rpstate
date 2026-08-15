@@ -1,6 +1,6 @@
 use crate::observe::{Entry, Observe, entry};
 use amethystate::{
-    AccessMode, AmeStateSlice, DefaultStore, ReactiveMap, ReactiveMapKey, ReactiveMapValue, Store,
+    AccessMode, AmeStateSlice, Store, ReactiveMap, ReactiveMapKey, ReactiveMapValue, StoreBackend,
     global_store,
 };
 use windows_reactor::{Deps, RenderCx};
@@ -14,13 +14,13 @@ pub trait AmeCx {
     /// disk is a startup fault, not something a render can recover from.
     fn use_ame_state<T>(&mut self) -> T
     where
-        T: AmeStateSlice<DefaultStore> + Clone + 'static;
+        T: AmeStateSlice + Clone + 'static;
 
     /// Loads a state slice from `store`, once per component.
     fn use_ame_state_in<T, S>(&mut self, store: &S) -> T
     where
-        T: AmeStateSlice<S> + Clone + 'static,
-        S: Store;
+        T: AmeStateSlice + Clone + 'static,
+        S: StoreBackend;
 
     /// Mirrors `source` into component state, re-rendering when it changes.
     ///
@@ -36,26 +36,26 @@ pub trait AmeCx {
     fn use_ame_keyed<O: Observe, D: Deps + Clone>(&mut self, source: &O, deps: D) -> O::Value;
 
     /// Observes one key of a map, resubscribing when `key` changes.
-    fn use_ame_entry<K, V, S, M>(&mut self, map: &ReactiveMap<K, V, S, M>, key: K) -> Option<V>
+    fn use_ame_entry<K, V, S, M>(&mut self, map: &ReactiveMap<K, V, M>, key: K) -> Option<V>
     where
         K: ReactiveMapKey + PartialEq,
         V: ReactiveMapValue + PartialEq,
-        S: Store,
+        S: StoreBackend,
         M: AccessMode;
 }
 
 impl AmeCx for RenderCx {
     fn use_ame_state<T>(&mut self) -> T
     where
-        T: AmeStateSlice<DefaultStore> + Clone + 'static,
+        T: AmeStateSlice + Clone + 'static,
     {
         self.use_ame_state_in(&global_store())
     }
 
     fn use_ame_state_in<T, S>(&mut self, store: &S) -> T
     where
-        T: AmeStateSlice<S> + Clone + 'static,
-        S: Store,
+        T: AmeStateSlice + Clone + 'static,
+        S: StoreBackend,
     {
         let store = store.clone();
         self.use_memo((), move || {
@@ -96,11 +96,11 @@ impl AmeCx for RenderCx {
         value
     }
 
-    fn use_ame_entry<K, V, S, M>(&mut self, map: &ReactiveMap<K, V, S, M>, key: K) -> Option<V>
+    fn use_ame_entry<K, V, S, M>(&mut self, map: &ReactiveMap<K, V, M>, key: K) -> Option<V>
     where
         K: ReactiveMapKey + PartialEq,
         V: ReactiveMapValue + PartialEq,
-        S: Store,
+        S: StoreBackend,
         M: AccessMode,
     {
         let source: Entry<K, V, S, M> = entry(map, key.clone());

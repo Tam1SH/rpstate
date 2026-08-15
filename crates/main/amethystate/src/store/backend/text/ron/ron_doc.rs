@@ -118,12 +118,23 @@ impl TextDocument for RonDocument {
             .map_err(Into::into)
     }
 
-    fn serialize_node<T: Serialize>(value: &T) -> StorageResult<Self::Node> {
+    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node> {
         let s =
             ::ron::ser::to_string(value).map_err(|e| TextStoreError::Codec(CodecError::Ron(e)))?;
         let node: ::ron::value::Value =
             ::ron::from_str(&s).map_err(|e| TextStoreError::Codec(CodecError::Ron(e.into())))?;
         Ok(node)
+    }
+
+    fn with_bytes_de(
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        // Deserialize from the node, not from its rendered text: a `Value` map
+        // renders as `{..}`, which a struct deserializer will not accept.
+        let node = Self::bytes_to_node(bytes)?;
+        let mut erased = <dyn erased_serde::Deserializer>::erase(node);
+        f(&mut erased)
     }
 
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>> {

@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 use amethystate::test_utils::unique_store;
 use amethystate::{
-    DefaultStore, Field, IntoPipeline, MapChange, ReactiveMap, Store, WritableMode, amethystate,
+    Store, Field, IntoPipeline, MapChange, ReactiveMap, StoreBackend, WritableMode, amethystate,
 };
 use amethystate_arena::Arena;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -141,7 +141,7 @@ fn test_arena_cleanup_drops_fields_and_unsubscribes() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = calls.clone();
 
-    let field: Field<String, DefaultStore, WritableMode> = amethystate::store::field_with_path(
+    let field: Field<String, WritableMode> = amethystate::store::field_with_path(
         &store,
         Arc::from("test.field"),
         "initial_value".to_string(),

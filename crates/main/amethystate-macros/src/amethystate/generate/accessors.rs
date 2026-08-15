@@ -28,13 +28,13 @@ pub(crate) fn field_type(crate_name: &TokenStream2, e: &StoreFieldEntry) -> Toke
     let ty = &e.ty;
 
     if e.nested || e.lookup_node.is_some() {
-        quote! { ::std::sync::Arc<#ty<S>> }
+        quote! { ::std::sync::Arc<#ty> }
     } else if let Some((k, v)) = e.get_map_types() {
         let mode = field_mode(crate_name, e);
-        quote! { #crate_name::ReactiveMap<#k, #v, S, #mode> }
+        quote! { #crate_name::ReactiveMap<#k, #v, #mode> }
     } else {
         let mode = field_mode(crate_name, e);
-        quote! { #crate_name::Field<#ty, S, #mode> }
+        quote! { #crate_name::Field<#ty, #mode> }
     }
 }
 
@@ -60,18 +60,18 @@ pub(crate) fn methods<'a>(
         let ty = &e.ty;
 
         if e.nested || e.lookup_node.is_some() {
-            quote! { pub fn #fname(&self) -> ::std::sync::Arc<#ty<S>> { self.#fname.clone() } }
+            quote! { pub fn #fname(&self) -> ::std::sync::Arc<#ty> { self.#fname.clone() } }
         } else if let Some((k, v)) = e.get_map_types() {
             let mode = field_mode(crate_name, e);
             quote! {
-                pub fn #fname(&self) -> #crate_name::ReactiveMap<#k, #v, S, #mode> {
+                pub fn #fname(&self) -> #crate_name::ReactiveMap<#k, #v, #mode> {
                     self.#fname.clone()
                 }
             }
         } else {
             let mode = field_mode(crate_name, e);
             quote! {
-                pub fn #fname(&self) -> #crate_name::Field<#ty, S, #mode> {
+                pub fn #fname(&self) -> #crate_name::Field<#ty, #mode> {
                     self.#fname.clone()
                 }
             }
@@ -82,24 +82,24 @@ pub(crate) fn methods<'a>(
 pub(crate) fn node_impl(crate_name: &TokenStream2, name: &Ident, is_root: bool) -> TokenStream2 {
     if is_root {
         quote! {
-            impl<S: #crate_name::Store> #crate_name::AmeStateNode<S> for #name<S> {
-                fn new_node(store: &S, _path: &str) -> #crate_name::StorageResult<Self> {
+            impl #crate_name::AmeStateNode for #name {
+                fn new_node(store: &#crate_name::Store, _path: &str) -> #crate_name::StorageResult<Self> {
                     Self::new_with(store)
                 }
 
-                fn new_node_with_id(store: &S, _path: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                fn new_node_with_id(store: &#crate_name::Store, _path: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
                     Self::new_with_id(store, instance_id)
                 }
             }
         }
     } else {
         quote! {
-            impl<S: #crate_name::Store> #crate_name::AmeStateNode<S> for #name<S> {
-                fn new_node(store: &S, path: &str) -> #crate_name::StorageResult<Self> {
+            impl #crate_name::AmeStateNode for #name {
+                fn new_node(store: &#crate_name::Store, path: &str) -> #crate_name::StorageResult<Self> {
                     Self::new(store, path)
                 }
 
-                fn new_node_with_id(store: &S, path: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                fn new_node_with_id(store: &#crate_name::Store, path: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
                     Self::new_with_id(store, path, instance_id)
                 }
             }
@@ -113,7 +113,7 @@ pub(crate) fn scope(
     prefix: Option<String>,
 ) -> Option<TokenStream2> {
     prefix.map(
-        |p| quote! { impl<S: #crate_name::Store> #crate_name::StateScope for #name<S> { const PREFIX: &'static str = #p; } },
+        |p| quote! { impl #crate_name::StateScope for #name { const PREFIX: &'static str = #p; } },
     )
 }
 
@@ -124,12 +124,12 @@ pub(crate) fn constructor(
 ) -> TokenStream2 {
     if is_root {
         quote! {
-            pub fn new_with(store: &S) -> #crate_name::StorageResult<Self> {
+            pub fn new_with(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
                 Self::new_with_id(store, #crate_name::uuid::Uuid::new_v4())
             }
 
-            pub fn new_with_id(store: &S, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
-                use #crate_name::Store;
+            pub fn new_with_id(store: &#crate_name::Store, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                use #crate_name::{StoreBackend, StoreExt};
                 let __amethystate_guard = #crate_name::observability::InstanceGuard::new(
                     instance_id,
                     ::std::any::type_name::<Self>(),
@@ -141,12 +141,12 @@ pub(crate) fn constructor(
         }
     } else {
         quote! {
-            pub fn new(store: &S, namespace: &str) -> #crate_name::StorageResult<Self> {
+            pub fn new(store: &#crate_name::Store, namespace: &str) -> #crate_name::StorageResult<Self> {
                 Self::new_with_id(store, namespace, #crate_name::uuid::Uuid::new_v4())
             }
 
-            pub fn new_with_id(store: &S, namespace: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
-                use #crate_name::Store;
+            pub fn new_with_id(store: &#crate_name::Store, namespace: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                use #crate_name::{StoreBackend, StoreExt};
                 let __amethystate_guard = #crate_name::observability::InstanceGuard::new(
                     instance_id,
                     ::std::any::type_name::<Self>(),

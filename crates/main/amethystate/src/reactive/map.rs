@@ -1,7 +1,7 @@
 use crate::reactive::watch::{Immediate, Watch, Watchable};
-use crate::store::Store;
-use crate::store::sync_backend::StoreBackend;
-use crate::{AccessMode, DefaultStore, Field, ReadOnlyMode, StoreSubscription, WritableMode};
+use crate::store::StoreBackend;
+use crate::store::sync_backend::SyncBridge;
+use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
 use amethystate_core::backend::AmeBackendSync;
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use std::marker::PhantomData;
@@ -9,22 +9,22 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub struct ReactiveMap<K, V, S: Store = DefaultStore, M: AccessMode = ReadOnlyMode> {
+pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
     pub core: ReactiveMapCore<K, V>,
     pub path: Arc<str>,
     pub instance_id: Uuid,
-    pub store: S,
-    pub(crate) store_sub: Arc<StoreSubscription<S>>,
+    pub store: Store,
+    pub(crate) store_sub: Arc<StoreSubscription>,
     pub(crate) _mode: PhantomData<M>,
 }
 
 use crate::reactive::error::{ReactiveMapError, ReactiveMapResult};
 pub use amethystate_core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 
-pub type ReadOnlyReactiveMap<TValue, S> = Field<TValue, S, ReadOnlyMode>;
-pub type WritableReactiveMap<TValue, S> = Field<TValue, S, WritableMode>;
+pub type ReadOnlyReactiveMap<TValue> = Field<TValue, ReadOnlyMode>;
+pub type WritableReactiveMap<TValue> = Field<TValue, WritableMode>;
 
-impl<K, V, S: Store, M: AccessMode> Clone for ReactiveMap<K, V, S, M> {
+impl<K, V, M: AccessMode> Clone for ReactiveMap<K, V, M> {
     fn clone(&self) -> Self {
         Self {
             core: self.core.clone(),
@@ -37,11 +37,10 @@ impl<K, V, S: Store, M: AccessMode> Clone for ReactiveMap<K, V, S, M> {
     }
 }
 
-impl<K, V, S, M> std::fmt::Debug for ReactiveMap<K, V, S, M>
+impl<K, V, M> std::fmt::Debug for ReactiveMap<K, V, M>
 where
     K: std::fmt::Debug + ReactiveMapKey,
     V: std::fmt::Debug + ReactiveMapValue,
-    S: Store,
     M: AccessMode,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,11 +57,10 @@ where
     }
 }
 
-impl<K, V, S, M> ReactiveMap<K, V, S, M>
+impl<K, V, M> ReactiveMap<K, V, M>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    S: Store,
     M: AccessMode,
 {
     pub fn fork(&self) -> Self {
@@ -81,12 +79,12 @@ where
     }
 
     pub fn get(&self, key: &K) -> ReactiveMapResult<Option<V>> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_get(&backend, &self.path, key)?)
     }
 
     pub fn contains_key(&self, key: &K) -> ReactiveMapResult<bool> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_contains_key::<_, _, V>(
             &backend, &self.path, key,
         )?)
@@ -95,7 +93,7 @@ where
     /// Every entry, sorted by key. Values are decoded as the iterator is
     /// consumed, so `.find()` or `.take(n)` decode only what they reach.
     pub fn entries(&self) -> ReactiveMapResult<impl Iterator<Item = (K, V)>> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         let prefix = format!("{}.", self.path);
         let scanned = backend.scan_prefix(&prefix)?;
 
@@ -108,7 +106,7 @@ where
 
     /// Every key, sorted. Values are neither read nor deserialized.
     pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         let prefix = format!("{}.", self.path);
 
         Ok(backend
@@ -119,7 +117,7 @@ where
     }
 
     pub fn len(&self) -> ReactiveMapResult<usize> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_len(&backend, &self.path)?)
     }
 
@@ -153,22 +151,21 @@ where
 }
 
 /// One key of a map, as a [`Watch`] source. Built by [`Watch::key`].
-pub struct KeyOf<K, V, S: Store, M: AccessMode> {
-    map: ReactiveMap<K, V, S, M>,
+pub struct KeyOf<K, V, M: AccessMode> {
+    map: ReactiveMap<K, V, M>,
     key: K,
 }
 
-impl<K, V, S: Store, M: AccessMode> KeyOf<K, V, S, M> {
-    pub(crate) fn new(map: ReactiveMap<K, V, S, M>, key: K) -> Self {
+impl<K, V, M: AccessMode> KeyOf<K, V, M> {
+    pub(crate) fn new(map: ReactiveMap<K, V, M>, key: K) -> Self {
         Self { map, key }
     }
 }
 
-impl<K, V, S, M> Watchable for KeyOf<K, V, S, M>
+impl<K, V, M> Watchable for KeyOf<K, V, M>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    S: Store,
     M: AccessMode,
 {
     type Item = MapChange<K, V>;
@@ -193,11 +190,10 @@ where
     }
 }
 
-impl<K, V, S, M> Watchable for ReactiveMap<K, V, S, M>
+impl<K, V, M> Watchable for ReactiveMap<K, V, M>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    S: Store,
     M: AccessMode,
 {
     type Item = MapChange<K, V>;
@@ -219,11 +215,10 @@ where
     }
 }
 
-impl<K, V, S> ReactiveMap<K, V, S, WritableMode>
+impl<K, V> ReactiveMap<K, V, WritableMode>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    S: Store,
 {
     pub fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
@@ -259,7 +254,7 @@ where
     }
 
     pub fn set(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_set_existing(
             &backend,
             &self.core,
@@ -271,7 +266,7 @@ where
     }
 
     pub fn set_or_create(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_set_or_create(
             &backend,
             &self.core,
@@ -283,7 +278,7 @@ where
     }
 
     pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_remove(
             &backend,
             &self.core,
@@ -294,7 +289,7 @@ where
     }
 
     pub fn clear(&self) -> ReactiveMapResult<()> {
-        let backend = StoreBackend::new(self.store.clone());
+        let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_clear(
             &backend,
             &self.core,
@@ -318,7 +313,7 @@ where
     }
 }
 
-impl<K, V, S: Store, M: AccessMode> PartialEq for ReactiveMap<K, V, S, M> {
+impl<K, V, M: AccessMode> PartialEq for ReactiveMap<K, V, M> {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
             && self.instance_id == other.instance_id
@@ -326,13 +321,12 @@ impl<K, V, S: Store, M: AccessMode> PartialEq for ReactiveMap<K, V, S, M> {
     }
 }
 
-impl<K, V, S: Store, M: AccessMode> Eq for ReactiveMap<K, V, S, M> {}
+impl<K, V, M: AccessMode> Eq for ReactiveMap<K, V, M> {}
 
-impl<K, V, S> crate::store::Durable<'_, ReactiveMap<K, V, S, WritableMode>>
+impl<K, V> crate::store::Durable<'_, ReactiveMap<K, V, WritableMode>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    S: Store,
 {
     fn commit(&self) -> ReactiveMapResult<()> {
         self.0.store.flush_prefix(&self.0.path)?;
@@ -423,13 +417,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::store::StoreExt;
     struct TestScope;
     impl crate::StateScope for TestScope {
         const PREFIX: &'static str = "test";
     }
 
     use super::*;
-    use crate::DefaultStore;
+    use Store;
 
     use crate::test_utils::unique_store;
     use amethystate_core::WritableMode;
@@ -448,8 +443,8 @@ mod tests {
     #[test]
     fn external_subscriptions_filter_own_updates_only() {
         let store = unique_store("external-own-changes");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test_map.external"),
                 HashMap::new(),
@@ -506,8 +501,8 @@ mod tests {
     #[test]
     fn external_key_subscription_filters_own_updates_only() {
         let store = unique_store("external-own-key");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test_map.external_key"),
                 HashMap::new(),
@@ -547,8 +542,8 @@ mod tests {
         let store = unique_store("crud");
         let path: Arc<str> = Arc::from("test_map.data");
 
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 path,
                 HashMap::new(),
@@ -581,8 +576,8 @@ mod tests {
     #[test]
     fn test_map_intercept_and_reject() {
         let store = unique_store("reject");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.intercept"),
                 HashMap::new(),
@@ -611,8 +606,8 @@ mod tests {
     #[test]
     fn test_map_intercept_transform() {
         let store = unique_store("transform");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.transform"),
                 HashMap::new(),
@@ -647,8 +642,8 @@ mod tests {
     #[test]
     fn test_map_subscriptions() {
         let store = unique_store("subs");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.subs"),
                 HashMap::new(),
@@ -680,8 +675,8 @@ mod tests {
     #[test]
     fn test_reentrancy_guard() {
         let store = unique_store("reentrancy");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.reentrancy"),
                 HashMap::new(),
@@ -708,8 +703,8 @@ mod tests {
     #[test]
     fn test_map_clear() {
         let store = unique_store("clear");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.clear"),
                 HashMap::new(),
@@ -743,8 +738,8 @@ mod tests {
     #[test]
     fn test_contains_key_and_cleanup() {
         let store = unique_store("contains");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.contains"),
                 HashMap::new(),
@@ -774,8 +769,8 @@ mod tests {
     #[test]
     fn test_key_specific_logic() {
         let store = unique_store("key_spec");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.keyspec"),
                 HashMap::new(),
@@ -818,8 +813,8 @@ mod tests {
         let path: Arc<str> = Arc::from("test.parse");
 
         {
-            let map_str: ReactiveMap<String, String, DefaultStore, WritableMode> =
-                crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+            let map_str: ReactiveMap<String, String, WritableMode> =
+                crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                     &store,
                     path.clone(),
                     HashMap::new(),
@@ -835,8 +830,8 @@ mod tests {
                 .unwrap();
         }
 
-        let map_int: ReactiveMap<i32, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map_int: ReactiveMap<i32, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 path,
                 HashMap::new(),
@@ -854,8 +849,8 @@ mod tests {
     #[test]
     fn test_remove_edge_cases() {
         let store = unique_store("remove_edge");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.remove"),
                 HashMap::new(),
@@ -878,8 +873,8 @@ mod tests {
     #[traced_test]
     fn test_map_recursion_warning() {
         let store = unique_store("map_trace");
-        let map: ReactiveMap<String, i32, DefaultStore, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _, _>(
+        let map: ReactiveMap<String, i32, WritableMode> =
+            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
                 Arc::from("test.recursive_map"),
                 HashMap::new(),
@@ -904,13 +899,7 @@ mod tests {
     #[test]
     fn test_map_subscribe_external() {
         let store = unique_store("map_external");
-        let map = crate::store::reactive_map_with_path::<
-            TestScope,
-            String,
-            i32,
-            DefaultStore,
-            WritableMode,
-        >(
+        let map = crate::store::reactive_map_with_path::<TestScope, String, i32, WritableMode>(
             &store,
             Arc::from("test.external"),
             HashMap::new(),

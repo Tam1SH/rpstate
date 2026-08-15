@@ -4,11 +4,12 @@ pub use amethystate_core::primitives::pipeline::*;
 mod tests {
     use super::*;
     use crate::reactive::Field;
-    use crate::{DefaultStore, WritableMode};
+    use crate::store::StoreExt;
+    use crate::{Store, WritableMode};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    fn field<T>(value: T) -> Field<T, DefaultStore, WritableMode>
+    fn field<T>(value: T) -> Field<T, WritableMode>
     where
         T: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + Sync + 'static,
     {

@@ -1,41 +1,40 @@
 use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
 use crate::reactive::watch::{Immediate, Watch, Watchable};
-use crate::store::sync_backend::StoreBackend;
-use crate::store::{Store, SubscriptionId};
-use crate::{AccessMode, ReadOnlyMode, WritableMode};
+use crate::store::sync_backend::SyncBridge;
+use crate::store::{StoreBackend, SubscriptionId};
+use crate::{AccessMode, ReadOnlyMode, Store, WritableMode};
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use std::sync::Arc;
 use uuid::Uuid;
 
 pub use amethystate_core::primitives::field_core::FieldValue;
 
-pub struct StoreSubscription<S: Store> {
-    pub store: S,
+pub struct StoreSubscription {
+    pub store: Store,
     pub id: SubscriptionId,
 }
 
-impl<S: Store> Drop for StoreSubscription<S> {
+impl Drop for StoreSubscription {
     fn drop(&mut self) {
         self.store.unsubscribe(self.id);
     }
 }
 
-pub struct Field<TValue, S: Store, M: AccessMode = ReadOnlyMode> {
+pub struct Field<TValue, M: AccessMode = ReadOnlyMode> {
     pub(crate) core: FieldCore<TValue>,
     pub(crate) path: Arc<str>,
     pub(crate) instance_id: Uuid,
-    pub(crate) store_sub: Option<Arc<StoreSubscription<S>>>,
+    pub(crate) store_sub: Option<Arc<StoreSubscription>>,
     pub(crate) _mode: std::marker::PhantomData<M>,
 }
 
-pub type ReadOnlyField<TValue, S> = Field<TValue, S, ReadOnlyMode>;
-pub type WritableField<TValue, S> = Field<TValue, S, WritableMode>;
+pub type ReadOnlyField<TValue> = Field<TValue, ReadOnlyMode>;
+pub type WritableField<TValue> = Field<TValue, WritableMode>;
 
-impl<TValue, S, M> std::fmt::Debug for Field<TValue, S, M>
+impl<TValue, M> std::fmt::Debug for Field<TValue, M>
 where
     TValue: FieldValue + std::fmt::Debug,
-    S: Store,
     M: AccessMode,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,7 +45,7 @@ where
     }
 }
 
-impl<TValue, S: Store, M: AccessMode> Clone for Field<TValue, S, M> {
+impl<TValue, M: AccessMode> Clone for Field<TValue, M> {
     fn clone(&self) -> Self {
         Self {
             core: self.core.clone(),
@@ -58,10 +57,9 @@ impl<TValue, S: Store, M: AccessMode> Clone for Field<TValue, S, M> {
     }
 }
 
-impl<TValue, S, M> Field<TValue, S, M>
+impl<TValue, M> Field<TValue, M>
 where
     TValue: FieldValue,
-    S: Store,
     M: AccessMode,
 {
     pub fn fork(&self) -> Self {
@@ -120,10 +118,9 @@ where
     }
 }
 
-impl<TValue, S, M> Watchable for Field<TValue, S, M>
+impl<TValue, M> Watchable for Field<TValue, M>
 where
     TValue: FieldValue,
-    S: Store,
     M: AccessMode,
 {
     type Item = TValue;
@@ -140,10 +137,9 @@ where
     }
 }
 
-impl<TValue, S> Field<TValue, S, WritableMode>
+impl<TValue> Field<TValue, WritableMode>
 where
     TValue: FieldValue,
-    S: Store,
 {
     /// This field as a [`ReactiveCell`], with the store backend and access
     /// mode erased. Writes go through [`Field::set`], keeping this field's
@@ -199,7 +195,7 @@ where
         );
 
         if let Some(sub) = &self.store_sub {
-            let backend = StoreBackend::new(sub.store.clone());
+            let backend = SyncBridge::new(sub.store.clone());
             amethystate_core::field_set(
                 &backend,
                 &self.core,
@@ -249,7 +245,7 @@ where
     }
 }
 
-impl<TValue, S: Store, M: AccessMode> PartialEq for Field<TValue, S, M> {
+impl<TValue, M: AccessMode> PartialEq for Field<TValue, M> {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
             && self.instance_id == other.instance_id
@@ -257,12 +253,11 @@ impl<TValue, S: Store, M: AccessMode> PartialEq for Field<TValue, S, M> {
     }
 }
 
-impl<TValue, S: Store, M: AccessMode> Eq for Field<TValue, S, M> {}
+impl<TValue, M: AccessMode> Eq for Field<TValue, M> {}
 
-impl<TValue, S, M> amethystate_core::pipeline::Reactive<TValue> for Field<TValue, S, M>
+impl<TValue, M> amethystate_core::pipeline::Reactive<TValue> for Field<TValue, M>
 where
     TValue: FieldValue,
-    S: Store,
     M: AccessMode,
 {
     fn get(&self) -> TValue {
@@ -284,10 +279,9 @@ where
     }
 }
 
-impl<TValue, S> crate::store::Durable<'_, Field<TValue, S, WritableMode>>
+impl<TValue> crate::store::Durable<'_, Field<TValue, WritableMode>>
 where
     TValue: FieldValue,
-    S: Store,
 {
     fn commit(&self) -> ReactiveFieldResult<()> {
         if let Some(sub) = &self.0.store_sub {
@@ -351,9 +345,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{StateScope, Store};
+    use crate::store::StoreExt;
+    use crate::store::{StateScope, StoreBackend};
     use crate::test_utils::unique_store;
-    use crate::{DefaultStore, SubscriptionKind};
+    use crate::{Store, SubscriptionKind};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tracing_test::traced_test;
@@ -366,13 +361,8 @@ mod tests {
     #[test]
     fn field_get_set_and_subscribe() {
         let store = unique_store("field-int");
-        let field = crate::store::field::<UiScope, i32, DefaultStore>(
-            &store,
-            "font_size",
-            14,
-            Uuid::new_v4(),
-        )
-        .expect("field should be created");
+        let field = crate::store::field::<UiScope, i32>(&store, "font_size", 14, Uuid::new_v4())
+            .expect("field should be created");
 
         assert_eq!(field.get(), 14);
         assert_eq!(field.path().as_ref(), "ui.font_size");
@@ -406,7 +396,7 @@ mod tests {
                 }),
             );
 
-            let field: Field<String, DefaultStore, WritableMode> = Field {
+            let field: Field<String, WritableMode> = Field {
                 core,
                 path: Arc::from("test.field"),
                 store_sub: Some(Arc::new(StoreSubscription {
@@ -436,9 +426,8 @@ mod tests {
     #[test]
     fn field_cell_shares_the_field_cache() {
         let store = unique_store("cell-shares-cache");
-        let field =
-            crate::store::field::<UiScope, i32, DefaultStore>(&store, "shared", 1, Uuid::new_v4())
-                .expect("field should be created");
+        let field = crate::store::field::<UiScope, i32>(&store, "shared", 1, Uuid::new_v4())
+            .expect("field should be created");
 
         let cell = field.cell();
         field.set(7).unwrap();
@@ -452,8 +441,7 @@ mod tests {
 
         let field_path: Arc<str> = Arc::from("ui.temp_spinner");
 
-        let field =
-            Field::<bool, DefaultStore, WritableMode>::new_volatile(field_path.clone(), false);
+        let field = Field::<bool, WritableMode>::new_volatile(field_path.clone(), false);
 
         let call_count = Arc::new(Mutex::new(0));
         let last_val = Arc::new(Mutex::new(false));
@@ -482,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_field_additional_coverage() {
-        let field = Field::<i32, DefaultStore, WritableMode>::new_volatile(Arc::from("test"), 42);
+        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test"), 42);
 
         let disp = field.intercept(|mut change| {
             change.new_value *= 2;
@@ -513,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_field_depth_guard() {
-        let field = Field::<i32, DefaultStore, WritableMode>::new_volatile(Arc::from("test"), 1);
+        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test"), 1);
 
         field.core.intercept_depth.store(100, Ordering::SeqCst);
 
@@ -535,10 +523,7 @@ mod tests {
     #[test]
     #[traced_test]
     fn test_field_recursion_warning() {
-        let field = Field::<i32, DefaultStore, WritableMode>::new_volatile(
-            Arc::from("test.recursive_field"),
-            0,
-        );
+        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test.recursive_field"), 0);
 
         let field_clone = field.clone();
 
@@ -555,8 +540,7 @@ mod tests {
 
     #[test]
     fn test_field_subscribe_external() {
-        let field =
-            Field::<i32, DefaultStore, WritableMode>::new_volatile(Arc::from("test.ext"), 0);
+        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test.ext"), 0);
         let fork = field.fork();
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -592,13 +576,9 @@ mod tests {
     fn test_field_subscribe_external_persistent() {
         let store = unique_store("field_external_persistent");
 
-        let field = crate::store::field::<UiScope, i32, DefaultStore>(
-            &store,
-            "persistent_val",
-            100,
-            Uuid::new_v4(),
-        )
-        .expect("field should be created");
+        let field =
+            crate::store::field::<UiScope, i32>(&store, "persistent_val", 100, Uuid::new_v4())
+                .expect("field should be created");
 
         let fork = field.fork();
 
@@ -627,10 +607,7 @@ mod tests {
     }
     #[test]
     fn test_field_update_and_modify() {
-        let field = Field::<i32, DefaultStore, WritableMode>::new_volatile(
-            Arc::from("test.update_modify"),
-            10,
-        );
+        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test.update_modify"), 10);
 
         let updated = field.update(|val| val + 5).unwrap();
         assert_eq!(updated, 15);

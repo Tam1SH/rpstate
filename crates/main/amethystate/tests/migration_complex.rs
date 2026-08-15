@@ -1,6 +1,6 @@
 use amethystate::migration::ComponentOutcome;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::{AmeData, MigrationError, Store, migrate};
+use amethystate::{AmeData, MigrationError, migrate};
 use amethystate_core::test_utils::unique_path;
 use amethystate_macros::amethystate;
 use tracing_test::traced_test;

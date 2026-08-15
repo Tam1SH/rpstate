@@ -17,7 +17,7 @@ mod ts_mapping;
 ///   * `as_root` (optional flag): If specified, fields are written directly to the store root without
 ///     a namespace.
 ///   * `prefix` (String): Sets the top-level namespace path in the store.
-///     Generates `pub fn new(store: &Arc<DefaultStore>) -> Result<Self>`.
+///     Generates `pub fn new(store: &Arc<Store>) -> Result<Self>`.
 ///   * `version` (optional u32): Schema version for migrations (defaults to 0).
 ///   * `mode` (optional String): Controls the generated code paradigm. One of:
 ///     * `"reactive"` (default): Generates fine-grained reactive `Field<T>` accessors.
@@ -25,7 +25,7 @@ mod ts_mapping;
 ///     * `"both"`: Generates both reactive accessors on `#name` and a separate `#name_Persistent` flat struct.
 /// * `#[amethystate]` - Defines a **Nested** struct.
 ///   * Used as a component within other structures.
-///   * Generates `pub fn new(store: &Arc<DefaultStore>, namespace: &str) -> Result<Self>`.
+///   * Generates `pub fn new(store: &Arc<Store>, namespace: &str) -> Result<Self>`.
 ///
 /// # Field Attributes (`#[amestate(...)]`)
 ///

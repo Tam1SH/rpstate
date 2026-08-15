@@ -34,7 +34,7 @@ macro_rules! define_store_test_suite {
             use std::sync::Arc;
             use std::time::{Duration, SystemTime, UNIX_EPOCH};
             use $crate::store::config::StoreConfig;
-            use $crate::store::{Store, StoreEvent, StoreOp, SubscriptionKind};
+            use $crate::store::{StoreBackend, StoreEvent, StoreExt, StoreOp, SubscriptionKind};
 
             fn unique_test_path(suffix: &str) -> PathBuf {
                 let nanos = SystemTime::now()

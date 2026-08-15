@@ -20,7 +20,7 @@ pub use native::Arena;
 pub use wasm::Arena;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub type DefaultArena = Arena<amethystate::DefaultStore>;
+pub type DefaultArena = Arena;
 
 #[cfg(target_arch = "wasm32")]
 #[cfg(feature = "tauri-backend")]
@@ -62,10 +62,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "Type mismatch for Field")]
     fn test_field_type_mismatch_panic() {
-        use amethystate::{DefaultStore, Field, StoreBuilder};
+        use amethystate::{Store, Field, StoreBuilder};
         let temp_dir = unique_temp_dir();
         let store = StoreBuilder::new(&temp_dir).build().unwrap();
-        let field: Field<i32, DefaultStore, WritableMode> = amethystate::store::field_with_path(
+        let field: Field<i32, WritableMode> = amethystate::store::field_with_path(
             &store,
             std::sync::Arc::from("test.int_field"),
             42,

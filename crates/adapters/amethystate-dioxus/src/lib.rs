@@ -14,7 +14,7 @@ impl ReactiveBackend for DioxusBackend {
     type ReadSignal<T: Send + Sync + 'static> = ReadSignal<T>;
 
     #[cfg(not(target_arch = "wasm32"))]
-    type Storage = amethystate::DefaultStore;
+    type Storage = amethystate::Store;
 
     #[cfg(target_arch = "wasm32")]
     #[cfg(feature = "tauri-backend")]
@@ -34,7 +34,7 @@ pub type MapSignal<K, V> = amethystate_arena::MapSignal<DioxusBackend, K, V>;
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Props, PartialEq)]
 pub struct AmeStateProviderProps {
-    pub store: DefaultStore,
+    pub store: Store,
     pub children: Element,
 }
 

@@ -1,5 +1,4 @@
 use amethystate::errors::WriteError;
-use amethystate::store::Store;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{LocalScope, amethystate};
 use amethystate_core::test_utils::unique_path;
@@ -12,7 +11,7 @@ pub struct Typed {
     pub port: u16,
 }
 
-fn store() -> impl Store {
+fn store() -> amethystate::Store {
     StoreBuilder::new(unique_path("kv")).build().unwrap()
 }
 

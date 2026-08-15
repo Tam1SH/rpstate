@@ -1,6 +1,9 @@
 use crate::observability::register_field;
 use crate::store::StorageResult;
-use crate::{Field, ReactiveMap, StateScope, Store, StoreOp, StoreSubscription, SubscriptionKind};
+use crate::{
+    Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, StoreSubscription,
+    SubscriptionKind,
+};
 use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -11,29 +14,27 @@ use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub fn field<TScope, TValue, S>(
-    store: &S,
+pub fn field<TScope, TValue>(
+    store: &Store,
     key: &str,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue, S, WritableMode>>
+) -> StorageResult<Field<TValue, WritableMode>>
 where
     TScope: StateScope,
-    S: Store,
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
 {
     let path: Arc<str> = scoped_path::<TScope>(key).into();
     field_with_path(store, path, default, instance_id)
 }
 
-pub fn field_with_path<TValue, S, M>(
-    store: &S,
+pub fn field_with_path<TValue, M>(
+    store: &Store,
     path: Arc<str>,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue, S, M>>
+) -> StorageResult<Field<TValue, M>>
 where
-    S: Store,
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
     M: AccessMode,
 {
@@ -84,31 +85,29 @@ where
     })
 }
 
-pub fn reactive_map<TScope, K, V, S>(
-    store: &S,
+pub fn reactive_map<TScope, K, V>(
+    store: &Store,
     key: &str,
     default: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, S, WritableMode>>
+) -> StorageResult<ReactiveMap<K, V, WritableMode>>
 where
     TScope: StateScope,
-    S: Store,
     K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
 {
     let path: Arc<str> = scoped_path::<TScope>(key).into();
-    reactive_map_with_path::<TScope, _, _, _, _>(store, path, default, instance_id)
+    reactive_map_with_path::<TScope, _, _, _>(store, path, default, instance_id)
 }
 
-pub fn reactive_map_with_path<TScope, K, V, S, M>(
-    store: &S,
+pub fn reactive_map_with_path<TScope, K, V, M>(
+    store: &Store,
     path: Arc<str>,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, S, M>>
+) -> StorageResult<ReactiveMap<K, V, M>>
 where
     TScope: StateScope,
-    S: Store,
     K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
     V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
     M: AccessMode,
@@ -116,14 +115,13 @@ where
     reactive_map_with_path_only(store, path, defaults, instance_id)
 }
 
-pub fn reactive_map_with_path_only<K, V, S, M>(
-    store: &S,
+pub fn reactive_map_with_path_only<K, V, M>(
+    store: &Store,
     path: Arc<str>,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, S, M>>
+) -> StorageResult<ReactiveMap<K, V, M>>
 where
-    S: Store,
     K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
     V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
     M: AccessMode,

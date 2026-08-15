@@ -5,7 +5,7 @@ use tauri::{
     plugin::{Builder, TauriPlugin},
 };
 
-pub fn init<R: Runtime>(store: amethystate::DefaultStore) -> TauriPlugin<R> {
+pub fn init<R: Runtime>(store: amethystate::Store) -> TauriPlugin<R> {
     Builder::new("amethystate")
         .invoke_handler(tauri::generate_handler![
             commands::amethystate_get,

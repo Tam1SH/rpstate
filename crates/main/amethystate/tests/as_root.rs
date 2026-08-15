@@ -1,5 +1,5 @@
 use amethystate::migration::set::MigrationSet;
-use amethystate::{DefaultStore, Store, StoreConfig, amethystate};
+use amethystate::{Store, StoreConfig, amethystate};
 use amethystate_core::test_utils::unique_path;
 #[amethystate(as_root)]
 pub struct AppConfig {
@@ -13,7 +13,7 @@ pub struct AppConfig {
 #[test]
 fn test_as_root_global_namespace() {
     let path = unique_path("as_root_test");
-    let (store, _) = DefaultStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
 
     let config = AppConfig::new_with(&store).unwrap();
 

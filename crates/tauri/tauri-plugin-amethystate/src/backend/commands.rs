@@ -1,11 +1,11 @@
-use amethystate::store::Store;
+use amethystate::store::StoreBackend;
 use amethystate::store::SubscriptionId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 pub struct PluginState {
-    pub store: amethystate::DefaultStore,
+    pub store: amethystate::Store,
     pub subscriptions: Mutex<HashMap<String, SubscriptionId>>,
 }
 
@@ -31,7 +31,7 @@ pub async fn amethystate_get_prefix(
     store: State<'_, PluginState>,
     prefix: String,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
-    let raw = amethystate::Store::scan_prefix(&store.store, &prefix).map_err(|e| e.to_string())?;
+    let raw = amethystate::StoreBackend::scan_prefix(&store.store, &prefix).map_err(|e| e.to_string())?;
 
     let mut map = HashMap::new();
     for (path, bytes) in raw {
@@ -47,7 +47,7 @@ pub async fn amethystate_flush(
     store: State<'_, PluginState>,
     prefix: String,
 ) -> Result<(), String> {
-    amethystate::Store::flush_prefix(&store.store, &prefix).map_err(|e| e.to_string())
+    amethystate::StoreBackend::flush_prefix(&store.store, &prefix).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

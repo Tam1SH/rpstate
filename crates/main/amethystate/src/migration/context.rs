@@ -277,6 +277,7 @@ pub fn decode<T: DeserializeOwned>(
 mod tests {
     use super::*;
     use crate::migration::AppliedStep;
+    use crate::store::StoreExt;
     use crate::store::meta::{PrefixMeta, SchemaSnapshot};
     use std::collections::HashMap;
 

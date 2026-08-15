@@ -1,16 +1,15 @@
 use amethystate_macros::amethystate;
-pub struct ConnectionPool<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct ConnectionPool {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub max_connections: ::amethystate::Field<u32, S, ::amethystate::WritableMode>,
-    pub timeout_secs: ::amethystate::Field<u32, S, ::amethystate::WritableMode>,
+    pub max_connections: ::amethystate::Field<u32, ::amethystate::WritableMode>,
+    pub timeout_secs: ::amethystate::Field<u32, ::amethystate::WritableMode>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for ConnectionPool<S> {
+impl ::core::clone::Clone for ConnectionPool {
     #[inline]
-    fn clone(&self) -> ConnectionPool<S> {
+    fn clone(&self) -> ConnectionPool {
         ConnectionPool {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -20,28 +19,50 @@ for ConnectionPool<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for ConnectionPool<S>
-where
-    ::amethystate::Field<u32, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
-    ::amethystate::Field<u32, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for ConnectionPool {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
         f.debug_struct("ConnectionPool")
-            .field("max_connections", &self.max_connections)
-            .field("timeout_secs", &self.timeout_secs)
+            .field("max_connections", (&__AmeW(&self.max_connections)).__ame())
+            .field("timeout_secs", (&__AmeW(&self.timeout_secs)).__ame())
             .finish()
     }
 }
-impl<S: ::amethystate::Store> ConnectionPool<S> {
-    pub fn new(store: &S, namespace: &str) -> ::amethystate::StorageResult<Self> {
+impl ConnectionPool {
+    pub fn new(
+        store: &::amethystate::Store,
+        namespace: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         namespace: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -86,12 +107,12 @@ impl<S: ::amethystate::Store> ConnectionPool<S> {
     }
     pub fn max_connections(
         &self,
-    ) -> ::amethystate::Field<u32, S, ::amethystate::WritableMode> {
+    ) -> ::amethystate::Field<u32, ::amethystate::WritableMode> {
         self.max_connections.clone()
     }
     pub fn timeout_secs(
         &self,
-    ) -> ::amethystate::Field<u32, S, ::amethystate::WritableMode> {
+    ) -> ::amethystate::Field<u32, ::amethystate::WritableMode> {
         self.timeout_secs.clone()
     }
     pub fn fork(&self) -> Self {
@@ -155,12 +176,15 @@ impl<S: ::amethystate::Store> ConnectionPool<S> {
         scope
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for ConnectionPool<S> {
-    fn new_node(store: &S, path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for ConnectionPool {
+    fn new_node(
+        store: &::amethystate::Store,
+        path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new(store, path)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -461,33 +485,33 @@ impl ::core::clone::Clone for ConnectionPool_Data {
 }
 impl ConnectionPool_Data {
     #[doc(hidden)]
-    pub fn __amethystate_load_from<S: ::amethystate::Store>(
-        store: &S,
+    pub fn __amethystate_load_from(
+        store: &::amethystate::Store,
         prefix: &str,
     ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
-            max_connections: <S as ::amethystate::Store>::get::<
+            max_connections: <::amethystate::Store as ::amethystate::StoreExt>::get::<
                 u32,
             >(store, &::amethystate::join_path(prefix, "max_connections"))?
                 .unwrap_or_else(|| 10),
-            timeout_secs: <S as ::amethystate::Store>::get::<
+            timeout_secs: <::amethystate::Store as ::amethystate::StoreExt>::get::<
                 u32,
             >(store, &::amethystate::join_path(prefix, "timeout_secs"))?
                 .unwrap_or_else(|| 30),
         })
     }
     #[doc(hidden)]
-    pub fn __amethystate_save_to<S: ::amethystate::Store>(
+    pub fn __amethystate_save_to(
         &self,
-        store: &S,
+        store: &::amethystate::Store,
         prefix: &str,
     ) -> ::amethystate::StorageResult<()> {
-        <S as ::amethystate::Store>::set(
+        <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
             &::amethystate::join_path(prefix, "max_connections"),
             &self.max_connections,
         )?;
-        <S as ::amethystate::Store>::set(
+        <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
             &::amethystate::join_path(prefix, "timeout_secs"),
             &self.timeout_secs,
@@ -537,7 +561,7 @@ impl ::amethystate::migration::fields::AmeStateFields for ConnectionPool_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for ConnectionPool<S> {
+impl ::amethystate::AmeState for ConnectionPool {
     type Data = ConnectionPool_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -563,17 +587,16 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-pub struct DatabaseState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct DatabaseState {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub pool: ::std::sync::Arc<ConnectionPool<S>>,
+    pub pool: ::std::sync::Arc<ConnectionPool>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for DatabaseState<S> {
+impl ::core::clone::Clone for DatabaseState {
     #[inline]
-    fn clone(&self) -> DatabaseState<S> {
+    fn clone(&self) -> DatabaseState {
         DatabaseState {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -582,26 +605,48 @@ for DatabaseState<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for DatabaseState<S>
-where
-    ::std::sync::Arc<ConnectionPool<S>>: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for DatabaseState {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.debug_struct("DatabaseState").field("pool", &self.pool).finish()
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
+        f.debug_struct("DatabaseState")
+            .field("pool", (&__AmeW(&self.pool)).__ame())
+            .finish()
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::StateScope for DatabaseState<S> {
+impl ::amethystate::StateScope for DatabaseState {
     const PREFIX: &'static str = "sys.database";
 }
-impl<S: ::amethystate::Store> DatabaseState<S> {
-    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
+impl DatabaseState {
+    pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -618,7 +663,7 @@ impl<S: ::amethystate::Store> DatabaseState<S> {
                     })
                 };
                 ::std::sync::Arc::new(
-                    ConnectionPool::<S>::new_with_id(store, &path, instance_id)?,
+                    ConnectionPool::new_with_id(store, &path, instance_id)?,
                 )
             },
         };
@@ -629,7 +674,7 @@ impl<S: ::amethystate::Store> DatabaseState<S> {
     pub fn __schema_field_pool(&self) -> ::amethystate::ReadOnly<ConnectionPool> {
         ::core::panicking::panic("internal error: entered unreachable code")
     }
-    pub fn pool(&self) -> ::std::sync::Arc<ConnectionPool<S>> {
+    pub fn pool(&self) -> ::std::sync::Arc<ConnectionPool> {
         self.pool.clone()
     }
     pub fn fork(&self) -> Self {
@@ -670,18 +715,21 @@ impl<S: ::amethystate::Store> DatabaseState<S> {
         scope
     }
 }
-impl DatabaseState<::amethystate::DefaultStore> {
+impl DatabaseState {
     pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for DatabaseState<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for DatabaseState {
+    fn new_node(
+        store: &::amethystate::Store,
+        _path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -692,9 +740,7 @@ impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for DatabaseState<S
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
 pub struct DatabaseState_Data {
-    pub pool: <ConnectionPool<
-        ::amethystate::DefaultStore,
-    > as ::amethystate::AmeState>::Data,
+    pub pool: <ConnectionPool as ::amethystate::AmeState>::Data,
 }
 #[doc(hidden)]
 #[allow(
@@ -843,9 +889,7 @@ const _: () = {
                     __A: _serde::de::SeqAccess<'de>,
                 {
                     let __field0 = match _serde::de::SeqAccess::next_element::<
-                        <ConnectionPool<
-                            ::amethystate::DefaultStore,
-                        > as ::amethystate::AmeState>::Data,
+                        <ConnectionPool as ::amethystate::AmeState>::Data,
                     >(&mut __seq)? {
                         _serde::__private228::Some(__value) => __value,
                         _serde::__private228::None => {
@@ -870,9 +914,7 @@ const _: () = {
                     __A: _serde::de::MapAccess<'de>,
                 {
                     let mut __field0: _serde::__private228::Option<
-                        <ConnectionPool<
-                            ::amethystate::DefaultStore,
-                        > as ::amethystate::AmeState>::Data,
+                        <ConnectionPool as ::amethystate::AmeState>::Data,
                     > = _serde::__private228::None;
                     while let _serde::__private228::Some(__key) = _serde::de::MapAccess::next_key::<
                         __Field,
@@ -886,9 +928,7 @@ const _: () = {
                                 }
                                 __field0 = _serde::__private228::Some(
                                     _serde::de::MapAccess::next_value::<
-                                        <ConnectionPool<
-                                            ::amethystate::DefaultStore,
-                                        > as ::amethystate::AmeState>::Data,
+                                        <ConnectionPool as ::amethystate::AmeState>::Data,
                                     >(&mut __map)?,
                                 );
                             }
@@ -948,9 +988,7 @@ impl DatabaseState_Data {}
 impl ::amethystate::migration::types::AmeType for DatabaseState_Data {
     const TYPE_HASH: u32 = 0u32
         ^ ::amethystate::migration::types::fnv1a("pool".as_bytes())
-        ^ <<ConnectionPool<
-            ::amethystate::DefaultStore,
-        > as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH;
+        ^ <<ConnectionPool as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH;
     const TYPE_NAME: &'static str = "DatabaseState_Data";
 }
 impl ::amethystate::migration::fields::AmeStateFields for DatabaseState_Data {
@@ -958,9 +996,7 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseState_Data {
         ::amethystate::migration::fields::FieldDescriptor {
             name: "pool",
             type_hash: 0xDEADBEEF
-                ^ <<ConnectionPool<
-                    ::amethystate::DefaultStore,
-                > as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
+                ^ <<ConnectionPool as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "ConnectionPool",
         },
     ];
@@ -991,7 +1027,7 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseState_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for DatabaseState<S> {
+impl ::amethystate::AmeState for DatabaseState {
     type Data = DatabaseState_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -1017,8 +1053,8 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for DatabaseState<S> {
-    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateSlice for DatabaseState {
+    fn load_slice(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope
@@ -1034,17 +1070,16 @@ impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for DatabaseState<
         self.subscribe_all_external(callback)
     }
 }
-pub struct InspectorState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct InspectorState {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub db_pool_view: ::std::sync::Arc<ConnectionPool<S>>,
+    pub db_pool_view: ::std::sync::Arc<ConnectionPool>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for InspectorState<S> {
+impl ::core::clone::Clone for InspectorState {
     #[inline]
-    fn clone(&self) -> InspectorState<S> {
+    fn clone(&self) -> InspectorState {
         InspectorState {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -1053,28 +1088,48 @@ for InspectorState<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for InspectorState<S>
-where
-    ::std::sync::Arc<ConnectionPool<S>>: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for InspectorState {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
         f.debug_struct("InspectorState")
-            .field("db_pool_view", &self.db_pool_view)
+            .field("db_pool_view", (&__AmeW(&self.db_pool_view)).__ame())
             .finish()
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::StateScope for InspectorState<S> {
+impl ::amethystate::StateScope for InspectorState {
     const PREFIX: &'static str = "ui.inspector";
 }
-impl<S: ::amethystate::Store> InspectorState<S> {
-    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
+impl InspectorState {
+    pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -1091,9 +1146,7 @@ impl<S: ::amethystate::Store> InspectorState<S> {
                     let _ = unsafe { (&*::core::ptr::null::<DatabaseState>()) }
                         .__schema_field_pool();
                 };
-                let parent_prefix = <DatabaseState<
-                    S,
-                > as ::amethystate::StateScope>::PREFIX;
+                let parent_prefix = <DatabaseState as ::amethystate::StateScope>::PREFIX;
                 let path = if parent_prefix == "." {
                     "pool".to_string()
                 } else {
@@ -1104,11 +1157,11 @@ impl<S: ::amethystate::Store> InspectorState<S> {
                     })
                 };
                 ::std::sync::Arc::new(
-                    <ConnectionPool<
-                        S,
-                    > as ::amethystate::AmeStateNode<
-                        S,
-                    >>::new_node_with_id(store, &path, instance_id)?,
+                    <ConnectionPool as ::amethystate::AmeStateNode>::new_node_with_id(
+                        store,
+                        &path,
+                        instance_id,
+                    )?,
                 )
             },
         };
@@ -1121,7 +1174,7 @@ impl<S: ::amethystate::Store> InspectorState<S> {
     ) -> ::amethystate::ReadOnly<ConnectionPool> {
         ::core::panicking::panic("internal error: entered unreachable code")
     }
-    pub fn db_pool_view(&self) -> ::std::sync::Arc<ConnectionPool<S>> {
+    pub fn db_pool_view(&self) -> ::std::sync::Arc<ConnectionPool> {
         self.db_pool_view.clone()
     }
     pub fn fork(&self) -> Self {
@@ -1165,18 +1218,21 @@ impl<S: ::amethystate::Store> InspectorState<S> {
         scope
     }
 }
-impl InspectorState<::amethystate::DefaultStore> {
+impl InspectorState {
     pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for InspectorState<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for InspectorState {
+    fn new_node(
+        store: &::amethystate::Store,
+        _path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -1403,7 +1459,7 @@ impl ::amethystate::migration::fields::AmeStateFields for InspectorState_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for InspectorState<S> {
+impl ::amethystate::AmeState for InspectorState {
     type Data = InspectorState_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -1429,8 +1485,8 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for InspectorState<S> {
-    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateSlice for InspectorState {
+    fn load_slice(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope

@@ -1,16 +1,15 @@
 use amethystate_macros::amethystate;
-pub struct NetworkState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct NetworkState {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub port: ::amethystate::Field<u16, S, ::amethystate::WritableMode>,
-    pub host: ::amethystate::Field<String, S, ::amethystate::WritableMode>,
+    pub port: ::amethystate::Field<u16, ::amethystate::WritableMode>,
+    pub host: ::amethystate::Field<String, ::amethystate::WritableMode>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for NetworkState<S> {
+impl ::core::clone::Clone for NetworkState {
     #[inline]
-    fn clone(&self) -> NetworkState<S> {
+    fn clone(&self) -> NetworkState {
         NetworkState {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -20,30 +19,49 @@ for NetworkState<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for NetworkState<S>
-where
-    ::amethystate::Field<u16, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
-    ::amethystate::Field<String, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for NetworkState {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
         f.debug_struct("NetworkState")
-            .field("port", &self.port)
-            .field("host", &self.host)
+            .field("port", (&__AmeW(&self.port)).__ame())
+            .field("host", (&__AmeW(&self.host)).__ame())
             .finish()
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::StateScope for NetworkState<S> {
+impl ::amethystate::StateScope for NetworkState {
     const PREFIX: &'static str = "net";
 }
-impl<S: ::amethystate::Store> NetworkState<S> {
-    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
+impl NetworkState {
+    pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -53,12 +71,10 @@ impl<S: ::amethystate::Store> NetworkState<S> {
             port: ::amethystate::store::field::<
                 Self,
                 u16,
-                S,
             >(store, "port", 8080, instance_id)?,
             host: ::amethystate::store::field::<
                 Self,
                 String,
-                S,
             >(store, "host", "127.0.0.1".to_string(), instance_id)?,
         };
         store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
@@ -72,10 +88,10 @@ impl<S: ::amethystate::Store> NetworkState<S> {
     pub fn __schema_field_host(&self) -> ::amethystate::ReadOnly<String> {
         ::core::panicking::panic("internal error: entered unreachable code")
     }
-    pub fn port(&self) -> ::amethystate::Field<u16, S, ::amethystate::WritableMode> {
+    pub fn port(&self) -> ::amethystate::Field<u16, ::amethystate::WritableMode> {
         self.port.clone()
     }
-    pub fn host(&self) -> ::amethystate::Field<String, S, ::amethystate::WritableMode> {
+    pub fn host(&self) -> ::amethystate::Field<String, ::amethystate::WritableMode> {
         self.host.clone()
     }
     pub fn fork(&self) -> Self {
@@ -139,18 +155,21 @@ impl<S: ::amethystate::Store> NetworkState<S> {
         scope
     }
 }
-impl NetworkState<::amethystate::DefaultStore> {
+impl NetworkState {
     pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for NetworkState<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for NetworkState {
+    fn new_node(
+        store: &::amethystate::Store,
+        _path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -488,7 +507,7 @@ impl ::amethystate::migration::fields::AmeStateFields for NetworkState_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for NetworkState<S> {
+impl ::amethystate::AmeState for NetworkState {
     type Data = NetworkState_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -514,8 +533,8 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for NetworkState<S> {
-    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateSlice for NetworkState {
+    fn load_slice(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope
@@ -531,18 +550,17 @@ impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for NetworkState<S
         self.subscribe_all_external(callback)
     }
 }
-pub struct UiState<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct UiState {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub proxy_port: ::amethystate::Field<u16, S, ::amethystate::ReadOnlyMode>,
-    pub proxy_host: ::amethystate::Field<String, S, ::amethystate::ReadOnlyMode>,
+    pub proxy_port: ::amethystate::Field<u16, ::amethystate::ReadOnlyMode>,
+    pub proxy_host: ::amethystate::Field<String, ::amethystate::ReadOnlyMode>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for UiState<S> {
+impl ::core::clone::Clone for UiState {
     #[inline]
-    fn clone(&self) -> UiState<S> {
+    fn clone(&self) -> UiState {
         UiState {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -552,30 +570,49 @@ for UiState<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for UiState<S>
-where
-    ::amethystate::Field<u16, S, ::amethystate::ReadOnlyMode>: ::std::fmt::Debug,
-    ::amethystate::Field<String, S, ::amethystate::ReadOnlyMode>: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for UiState {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
         f.debug_struct("UiState")
-            .field("proxy_port", &self.proxy_port)
-            .field("proxy_host", &self.proxy_host)
+            .field("proxy_port", (&__AmeW(&self.proxy_port)).__ame())
+            .field("proxy_host", (&__AmeW(&self.proxy_host)).__ame())
             .finish()
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::StateScope for UiState<S> {
+impl ::amethystate::StateScope for UiState {
     const PREFIX: &'static str = "ui";
 }
-impl<S: ::amethystate::Store> UiState<S> {
-    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
+impl UiState {
+    pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -608,7 +645,6 @@ impl<S: ::amethystate::Store> UiState<S> {
                 };
                 ::amethystate::store::field_with_path::<
                     u16,
-                    _,
                     ::amethystate::ReadOnlyMode,
                 >(
                     store,
@@ -643,7 +679,6 @@ impl<S: ::amethystate::Store> UiState<S> {
                 };
                 ::amethystate::store::field_with_path::<
                     String,
-                    _,
                     ::amethystate::ReadOnlyMode,
                 >(
                     store,
@@ -664,14 +699,12 @@ impl<S: ::amethystate::Store> UiState<S> {
     pub fn __schema_field_proxy_host(&self) -> ::amethystate::ReadOnly<String> {
         ::core::panicking::panic("internal error: entered unreachable code")
     }
-    pub fn proxy_port(
-        &self,
-    ) -> ::amethystate::Field<u16, S, ::amethystate::ReadOnlyMode> {
+    pub fn proxy_port(&self) -> ::amethystate::Field<u16, ::amethystate::ReadOnlyMode> {
         self.proxy_port.clone()
     }
     pub fn proxy_host(
         &self,
-    ) -> ::amethystate::Field<String, S, ::amethystate::ReadOnlyMode> {
+    ) -> ::amethystate::Field<String, ::amethystate::ReadOnlyMode> {
         self.proxy_host.clone()
     }
     pub fn fork(&self) -> Self {
@@ -735,18 +768,21 @@ impl<S: ::amethystate::Store> UiState<S> {
         scope
     }
 }
-impl UiState<::amethystate::DefaultStore> {
+impl UiState {
     pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for UiState<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for UiState {
+    fn new_node(
+        store: &::amethystate::Store,
+        _path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -974,7 +1010,7 @@ impl ::amethystate::migration::fields::AmeStateFields for UiState_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for UiState<S> {
+impl ::amethystate::AmeState for UiState {
     type Data = UiState_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -1000,8 +1036,8 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for UiState<S> {
-    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateSlice for UiState {
+    fn load_slice(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope

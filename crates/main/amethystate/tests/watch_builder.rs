@@ -14,7 +14,7 @@ pub struct Cfg {
     pub items: ReactiveMap<String, u64>,
 }
 
-fn cfg() -> (impl amethystate::store::Store, Cfg) {
+fn cfg() -> (impl amethystate::store::StoreBackend, Cfg) {
     let path = unique_path("watch_builder");
     let store = StoreBuilder::new(&path).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();

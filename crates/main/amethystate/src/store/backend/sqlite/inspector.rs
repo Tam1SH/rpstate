@@ -5,7 +5,7 @@ use crate::store::backend::sqlite::error::SqliteStoreError;
 use crate::store::backend::utils;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::SqliteStore;
-use crate::{StorageResult, Store};
+use crate::{StorageResult, StoreBackend};
 
 impl InspectorBackend for SqliteStore {
     fn format(&self) -> CodecFormat {

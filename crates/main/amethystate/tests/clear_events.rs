@@ -1,4 +1,3 @@
-use amethystate::store::Store;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
@@ -19,8 +18,8 @@ fn label<K, V>(change: &MapChange<K, V>) -> &'static str {
     }
 }
 
-fn watch<K, V, S>(
-    map: &ReactiveMap<K, V, S, amethystate::WritableMode>,
+fn watch<K, V>(
+    map: &ReactiveMap<K, V, amethystate::WritableMode>,
 ) -> (
     Arc<Mutex<Vec<&'static str>>>,
     amethystate::SignalSubscription,
@@ -28,7 +27,6 @@ fn watch<K, V, S>(
 where
     K: amethystate::ReactiveMapKey,
     V: amethystate::ReactiveMapValue,
-    S: amethystate::store::Store,
 {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let cap = seen.clone();

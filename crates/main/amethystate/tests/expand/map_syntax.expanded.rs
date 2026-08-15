@@ -625,17 +625,16 @@ impl ::amethystate::migration::types::AmeType for MonitoringConfig {
         ^ <AlertThresholds as ::amethystate::migration::types::AmeType>::TYPE_HASH;
     const TYPE_NAME: &'static str = "MonitoringConfig";
 }
-pub struct DatabaseConfig<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct DatabaseConfig {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub host: ::amethystate::Field<String, S, ::amethystate::WritableMode>,
+    pub host: ::amethystate::Field<String, ::amethystate::WritableMode>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for DatabaseConfig<S> {
+impl ::core::clone::Clone for DatabaseConfig {
     #[inline]
-    fn clone(&self) -> DatabaseConfig<S> {
+    fn clone(&self) -> DatabaseConfig {
         DatabaseConfig {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -644,24 +643,49 @@ for DatabaseConfig<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for DatabaseConfig<S>
-where
-    ::amethystate::Field<String, S, ::amethystate::WritableMode>: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for DatabaseConfig {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.debug_struct("DatabaseConfig").field("host", &self.host).finish()
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
+        f.debug_struct("DatabaseConfig")
+            .field("host", (&__AmeW(&self.host)).__ame())
+            .finish()
     }
 }
-impl<S: ::amethystate::Store> DatabaseConfig<S> {
-    pub fn new(store: &S, namespace: &str) -> ::amethystate::StorageResult<Self> {
+impl DatabaseConfig {
+    pub fn new(
+        store: &::amethystate::Store,
+        namespace: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         namespace: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -686,7 +710,7 @@ impl<S: ::amethystate::Store> DatabaseConfig<S> {
     pub fn __schema_field_host(&self) -> ::amethystate::ReadOnly<String> {
         ::core::panicking::panic("internal error: entered unreachable code")
     }
-    pub fn host(&self) -> ::amethystate::Field<String, S, ::amethystate::WritableMode> {
+    pub fn host(&self) -> ::amethystate::Field<String, ::amethystate::WritableMode> {
         self.host.clone()
     }
     pub fn fork(&self) -> Self {
@@ -734,12 +758,15 @@ impl<S: ::amethystate::Store> DatabaseConfig<S> {
         scope
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for DatabaseConfig<S> {
-    fn new_node(store: &S, path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for DatabaseConfig {
+    fn new_node(
+        store: &::amethystate::Store,
+        path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new(store, path)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -992,24 +1019,24 @@ impl ::core::clone::Clone for DatabaseConfig_Data {
 }
 impl DatabaseConfig_Data {
     #[doc(hidden)]
-    pub fn __amethystate_load_from<S: ::amethystate::Store>(
-        store: &S,
+    pub fn __amethystate_load_from(
+        store: &::amethystate::Store,
         prefix: &str,
     ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
-            host: <S as ::amethystate::Store>::get::<
+            host: <::amethystate::Store as ::amethystate::StoreExt>::get::<
                 String,
             >(store, &::amethystate::join_path(prefix, "host"))?
                 .unwrap_or_else(|| "localhost".to_string()),
         })
     }
     #[doc(hidden)]
-    pub fn __amethystate_save_to<S: ::amethystate::Store>(
+    pub fn __amethystate_save_to(
         &self,
-        store: &S,
+        store: &::amethystate::Store,
         prefix: &str,
     ) -> ::amethystate::StorageResult<()> {
-        <S as ::amethystate::Store>::set(
+        <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
             &::amethystate::join_path(prefix, "host"),
             &self.host,
@@ -1050,7 +1077,7 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseConfig_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for DatabaseConfig<S> {
+impl ::amethystate::AmeState for DatabaseConfig {
     type Data = DatabaseConfig_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -1076,33 +1103,23 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-pub struct SystemSettings<S: ::amethystate::Store = ::amethystate::DefaultStore> {
+pub struct SystemSettings {
     __amethystate_instance_id: ::std::sync::Arc<
         ::amethystate::observability::InstanceGuard,
     >,
-    pub db: ::std::sync::Arc<DatabaseConfig<S>>,
-    pub monitoring: ::amethystate::Field<
-        MonitoringConfig,
-        S,
-        ::amethystate::WritableMode,
-    >,
+    pub db: ::std::sync::Arc<DatabaseConfig>,
+    pub monitoring: ::amethystate::Field<MonitoringConfig, ::amethystate::WritableMode>,
     pub limits: ::amethystate::ReactiveMap<
         String,
         AlertThresholds,
-        S,
         ::amethystate::WritableMode,
     >,
-    pub presets: ::amethystate::Field<
-        Vec<AlertThresholds>,
-        S,
-        ::amethystate::WritableMode,
-    >,
+    pub presets: ::amethystate::Field<Vec<AlertThresholds>, ::amethystate::WritableMode>,
 }
 #[automatically_derived]
-impl<S: ::core::clone::Clone + ::amethystate::Store> ::core::clone::Clone
-for SystemSettings<S> {
+impl ::core::clone::Clone for SystemSettings {
     #[inline]
-    fn clone(&self) -> SystemSettings<S> {
+    fn clone(&self) -> SystemSettings {
         SystemSettings {
             __amethystate_instance_id: ::core::clone::Clone::clone(
                 &self.__amethystate_instance_id,
@@ -1114,47 +1131,51 @@ for SystemSettings<S> {
         }
     }
 }
-impl<S: ::amethystate::Store> ::std::fmt::Debug for SystemSettings<S>
-where
-    ::std::sync::Arc<DatabaseConfig<S>>: ::std::fmt::Debug,
-    ::amethystate::Field<
-        MonitoringConfig,
-        S,
-        ::amethystate::WritableMode,
-    >: ::std::fmt::Debug,
-    ::amethystate::ReactiveMap<
-        String,
-        AlertThresholds,
-        S,
-        ::amethystate::WritableMode,
-    >: ::std::fmt::Debug,
-    ::amethystate::Field<
-        Vec<AlertThresholds>,
-        S,
-        ::amethystate::WritableMode,
-    >: ::std::fmt::Debug,
-{
+impl ::std::fmt::Debug for SystemSettings {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        struct __AmeOpaque;
+        impl ::std::fmt::Debug for __AmeOpaque {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("<opaque>")
+            }
+        }
+        struct __AmeW<'a, T>(&'a T);
+        trait __AmeViaDebug {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                self.0
+            }
+        }
+        trait __AmeViaFallback {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug;
+        }
+        impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
+            fn __ame(&self) -> &dyn ::std::fmt::Debug {
+                &__AmeOpaque
+            }
+        }
         f.debug_struct("SystemSettings")
-            .field("db", &self.db)
-            .field("monitoring", &self.monitoring)
-            .field("limits", &self.limits)
-            .field("presets", &self.presets)
+            .field("db", (&__AmeW(&self.db)).__ame())
+            .field("monitoring", (&__AmeW(&self.monitoring)).__ame())
+            .field("limits", (&__AmeW(&self.limits)).__ame())
+            .field("presets", (&__AmeW(&self.presets)).__ame())
             .finish()
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::StateScope for SystemSettings<S> {
+impl ::amethystate::StateScope for SystemSettings {
     const PREFIX: &'static str = "sys";
 }
-impl<S: ::amethystate::Store> SystemSettings<S> {
-    pub fn new_with(store: &S) -> ::amethystate::StorageResult<Self> {
+impl SystemSettings {
+    pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
-        use ::amethystate::Store;
+        use ::amethystate::{StoreBackend, StoreExt};
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -1171,13 +1192,12 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
                     })
                 };
                 ::std::sync::Arc::new(
-                    DatabaseConfig::<S>::new_with_id(store, &path, instance_id)?,
+                    DatabaseConfig::new_with_id(store, &path, instance_id)?,
                 )
             },
             monitoring: ::amethystate::store::field::<
                 Self,
                 MonitoringConfig,
-                S,
             >(
                 store,
                 "monitoring",
@@ -1194,7 +1214,6 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
                 Self,
                 String,
                 AlertThresholds,
-                S,
             >(
                 store,
                 "limits",
@@ -1223,7 +1242,6 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
             presets: ::amethystate::store::field::<
                 Self,
                 Vec<AlertThresholds>,
-                S,
             >(
                 store,
                 "presets",
@@ -1267,12 +1285,12 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
     ) -> ::amethystate::ReadOnly<Vec<AlertThresholds>> {
         ::core::panicking::panic("internal error: entered unreachable code")
     }
-    pub fn db(&self) -> ::std::sync::Arc<DatabaseConfig<S>> {
+    pub fn db(&self) -> ::std::sync::Arc<DatabaseConfig> {
         self.db.clone()
     }
     pub fn monitoring(
         &self,
-    ) -> ::amethystate::Field<MonitoringConfig, S, ::amethystate::WritableMode> {
+    ) -> ::amethystate::Field<MonitoringConfig, ::amethystate::WritableMode> {
         self.monitoring.clone()
     }
     pub fn limits(
@@ -1280,14 +1298,13 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
     ) -> ::amethystate::ReactiveMap<
         String,
         AlertThresholds,
-        S,
         ::amethystate::WritableMode,
     > {
         self.limits.clone()
     }
     pub fn presets(
         &self,
-    ) -> ::amethystate::Field<Vec<AlertThresholds>, S, ::amethystate::WritableMode> {
+    ) -> ::amethystate::Field<Vec<AlertThresholds>, ::amethystate::WritableMode> {
         self.presets.clone()
     }
     pub fn fork(&self) -> Self {
@@ -1376,18 +1393,21 @@ impl<S: ::amethystate::Store> SystemSettings<S> {
         scope
     }
 }
-impl SystemSettings<::amethystate::DefaultStore> {
+impl SystemSettings {
     pub fn new() -> ::amethystate::StorageResult<Self> {
         let store = ::amethystate::global_store();
         Self::new_with(&store)
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for SystemSettings<S> {
-    fn new_node(store: &S, _path: &str) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateNode for SystemSettings {
+    fn new_node(
+        store: &::amethystate::Store,
+        _path: &str,
+    ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
-        store: &S,
+        store: &::amethystate::Store,
         _path: &str,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
@@ -1398,9 +1418,7 @@ impl<S: ::amethystate::Store> ::amethystate::AmeStateNode<S> for SystemSettings<
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
 pub struct SystemSettings_Data {
-    pub db: <DatabaseConfig<
-        ::amethystate::DefaultStore,
-    > as ::amethystate::AmeState>::Data,
+    pub db: <DatabaseConfig as ::amethystate::AmeState>::Data,
     pub limits: ::std::collections::HashMap<String, AlertThresholds>,
     pub monitoring: MonitoringConfig,
     pub presets: Vec<AlertThresholds>,
@@ -1579,9 +1597,7 @@ const _: () = {
                     __A: _serde::de::SeqAccess<'de>,
                 {
                     let __field0 = match _serde::de::SeqAccess::next_element::<
-                        <DatabaseConfig<
-                            ::amethystate::DefaultStore,
-                        > as ::amethystate::AmeState>::Data,
+                        <DatabaseConfig as ::amethystate::AmeState>::Data,
                     >(&mut __seq)? {
                         _serde::__private228::Some(__value) => __value,
                         _serde::__private228::None => {
@@ -1648,9 +1664,7 @@ const _: () = {
                     __A: _serde::de::MapAccess<'de>,
                 {
                     let mut __field0: _serde::__private228::Option<
-                        <DatabaseConfig<
-                            ::amethystate::DefaultStore,
-                        > as ::amethystate::AmeState>::Data,
+                        <DatabaseConfig as ::amethystate::AmeState>::Data,
                     > = _serde::__private228::None;
                     let mut __field1: _serde::__private228::Option<
                         ::std::collections::HashMap<String, AlertThresholds>,
@@ -1671,9 +1685,7 @@ const _: () = {
                                 }
                                 __field0 = _serde::__private228::Some(
                                     _serde::de::MapAccess::next_value::<
-                                        <DatabaseConfig<
-                                            ::amethystate::DefaultStore,
-                                        > as ::amethystate::AmeState>::Data,
+                                        <DatabaseConfig as ::amethystate::AmeState>::Data,
                                     >(&mut __map)?,
                                 );
                             }
@@ -1804,9 +1816,7 @@ impl ::core::clone::Clone for SystemSettings_Data {
 impl SystemSettings_Data {}
 impl ::amethystate::migration::types::AmeType for SystemSettings_Data {
     const TYPE_HASH: u32 = 0u32 ^ ::amethystate::migration::types::fnv1a("db".as_bytes())
-        ^ <<DatabaseConfig<
-            ::amethystate::DefaultStore,
-        > as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH
+        ^ <<DatabaseConfig as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH
         ^ ::amethystate::migration::types::fnv1a("limits".as_bytes())
         ^ <::std::collections::HashMap<
             String,
@@ -1823,9 +1833,7 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
         ::amethystate::migration::fields::FieldDescriptor {
             name: "db",
             type_hash: 0xDEADBEEF
-                ^ <<DatabaseConfig<
-                    ::amethystate::DefaultStore,
-                > as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
+                ^ <<DatabaseConfig as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "DatabaseConfig",
         },
         ::amethystate::migration::fields::FieldDescriptor {
@@ -1908,7 +1916,7 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
         Ok(())
     }
 }
-impl<S: ::amethystate::Store> ::amethystate::AmeState for SystemSettings<S> {
+impl ::amethystate::AmeState for SystemSettings {
     type Data = SystemSettings_Data;
 }
 #[allow(non_upper_case_globals)]
@@ -1934,8 +1942,8 @@ const _: () = {
     #[link_section = ".CRT$XCU"]
     static __CTOR: unsafe extern "C" fn() = __ctor;
 };
-impl<S: ::amethystate::Store> ::amethystate::AmeStateSlice<S> for SystemSettings<S> {
-    fn load_slice(store: &S) -> ::amethystate::StorageResult<Self> {
+impl ::amethystate::AmeStateSlice for SystemSettings {
+    fn load_slice(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn subscribe_all<F>(&self, callback: F) -> ::amethystate::ReactiveScope

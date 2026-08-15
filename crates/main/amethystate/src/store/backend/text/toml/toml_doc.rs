@@ -114,9 +114,9 @@ impl TextDocument for TomlDocument {
         Ok(unwrapped.val)
     }
 
-    fn serialize_node<T: Serialize>(value: &T) -> StorageResult<Self::Node> {
+    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node> {
         #[derive(serde::Serialize)]
-        struct Wrap<'a, T> {
+        struct Wrap<'a, T: ?Sized> {
             val: &'a T,
         }
 
@@ -133,6 +133,35 @@ impl TextDocument for TomlDocument {
             .get("val")
             .cloned()
             .unwrap_or(toml_edit::Item::None))
+    }
+
+    fn with_bytes_de(
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        // `node_to_bytes` wraps the value in a `val = ...` document, so the
+        // deserializer has to be built from that key, not from the whole text.
+        let node = Self::bytes_to_node(bytes)?;
+        let rendered = match node.as_value() {
+            Some(v) => v.to_string(),
+            None => {
+                let mut doc = toml_edit::DocumentMut::new();
+                doc.as_table_mut().insert("val", node.clone());
+                let inner = doc.to_string();
+                inner
+                    .split_once('=')
+                    .map(|(_, rhs)| rhs.to_string())
+                    .unwrap_or(inner)
+            }
+        };
+        let de: toml_edit::de::ValueDeserializer = rendered
+            .trim()
+            .parse()
+            .map_err(|e: toml_edit::de::Error| {
+                TextStoreError::Codec(CodecError::Toml(e.to_string()))
+            })?;
+        let mut erased = <dyn erased_serde::Deserializer>::erase(de);
+        f(&mut erased)
     }
 
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>> {

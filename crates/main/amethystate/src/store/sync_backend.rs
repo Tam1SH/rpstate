@@ -1,4 +1,5 @@
 use crate::Store;
+use crate::StoreBackend;
 
 use crate::store::StorageError;
 use amethystate_core::AmeBackendSync;
@@ -7,20 +8,17 @@ use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) struct StoreBackend<S> {
-    pub(crate) store: S,
+pub(crate) struct SyncBridge {
+    pub(crate) store: Store,
 }
 
-impl<S> StoreBackend<S> {
-    pub(crate) fn new(store: S) -> Self {
+impl SyncBridge {
+    pub(crate) fn new(store: Store) -> Self {
         Self { store }
     }
 }
 
-impl<S> AmeBackendSync for StoreBackend<S>
-where
-    S: Store,
-{
+impl AmeBackendSync for SyncBridge {
     type Error = StorageError;
     type Raw = Vec<u8>;
     type Borrowed = [u8];

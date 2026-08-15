@@ -6,7 +6,7 @@ use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::RedbStore;
-use crate::{StorageResult, Store};
+use crate::{StorageResult, StoreBackend};
 use redb::{ReadableDatabase, ReadableTable};
 
 impl InspectorBackend for RedbStore {

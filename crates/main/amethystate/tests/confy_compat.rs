@@ -85,8 +85,16 @@ fn clean_up_files(file_path: &Path) {
     }
 }
 #[test]
-#[cfg(not(any(backend = "redb", backend = "sqlite")))]
 fn test_confy_amethystate_coexistence() {
+    // confy emulates a plain-text config file; with a binary default backend
+    // there is no text to round-trip and the comparison is meaningless.
+    if !matches!(
+        amethystate::store::builder::default_backend().extension(),
+        "json" | "toml" | "ron"
+    ) {
+        return;
+    }
+
     use amethystate::{IntoGlobalStore, StoreBuilder};
 
     let app_name = "confy_amethystate_coexistence_test";
@@ -120,14 +128,12 @@ fn test_confy_amethystate_coexistence() {
 
     let contents = fs::read_to_string(&file_path).expect("read failed");
 
-    #[cfg(backend = "json")]
-    insta::assert_snapshot!("coexistence_json", contents);
-
-    #[cfg(backend = "toml")]
-    insta::assert_snapshot!("coexistence_toml", contents);
-
-    #[cfg(backend = "ron")]
-    insta::assert_snapshot!("coexistence_ron", contents);
+    match amethystate::store::builder::default_backend().extension() {
+        "json" => insta::assert_snapshot!("coexistence_json", contents),
+        "toml" => insta::assert_snapshot!("coexistence_toml", contents),
+        "ron" => insta::assert_snapshot!("coexistence_ron", contents),
+        _ => {}
+    }
 
     if let Some(parent) = file_path.parent()
         && parent.exists()

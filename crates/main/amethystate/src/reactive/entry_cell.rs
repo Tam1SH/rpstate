@@ -1,10 +1,10 @@
 use crate::reactive::cell::ReactiveCell;
-use crate::store::Store;
+use crate::store::StoreBackend;
 use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue, WritableMode};
 use amethystate_core::{MapChange, Signal};
 use std::sync::Arc;
 
-impl<K, V, S: Store> ReactiveMap<K, V, S, WritableMode>
+impl<K, V> ReactiveMap<K, V, WritableMode>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,

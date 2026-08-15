@@ -1,4 +1,3 @@
-use amethystate::store::Store;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
@@ -13,7 +12,7 @@ pub struct Cfg {
     pub items: ReactiveMap<String, u64>,
 }
 
-fn cfg() -> (impl Store, Cfg) {
+fn cfg() -> (amethystate::Store, Cfg) {
     let path = unique_path("interceptors");
     let store = StoreBuilder::new(&path).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();

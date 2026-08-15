@@ -1,12 +1,10 @@
 use crate::store::{
-    SchemaAwareStore, Store, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId,
-    SubscriptionKind,
+    SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
+    SubscriptionId, SubscriptionKind,
 };
 use error::RedbStoreError;
 use migration::RedbMigrationBackend;
 use redb::{Database, ReadableDatabase};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
@@ -25,7 +23,7 @@ use rmp_serde::Serializer;
 use rmp_serde::config::BytesMode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 pub mod error;
@@ -290,18 +288,39 @@ impl SchemaAwareStore for RedbStore {
     }
 }
 
-impl Store for RedbStore {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
+impl StoreBackend for RedbStore {
+    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+        {
+            let lock = self.inner.pending.lock();
+            if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
+                return Ok(op.value().map(|b| b.to_vec()));
+            }
+        }
+
+        let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
+        let table = read_txn
+            .open_table(TABLE_DATA)
+            .map_err(RedbStoreError::from)?;
+        match table.get(path).map_err(RedbStoreError::from)? {
+            Some(access_guard) => Ok(Some(access_guard.value().to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    fn get_erased(
+        &self,
+        path: &str,
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<bool> {
         {
             let lock = self.inner.pending.lock();
             if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
                 return match op.value() {
-                    Some(bytes) => Ok(Some(
-                        rmp_serde::from_slice(bytes)
-                            .map_err(CodecError::from)
-                            .map_err(RedbStoreError::from)?,
-                    )),
-                    None => Ok(None),
+                    Some(bytes) => {
+                        self.decode_erased(bytes, f)?;
+                        Ok(true)
+                    }
+                    None => Ok(false),
                 };
             }
         }
@@ -312,38 +331,36 @@ impl Store for RedbStore {
             .map_err(RedbStoreError::from)?;
         match table.get(path).map_err(RedbStoreError::from)? {
             Some(access_guard) => {
-                let bytes = access_guard.value();
-                Ok(Some(
-                    rmp_serde::from_slice(bytes)
-                        .map_err(CodecError::from)
-                        .map_err(RedbStoreError::from)?,
-                ))
+                self.decode_erased(access_guard.value(), f)?;
+                Ok(true)
             }
-            None => Ok(None),
+            None => Ok(false),
         }
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
-        self.set_with_source(path, value, None)
+    fn decode_erased(
+        &self,
+        bytes: &[u8],
+        f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        let mut de = rmp_serde::Deserializer::from_read_ref(bytes);
+        let mut erased = <dyn erased_serde::Deserializer>::erase(&mut de);
+        f(&mut erased)
     }
 
-    fn set_owned<T: Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
-        self.set_owned_with_source(path, value, None)
-    }
-
-    fn set_with_source<T: Serialize>(
+    fn set_erased(
         &self,
         path: &str,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.set_owned_with_source(Arc::from(path), value, source)
+        self.set_owned_erased(Arc::from(path), value, source)
     }
 
-    fn set_owned_with_source<T: Serialize>(
+    fn set_owned_erased(
         &self,
         path: Arc<str>,
-        value: &T,
+        value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.inner.check_debouncer();
@@ -351,7 +368,7 @@ impl Store for RedbStore {
             let mut b = buf.borrow_mut();
             b.clear();
             let mut ser = Serializer::new(&mut *b).with_bytes(BytesMode::ForceAll);
-            value.serialize(&mut ser).map_err(CodecError::from)?;
+            erased_serde::serialize(value, &mut ser).map_err(CodecError::from)?;
 
             Ok::<Vec<u8>, RedbStoreError>(Vec::from(&b[..]))
         })?;
@@ -534,20 +551,6 @@ impl Store for RedbStore {
         self.inner.subscriptions.write().retain(|s| s.id != id);
     }
 
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
-        match rmp_serde::from_slice(bytes) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                warn!(
-                    target: "amethystate",
-                    "Failed to decode field. Data is corrupted or type changed. \
-                    Using Default value. Error: {e}"
-                );
-                Ok(T::default())
-            }
-        }
-    }
-
     fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
         self.inner.flush_prefix(prefix)
     }
@@ -601,6 +604,7 @@ mod tests {
     use super::*;
     use crate::migration::fields::FieldDescriptor;
     use crate::migration::{MigrationError, MigrationPlan};
+    use crate::store::StoreExt;
     use amethystate_core::test_utils::unique_path;
     use serial_test::serial;
     use std::thread;
