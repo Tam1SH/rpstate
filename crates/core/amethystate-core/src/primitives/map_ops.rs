@@ -64,7 +64,12 @@ where
         .map(|kvs| kvs.len())?)
 }
 
-pub fn map_set_existing<B, K, V>(
+/// Writes a key that already exists, and fails with
+/// [`ReactiveMapError::KeyNotFound`] otherwise.
+///
+/// The old value is read first because [`MapChange::Update`] carries it to
+/// subscribers; a key that does not exist has none to carry.
+pub fn map_update<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,
@@ -93,7 +98,9 @@ where
     map_apply_change(backend, core, path, change)
 }
 
-pub fn map_set_or_create<B, K, V>(
+/// Writes a key whether or not it exists, emitting [`MapChange::Insert`] for
+/// a new one and [`MapChange::Update`] for one that was already there.
+pub fn map_insert<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,

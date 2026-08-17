@@ -153,7 +153,7 @@ where
         });
     }
 
-    let set_or_create = {
+    let insert = {
         let state = state.clone();
         let map = map.clone();
         Callback::from(move |(key, val): (K, V)| {
@@ -165,7 +165,7 @@ where
             let map = map.clone();
             let state = state.clone();
             spawn_local(async move {
-                if map.set_or_create(key, &val).await.is_err() {
+                if map.insert(key, &val).await.is_err() {
                     state.set(old);
                 }
             });
@@ -232,7 +232,7 @@ where
         set,
         remove,
         clear,
-        set_or_create,
+        insert,
     }
 }
 

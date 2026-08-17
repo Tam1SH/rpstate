@@ -124,11 +124,7 @@ mod on_disk {
             .unwrap();
         let state = Mapped::new_with(&store).unwrap();
 
-        state
-            .limits()
-            .durable()
-            .set_or_create("gpu".into(), &90)
-            .unwrap();
+        state.limits().durable().insert("gpu".into(), &90).unwrap();
 
         assert!(
             contents(&path).contains("\"gpu\": 90"),
@@ -146,11 +142,7 @@ mod on_disk {
             .unwrap();
         let state = Mapped::new_with(&store).unwrap();
 
-        state
-            .limits()
-            .durable()
-            .set_or_create("gpu".into(), &90)
-            .unwrap();
+        state.limits().durable().insert("gpu".into(), &90).unwrap();
         state.limits().durable().remove("gpu".into()).unwrap();
 
         assert!(

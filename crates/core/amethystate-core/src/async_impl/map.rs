@@ -186,8 +186,8 @@ where
         }
     }
 
-    pub async fn set_or_create(&self, key: K, value: &V) -> ReactiveMapResult<(), B::Error> {
-        crate::map_set_or_create_async(
+    pub async fn insert(&self, key: K, value: &V) -> ReactiveMapResult<(), B::Error> {
+        crate::map_insert_async(
             &self.backend,
             &self.core,
             self.prefix.clone(),
@@ -199,7 +199,7 @@ where
     }
 
     pub async fn set(&self, key: K, value: &V) -> ReactiveMapResult<(), B::Error> {
-        crate::map_set_existing_async(
+        crate::map_update_async(
             &self.backend,
             &self.core,
             self.prefix.clone(),
@@ -217,7 +217,7 @@ where
     /// the map holds rather than a value someone is editing, and a view
     /// listing the keys has to rebuild either way.
     ///
-    /// One consequence worth knowing: `set_or_create` comes back to you or not
+    /// One consequence worth knowing: `insert` comes back to you or not
     /// depending on whether the key was already there, since it is an `Insert`
     /// the first time and an `Update` after that.
     pub fn subscribe_any_external<F>(&self, callback: F) -> SignalSubscription

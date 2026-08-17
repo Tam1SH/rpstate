@@ -57,8 +57,8 @@ fn a_map_takes_a_key_set_that_is_not_known_up_front() {
     let kv = store.kv();
 
     let flags = kv.map::<String, bool>("flags").unwrap();
-    flags.set_or_create("beta".into(), &true).unwrap();
-    flags.set_or_create("alpha".into(), &false).unwrap();
+    flags.insert("beta".into(), &true).unwrap();
+    flags.insert("alpha".into(), &false).unwrap();
 
     assert_eq!(flags.keys().unwrap(), ["alpha", "beta"]);
 }

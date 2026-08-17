@@ -21,6 +21,28 @@ impl Drop for StoreSubscription {
     }
 }
 
+/// A single persisted value with a live signal behind it.
+///
+/// ```
+/// # use amethystate::{StoreBuilder, WritableMode};
+/// # use amethystate::store::field_with_path;
+/// # use std::sync::Arc;
+/// # let path = std::env::temp_dir().join(format!(
+/// #     "amethystate-doc-{}.db",
+/// #     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+/// # ));
+/// # let store = StoreBuilder::new(&path).build().unwrap();
+/// let port = field_with_path::<u16, WritableMode>(
+///     &store,
+///     Arc::from("net.port"),
+///     8080,
+///     amethystate::uuid::Uuid::new_v4(),
+/// ).unwrap();
+///
+/// assert_eq!(port.get(), 8080);
+/// port.set(9090).unwrap();
+/// assert_eq!(port.get(), 9090);
+/// ```
 pub struct Field<TValue, M: AccessMode = ReadOnlyMode> {
     pub(crate) core: FieldCore<TValue>,
     pub(crate) path: Arc<str>,

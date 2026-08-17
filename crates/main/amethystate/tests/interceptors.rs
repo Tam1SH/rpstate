@@ -95,8 +95,8 @@ fn key_interceptors_still_run_for_their_own_key() {
         Some(change)
     });
 
-    items.set("a".to_string(), &10).unwrap();
-    items.set("b".to_string(), &20).unwrap();
+    items.update("a".to_string(), &10).unwrap();
+    items.update("b".to_string(), &20).unwrap();
 
     assert_eq!(*hits.lock().unwrap(), vec![Some("a".to_string())]);
 }

@@ -72,7 +72,7 @@ where
         .map(|kvs| kvs.len())?)
 }
 
-pub async fn map_set_existing_async<B, K, V>(
+pub async fn map_update_async<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,
@@ -101,7 +101,7 @@ where
     map_apply_change_async(backend, core, path, change).await
 }
 
-pub async fn map_set_or_create_async<B, K, V>(
+pub async fn map_insert_async<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
     path: Arc<str>,

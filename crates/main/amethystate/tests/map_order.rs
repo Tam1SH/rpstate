@@ -13,7 +13,7 @@ fn seeded(path: &std::path::Path) -> (amethystate::Store, Cfg) {
     let cfg = Cfg::new_with(&store).unwrap();
 
     for k in ["zulu", "alpha", "mike", "bravo", "delta"] {
-        cfg.items().set_or_create(k.to_string(), &1).unwrap();
+        cfg.items().insert(k.to_string(), &1).unwrap();
     }
 
     (store, cfg)
@@ -63,7 +63,7 @@ fn keys_sees_unflushed_writes() {
     let path = unique_path("order_unflushed");
     let (_store, cfg) = seeded(&path);
 
-    cfg.items().set_or_create("zzz".to_string(), &1).unwrap();
+    cfg.items().insert("zzz".to_string(), &1).unwrap();
 
     let keys = cfg.items().keys().unwrap();
     assert!(keys.contains(&"zzz".to_string()));

@@ -232,9 +232,9 @@ where
         let _ = arena_set.set_map_entry(handle, key, val);
     });
 
-    let arena_set_or_create = arena.clone();
-    let _set_or_create = use_callback(move |(key, val)| {
-        let _ = arena_set_or_create.set_map_entry(handle, key, val);
+    let arena_insert = arena.clone();
+    let _insert = use_callback(move |(key, val)| {
+        let _ = arena_insert.set_map_entry(handle, key, val);
     });
 
     let arena_remove = arena.clone();
@@ -247,7 +247,7 @@ where
         let _ = arena_clear.clear_map(handle);
     });
 
-    MapSignal::new(signal.into(), _set, _set_or_create, _remove, _clear)
+    MapSignal::new(signal.into(), _set, _insert, _remove, _clear)
 }
 
 pub fn use_map_entry<K, V, M>(handle: MapHandle<K, V, M>, key: K) -> ReadSignal<Option<V>>

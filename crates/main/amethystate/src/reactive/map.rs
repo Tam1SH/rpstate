@@ -220,26 +220,32 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    pub fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    /// Reads the key, hands the value to `f` and writes back what it returns,
+    /// then yields the new value. [`ReactiveMap::modify`] does the same
+    /// through `&mut` instead. Fails with
+    /// [`ReactiveMapError::KeyNotFound`] when the key is absent.
+    pub fn update_with<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
         F: FnOnce(V) -> V,
     {
         if let Some(val) = self.get(&key)? {
             let new_val = f(val);
-            self.set(key, &new_val)?;
+            self.update(key, &new_val)?;
             Ok(Some(new_val))
         } else {
             Err(ReactiveMapError::KeyNotFound(key.to_string()))
         }
     }
 
+    /// Reads the key, lets `f` change the value in place and writes it back.
+    /// Fails with [`ReactiveMapError::KeyNotFound`] when the key is absent.
     pub fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
     where
         F: FnOnce(&mut V),
     {
         if let Some(mut val) = self.get(&key)? {
             f(&mut val);
-            self.set(key, &val)
+            self.update(key, &val)
         } else {
             Err(ReactiveMapError::KeyNotFound(key.to_string()))
         }
@@ -247,15 +253,43 @@ where
 
     /// The same writes, each returning only once the change is on disk.
     ///
-    /// `set` and friends leave the change in the write buffer, where a crash
+    /// `insert`, `update` and friends leave the change in the write buffer,
+    /// where a crash
     /// loses it; these pay a commit to close that window.
     pub fn durable(&self) -> crate::store::Durable<'_, Self> {
         crate::store::Durable(self)
     }
 
-    pub fn set(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+    /// Writes a key that is already there, and fails with
+    /// [`ReactiveMapError::KeyNotFound`] when it is not.
+    ///
+    /// The strictness is not a whim: subscribers receive
+    /// [`MapChange::Update`], which carries the previous value, and a key
+    /// that does not exist has none. Use [`ReactiveMap::insert`] to add one.
+    ///
+    /// ```
+        /// # use amethystate::StoreBuilder;
+    /// # let path = std::env::temp_dir().join(format!(
+    /// #     "amethystate-doc-{}.db",
+    /// #     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    /// # ));
+    /// # let store = StoreBuilder::new(&path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// // `update` refuses a key that is not there yet.
+    /// assert!(widths.update("cpu".into(), &120).is_err());
+    ///
+    /// // `insert` is the one that adds it.
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    ///
+    /// // Once the key exists, the strict write lands.
+    /// widths.update("cpu".into(), &200).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(200));
+    /// ```
+    pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.store.clone());
-        Ok(amethystate_core::map_set_existing(
+        Ok(amethystate_core::map_update(
             &backend,
             &self.core,
             self.path.clone(),
@@ -265,9 +299,14 @@ where
         )?)
     }
 
-    pub fn set_or_create(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+    /// Writes a key whether or not it is already there, like
+    /// [`std::collections::HashMap::insert`].
+    ///
+    /// Subscribers see [`MapChange::Insert`] for a new key and
+    /// [`MapChange::Update`] for one that existed.
+    pub fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.store.clone());
-        Ok(amethystate_core::map_set_or_create(
+        Ok(amethystate_core::map_insert(
             &backend,
             &self.core,
             self.path.clone(),
@@ -338,23 +377,27 @@ where
         Ok(())
     }
 
-    pub fn set(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        self.0.set(key, value)?;
+    /// [`ReactiveMap::update`], returning only once the change is on disk.
+    pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.update(key, value)?;
         self.commit()
     }
 
-    pub async fn set_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        self.0.set(key, value)?;
+    /// [`ReactiveMap::update`], resolving once the change is on disk.
+    pub async fn update_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.update(key, value)?;
         self.commit_async().await
     }
 
-    pub fn set_or_create(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        self.0.set_or_create(key, value)?;
+    /// [`ReactiveMap::insert`], returning only once the change is on disk.
+    pub fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.insert(key, value)?;
         self.commit()
     }
 
-    pub async fn set_or_create_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        self.0.set_or_create(key, value)?;
+    /// [`ReactiveMap::insert`], resolving once the change is on disk.
+    pub async fn insert_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+        self.0.insert(key, value)?;
         self.commit_async().await
     }
 
@@ -380,24 +423,27 @@ where
         self.commit_async().await
     }
 
-    pub fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    /// [`ReactiveMap::update_with`], returning only once the change is on disk.
+    pub fn update_with<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
         F: FnOnce(V) -> V,
     {
-        let value = self.0.update(key, f)?;
+        let value = self.0.update_with(key, f)?;
         self.commit()?;
         Ok(value)
     }
 
-    pub async fn update_async<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    /// [`ReactiveMap::update_with`], resolving once the change is on disk.
+    pub async fn update_with_async<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
         F: FnOnce(V) -> V,
     {
-        let value = self.0.update(key, f)?;
+        let value = self.0.update_with(key, f)?;
         self.commit_async().await?;
         Ok(value)
     }
 
+    /// [`ReactiveMap::modify`], returning only once the change is on disk.
     pub fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
     where
         F: FnOnce(&mut V),
@@ -461,9 +507,9 @@ mod tests {
             });
         });
 
-        map.set_or_create("a".to_string(), &1).unwrap(); // Insert - delivered
-        map.set("a".to_string(), &2).unwrap(); // Update - filtered
-        map.set_or_create("a".to_string(), &3).unwrap(); // Update - filtered
+        map.insert("a".to_string(), &1).unwrap(); // Insert - delivered
+        map.update("a".to_string(), &2).unwrap(); // Update - filtered
+        map.insert("a".to_string(), &3).unwrap(); // Update - filtered
         map.remove("a".to_string()).unwrap(); // Remove - delivered
 
         assert_eq!(
@@ -473,7 +519,7 @@ mod tests {
         );
 
         seen.lock().unwrap().clear();
-        map.set_or_create("b".to_string(), &4).unwrap();
+        map.insert("b".to_string(), &4).unwrap();
         seen.lock().unwrap().clear();
         map.clear().unwrap();
 
@@ -485,8 +531,8 @@ mod tests {
 
         seen.lock().unwrap().clear();
         let other = map.fork();
-        other.set_or_create("c".to_string(), &5).unwrap();
-        other.set("c".to_string(), &6).unwrap();
+        other.insert("c".to_string(), &5).unwrap();
+        other.update("c".to_string(), &6).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -523,9 +569,9 @@ mod tests {
                 });
             });
 
-        map.set_or_create("a".to_string(), &1).unwrap();
-        map.set("a".to_string(), &2).unwrap();
-        map.set_or_create("b".to_string(), &3).unwrap(); // other key, not ours
+        map.insert("a".to_string(), &1).unwrap();
+        map.update("a".to_string(), &2).unwrap();
+        map.insert("b".to_string(), &3).unwrap(); // other key, not ours
         map.remove("a".to_string()).unwrap();
 
         assert_eq!(
@@ -549,17 +595,17 @@ mod tests {
             )
             .unwrap();
 
-        map.set_or_create("a".into(), &10).unwrap();
+        map.insert("a".into(), &10).unwrap();
         assert_eq!(map.get(&"a".into()).unwrap(), Some(10));
         assert_eq!(map.len().unwrap(), 1);
 
-        map.set("a".into(), &20).unwrap();
+        map.update("a".into(), &20).unwrap();
         assert_eq!(map.get(&"a".into()).unwrap(), Some(20));
 
-        let res = map.set("missing".into(), &30);
+        let res = map.update("missing".into(), &30);
         assert!(matches!(res, Err(ReactiveMapError::KeyNotFound(_))));
 
-        map.set_or_create("b".into(), &100).unwrap();
+        map.insert("b".into(), &100).unwrap();
         let entries: Vec<_> = map.entries().unwrap().collect();
         assert_eq!(entries.len(), 2);
 
@@ -591,13 +637,13 @@ mod tests {
             _ => Some(change),
         });
 
-        let res = map.set_or_create("val".into(), &-1);
+        let res = map.insert("val".into(), &-1);
         assert!(matches!(res, Err(ReactiveMapError::Intercepted)));
 
         store.save_now().unwrap();
         assert_eq!(map.get(&"val".into()).unwrap(), None);
 
-        map.set_or_create("val".into(), &10).unwrap();
+        map.insert("val".into(), &10).unwrap();
         assert_eq!(map.get(&"val".into()).unwrap(), Some(10));
     }
 
@@ -633,7 +679,7 @@ mod tests {
             _ => Some(change),
         });
 
-        map.set_or_create("x".into(), &5).unwrap();
+        map.insert("x".into(), &5).unwrap();
         assert_eq!(map.get(&"x".into()).unwrap(), Some(10));
     }
 
@@ -656,8 +702,8 @@ mod tests {
             e_clone.lock().unwrap().push(change.clone());
         });
 
-        map.set_or_create("key1".into(), &1).unwrap();
-        map.set("key1".into(), &2).unwrap();
+        map.insert("key1".into(), &1).unwrap();
+        map.update("key1".into(), &2).unwrap();
         map.remove("key1".into()).unwrap();
 
         std::thread::sleep(Duration::from_millis(100));
@@ -687,13 +733,13 @@ mod tests {
             if let MapChange::Update { key, .. } = &change
                 && key == "a"
             {
-                let _ = map_clone.set("a".into(), &999);
+                let _ = map_clone.update("a".into(), &999);
             }
             Some(change)
         });
 
-        map.set_or_create("a".into(), &1).unwrap();
-        map.set("a".into(), &2).unwrap();
+        map.insert("a".into(), &1).unwrap();
+        map.update("a".into(), &2).unwrap();
 
         assert_eq!(map.get(&"a".into()).unwrap(), Some(2));
     }
@@ -710,8 +756,8 @@ mod tests {
             )
             .unwrap();
 
-        map.set_or_create("k1".into(), &1).unwrap();
-        map.set_or_create("k2".into(), &2).unwrap();
+        map.insert("k1".into(), &1).unwrap();
+        map.insert("k2".into(), &2).unwrap();
 
         assert_eq!(map.len().unwrap(), 2);
 
@@ -745,7 +791,7 @@ mod tests {
             )
             .unwrap();
 
-        map.set_or_create("key1".into(), &1).unwrap();
+        map.insert("key1".into(), &1).unwrap();
 
         assert!(map.contains_key(&"key1".into()).unwrap());
         assert!(!map.contains_key(&"key2".into()).unwrap());
@@ -756,11 +802,11 @@ mod tests {
             let _sub = map.subscribe_any(move |_| {
                 c_clone.fetch_add(1, Ordering::SeqCst);
             });
-            map.set("key1".into(), &2).unwrap();
+            map.update("key1".into(), &2).unwrap();
             assert_eq!(call_count.load(Ordering::SeqCst), 1);
         }
 
-        map.set("key1".into(), &3).unwrap();
+        map.update("key1".into(), &3).unwrap();
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
@@ -776,8 +822,8 @@ mod tests {
             )
             .unwrap();
 
-        map.set_or_create("target".into(), &10).unwrap();
-        map.set_or_create("other".into(), &20).unwrap();
+        map.insert("target".into(), &10).unwrap();
+        map.insert("other".into(), &20).unwrap();
 
         let target_calls = Arc::new(AtomicUsize::new(0));
         let t_clone = target_calls.clone();
@@ -785,8 +831,8 @@ mod tests {
             t_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        map.set("target".into(), &11).unwrap();
-        map.set("other".into(), &21).unwrap();
+        map.update("target".into(), &11).unwrap();
+        map.update("other".into(), &21).unwrap();
         assert_eq!(target_calls.load(Ordering::SeqCst), 1);
 
         map.intercept_key("target".into(), |change| {
@@ -798,11 +844,11 @@ mod tests {
             Some(change)
         });
 
-        map.set("target".into(), &50).unwrap();
-        let res = map.set("target".into(), &150);
+        map.update("target".into(), &50).unwrap();
+        let res = map.update("target".into(), &150);
         assert!(matches!(res, Err(ReactiveMapError::Intercepted)));
 
-        map.set("other".into(), &150).unwrap();
+        map.update("other".into(), &150).unwrap();
     }
 
     #[test]
@@ -820,11 +866,9 @@ mod tests {
                 )
                 .unwrap();
 
+            map_str.insert("not_int_key".into(), &"1".into()).unwrap();
             map_str
-                .set_or_create("not_int_key".into(), &"1".into())
-                .unwrap();
-            map_str
-                .set_or_create("123".into(), &"invalid_value".into())
+                .insert("123".into(), &"invalid_value".into())
                 .unwrap();
         }
 
@@ -859,7 +903,7 @@ mod tests {
         let res = map.remove("none".into()).unwrap();
         assert!(res.is_none());
 
-        map.set_or_create("ghost".into(), &1).unwrap();
+        map.insert("ghost".into(), &1).unwrap();
         store.delete("test.remove.ghost").unwrap();
 
         let res = map.remove("ghost".into()).unwrap();
@@ -884,12 +928,12 @@ mod tests {
 
         map.intercept(move |change| {
             if let Some(key) = change.key() {
-                let _ = map_clone.set_or_create(key.clone(), &999);
+                let _ = map_clone.insert(key.clone(), &999);
             }
             Some(change)
         });
 
-        let _ = map.set_or_create("key_a".into(), &1);
+        let _ = map.insert("key_a".into(), &1);
 
         assert!(logs_contain("maximum intercept depth reached"));
         assert!(logs_contain("test.recursive_map.key_a"));
@@ -914,7 +958,7 @@ mod tests {
             c_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        map.set_or_create("a".into(), &1).unwrap();
+        map.insert("a".into(), &1).unwrap();
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -922,10 +966,10 @@ mod tests {
             "Creation (Insert) is NOT ignored"
         );
 
-        map.set("a".into(), &10).unwrap();
+        map.update("a".into(), &10).unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "Own updates are ignored");
 
-        fork.set("a".into(), &20).unwrap();
+        fork.update("a".into(), &20).unwrap();
 
         assert_eq!(
             calls.load(Ordering::SeqCst),

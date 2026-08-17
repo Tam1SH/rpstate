@@ -188,7 +188,7 @@ impl Arena {
         V: ReactiveMapValue,
     {
         self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.set_or_create(key, &value)
+            map.insert(key, &value)
         })
     }
 

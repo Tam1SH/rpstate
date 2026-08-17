@@ -45,10 +45,7 @@ fn test_slice_subscribe_all() {
     state.server().host().set("127.0.0.1".to_string()).unwrap();
     assert_eq!(change_count.load(Ordering::SeqCst), 2);
 
-    state
-        .tags()
-        .set_or_create("env".into(), &"prod".into())
-        .unwrap();
+    state.tags().insert("env".into(), &"prod".into()).unwrap();
     assert_eq!(change_count.load(Ordering::SeqCst), 3);
 
     scope.clear();
@@ -106,24 +103,21 @@ fn test_slice_subscribe_all_external() {
         "Updates to nested structure from fork must be processed"
     );
 
-    state
-        .tags()
-        .set_or_create("region".into(), &"eu".into())
-        .unwrap();
+    state.tags().insert("region".into(), &"eu".into()).unwrap();
     assert_eq!(
         change_count.load(Ordering::SeqCst),
         3,
         "New field creation (Insert) must not be ignored"
     );
 
-    state.tags().set("region".into(), &"us".into()).unwrap();
+    state.tags().update("region".into(), &"us".into()).unwrap();
     assert_eq!(
         change_count.load(Ordering::SeqCst),
         3,
         "Own map updates (Update) must be ignored"
     );
 
-    fork.tags().set("region".into(), &"asia".into()).unwrap();
+    fork.tags().update("region".into(), &"asia".into()).unwrap();
     assert_eq!(
         change_count.load(Ordering::SeqCst),
         4,

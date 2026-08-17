@@ -49,7 +49,7 @@ where
 
         ReactiveCell::from_parts(
             cache,
-            Arc::new(move |value: V| Ok(map.set_or_create(write_key.clone(), &value)?)),
+            Arc::new(move |value: V| Ok(map.insert(write_key.clone(), &value)?)),
             origin,
             Some(commit),
             Some(Arc::new(read)),

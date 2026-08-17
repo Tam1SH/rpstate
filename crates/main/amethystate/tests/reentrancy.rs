@@ -45,10 +45,10 @@ fn a_map_subscriber_may_write_to_the_map_it_watches() {
             if change.key().map(String::as_str) == Some("mirror") {
                 return;
             }
-            let _ = writer.set_or_create("mirror".to_string(), &99);
+            let _ = writer.insert("mirror".to_string(), &99);
         });
 
-        items.set_or_create("a".to_string(), &1).unwrap();
+        items.insert("a".to_string(), &1).unwrap();
     });
 }
 
@@ -62,10 +62,10 @@ fn a_keyed_subscriber_may_write_to_the_map_it_watches() {
 
         let writer = items.clone();
         let _sub = items.subscribe_key("a".to_string(), move |_| {
-            let _ = writer.set_or_create("mirror".to_string(), &99);
+            let _ = writer.insert("mirror".to_string(), &99);
         });
 
-        items.set_or_create("a".to_string(), &1).unwrap();
+        items.insert("a".to_string(), &1).unwrap();
     });
 }
 
@@ -83,7 +83,7 @@ fn a_subscriber_may_add_another_subscription_while_being_notified() {
             drop(extra);
         });
 
-        items.set_or_create("a".to_string(), &1).unwrap();
+        items.insert("a".to_string(), &1).unwrap();
     });
 }
 
@@ -101,7 +101,7 @@ fn a_panicking_subscriber_does_not_disable_the_map() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = items.set_or_create("a".to_string(), &1);
+        let _ = items.insert("a".to_string(), &1);
     }));
     std::panic::set_hook(previous);
     assert!(
@@ -116,7 +116,7 @@ fn a_panicking_subscriber_does_not_disable_the_map() {
         cap.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     });
 
-    items.set_or_create("b".to_string(), &2).unwrap();
+    items.insert("b".to_string(), &2).unwrap();
 
     assert_eq!(
         seen.load(std::sync::atomic::Ordering::SeqCst),

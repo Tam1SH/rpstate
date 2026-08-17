@@ -111,7 +111,7 @@ fn test_user_set_value_not_overwritten_by_defaults() {
         let config = v1::AppConfig::new_with(&store).unwrap();
         config
             .env()
-            .set_or_create("HTTP_PROXY".to_string(), &"http://custom:9999".to_string())
+            .insert("HTTP_PROXY".to_string(), &"http://custom:9999".to_string())
             .unwrap();
     }
 

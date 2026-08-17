@@ -119,7 +119,7 @@ async fn test_use_map_requirements() {
     let initial = probe.last().expect("Entries signal was not loaded");
     assert_eq!(initial.get("key1").unwrap(), "val1");
 
-    map_signal.set_or_create("key2".to_string(), "val2".to_string());
+    map_signal.insert("key2".to_string(), "val2".to_string());
     leptos::task::tick().await;
     assert_eq!(probe.last().unwrap().get("key2").unwrap(), "val2");
 

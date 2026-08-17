@@ -57,7 +57,7 @@ fn external_map_write_lands_in_cell() {
     let config = TableConfig::new_with(&store).unwrap();
 
     let entry = config.widths().entry_cell("cpu".to_string(), 110);
-    config.widths().set("cpu".to_string(), &99).unwrap();
+    config.widths().update("cpu".to_string(), &99).unwrap();
 
     assert_eq!(entry.get(), 99);
 }
@@ -154,7 +154,7 @@ fn cell_keeps_receiving_after_its_map_handle_is_dropped() {
         widths.entry_cell("cpu".to_string(), 110)
     };
 
-    config.widths().set("cpu".to_string(), &55).unwrap();
+    config.widths().update("cpu".to_string(), &55).unwrap();
 
     assert_eq!(entry.get(), 55, "cache must still be fed");
 }

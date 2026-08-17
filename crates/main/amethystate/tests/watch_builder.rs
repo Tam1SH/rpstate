@@ -149,8 +149,8 @@ fn map_changes_reach_a_local_subscriber() {
             });
         });
 
-    cfg.items().set_or_create("a".into(), &1).unwrap();
-    cfg.items().set("a".into(), &2).unwrap();
+    cfg.items().insert("a".into(), &1).unwrap();
+    cfg.items().update("a".into(), &2).unwrap();
     cfg.items().remove("a".into()).unwrap();
     ui.drain();
 
@@ -171,8 +171,8 @@ fn a_single_key_can_be_watched() {
             *cap.lock().unwrap() += 1;
         });
 
-    cfg.items().set_or_create("watched".into(), &1).unwrap();
-    cfg.items().set_or_create("ignored".into(), &1).unwrap();
+    cfg.items().insert("watched".into(), &1).unwrap();
+    cfg.items().insert("ignored".into(), &1).unwrap();
 
     assert_eq!(*seen.lock().unwrap(), 1);
 }
@@ -197,8 +197,8 @@ fn external_on_a_map_filters_updates_only() {
         },
     );
 
-    cfg.items().set_or_create("a".into(), &1).unwrap();
-    cfg.items().set("a".into(), &2).unwrap();
+    cfg.items().insert("a".into(), &1).unwrap();
+    cfg.items().update("a".into(), &2).unwrap();
     cfg.items().remove("a".into()).unwrap();
 
     assert_eq!(*seen.lock().unwrap(), vec!["insert", "remove"]);
@@ -296,7 +296,7 @@ mod stream {
         let (_s, cfg) = cfg();
         let mut changes = cfg.items().subscription_with().stream();
 
-        cfg.items().set_or_create("a".into(), &1).unwrap();
+        cfg.items().insert("a".into(), &1).unwrap();
 
         let got = block_on(changes.next()).unwrap();
         assert!(matches!(got, MapChange::Insert { .. }));

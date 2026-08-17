@@ -33,7 +33,7 @@ fn env_map_editor(props: &EnvMapProps) -> Html {
             if key.is_empty() {
                 return;
             }
-            map.set_or_create(key, val);
+            map.insert(key, val);
             new_key.set(String::new());
             new_val.set(String::new());
         })

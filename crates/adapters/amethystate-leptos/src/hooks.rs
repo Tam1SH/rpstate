@@ -194,25 +194,25 @@ where
         }
     });
 
-    let arena_set_or_create = arena.clone();
-    let _set_or_create = Callback::new(move |(key, val): (K, V)| {
+    let arena_insert = arena.clone();
+    let _insert = Callback::new(move |(key, val): (K, V)| {
         #[cfg(target_arch = "wasm32")]
         {
             let old = signal.get_untracked();
             set_signal.update(|m| {
                 m.insert(key.clone(), val.clone());
             });
-            let arena_clone = arena_set_or_create.clone();
+            let arena_clone = arena_insert.clone();
             leptos::task::spawn_local(async move {
                 if let Err(e) = arena_clone.set_map_entry(handle, key, val).await {
-                    log::error!("set_or_create_map_entry failed: {e:?}");
+                    log::error!("insert_map_entry failed: {e:?}");
                     set_signal.set(old);
                 }
             });
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = arena_set_or_create.set_map_entry(handle, key, val);
+            let _ = arena_insert.set_map_entry(handle, key, val);
         }
     });
 
@@ -259,7 +259,7 @@ where
         }
     });
 
-    MapSignal::new(signal, _set, _set_or_create, _remove, _clear)
+    MapSignal::new(signal, _set, _insert, _remove, _clear)
 }
 
 pub fn use_map_entry<K, V, M>(handle: MapHandle<K, V, M>, key: K) -> ReadSignal<Option<V>>

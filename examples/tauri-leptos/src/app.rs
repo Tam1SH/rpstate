@@ -18,7 +18,7 @@ fn EnvMapEditor(env: WritableMapHandle<String, String>) -> impl IntoView {
         if key.is_empty() {
             return;
         }
-        map.set_or_create(key, val);
+        map.insert(key, val);
         set_key.set(String::new());
         set_val.set(String::new());
     };

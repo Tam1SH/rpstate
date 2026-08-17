@@ -68,11 +68,11 @@ fn test_embedded_map_migration() {
 
         config
             .routes()
-            .set_or_create("api".into(), &"http://api.v1".into())
+            .insert("api".into(), &"http://api.v1".into())
             .unwrap();
         config
             .routes()
-            .set_or_create("obsolete".into(), &"http://drop.me".into())
+            .insert("obsolete".into(), &"http://drop.me".into())
             .unwrap();
         store.save_now().unwrap();
     }

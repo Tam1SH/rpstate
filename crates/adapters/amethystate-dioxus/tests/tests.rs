@@ -193,7 +193,7 @@ async fn test_use_map_requirements() {
 
     let methods = methods_probe.last().unwrap();
 
-    methods.set_or_create("key2".to_string(), "val2".to_string());
+    methods.insert("key2".to_string(), "val2".to_string());
     tokio::task::yield_now().await;
     let _ = vdom.wait_for_work().await;
     vdom.rebuild(&mut dioxus::core::NoOpMutations);
