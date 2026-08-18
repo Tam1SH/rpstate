@@ -64,6 +64,23 @@ Two differences from the GitHub workflow worth knowing: that one excludes
 the bare `sqlite` feature where the script uses `sqlite-bundled` — the bare one
 links against a system SQLite that may not be installed.
 
+## Documentation examples
+
+Most rustdoc examples are real doctests with assertions, and they build their
+store through `amethystate_core::test_utils::TempPath`, which cleans up after
+itself.
+
+Examples involving `#[amethystate]` or `#[migrate]` are marked `ignore`, and
+this is not laziness. The macro resolves the crate to `crate`, and a doctest
+compiles as a separate crate where that means the doctest itself - so the
+generated code does not resolve. Anything reachable without the macro uses
+`store::field_with_path` or `Kv` instead and stays runnable.
+
+None of that belongs in the rustdoc - a reader has no use for why our test
+harness cannot run something. The mapping lives here instead: the migration
+examples are lifted from `tests/migration.rs` and `tests/migration_builder.rs`,
+and both sides need updating together.
+
 ## Tests worth knowing about
 
 `tests/expand/` holds macro expansion goldens checked by `macrotest`, and
