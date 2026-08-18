@@ -79,6 +79,36 @@ impl<W: Watchable> Watch<W, Immediate> {
         }
     }
 
+    /// Installs the callback with everything configured so far, and yields
+    /// the handle that keeps it alive.
+    ///
+    /// Dropping the returned handle unsubscribes.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    /// # use std::sync::Mutex;
+    /// let seen = Arc::new(Mutex::new(Vec::new()));
+    /// let sink = Arc::clone(&seen);
+    ///
+    /// let sub = port.subscription_with().register(move |v| {
+    ///     sink.lock().unwrap().push(*v);
+    /// });
+    ///
+    /// port.set(9090).unwrap();
+    /// port.set(9091).unwrap();
+    /// assert_eq!(*seen.lock().unwrap(), [9090, 9091]);
+    ///
+    /// drop(sub);
+    /// port.set(9092).unwrap();
+    /// assert_eq!(seen.lock().unwrap().len(), 2, "the handle is what kept it alive");
+    /// ```
     pub fn register<F>(self, callback: F) -> SignalSubscription
     where
         F: Fn(&W::Item) + Send + Sync + 'static,
@@ -86,6 +116,46 @@ impl<W: Watchable> Watch<W, Immediate> {
         self.register_with_source(move |item, _| callback(item))
     }
 
+    /// Installs a callback that also receives who made the change, so it
+    /// can tell its own writes from anyone else's.
+    ///
+    /// [`Watch::external`] drops those changes before the callback runs, which
+    /// is usually what you want; take the id yourself when a write of your own
+    /// needs different treatment rather than none.
+    ///
+    /// Dropping the returned handle unsubscribes.
+    ///
+    /// The example below uses [`Field::fork`](crate::Field::fork) rather than
+    /// [`Clone`] to stand in for a second component: a clone shares the
+    /// instance id, so its writes would arrive indistinguishable from the
+    /// original's.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    /// # use std::sync::Mutex;
+    /// let port_fork = port.fork();
+    ///
+    /// let seen = Arc::new(Mutex::new(Vec::new()));
+    /// let sink = Arc::clone(&seen);
+    ///
+    /// let _sub = port.subscription_with().register_with_source(move |v, src| {
+    ///     sink.lock().unwrap().push((*v, src));
+    /// });
+    ///
+    /// port.set(9090).unwrap();
+    /// port_fork.set(9091).unwrap();
+    ///
+    /// let seen = seen.lock().unwrap();
+    /// assert_eq!(seen.len(), 2, "both arrived");
+    /// assert_ne!(seen[0].1, seen[1].1, "each carries who wrote it");
+    /// ```
     pub fn register_with_source<F>(self, callback: F) -> SignalSubscription
     where
         F: Fn(&W::Item, Option<Uuid>) + Send + Sync + 'static,
@@ -103,11 +173,68 @@ impl<W: Watchable> Watch<W, Immediate> {
 
 impl<W: Watchable> Watch<W, Local<'_>> {
     /// Keeps every change instead of coalescing to the newest.
+    ///
+    /// A local subscription queues values and hands them over at
+    /// [`LocalScope::drain`]. By default the queue holds one slot per source:
+    /// three writes between two drains deliver once, with the last value.
+    /// That is right for a value being rendered - nobody wants to paint two
+    /// frames that were already stale - and wrong for changes that are events,
+    /// where each one means something on its own.
+    ///
+    /// ```
+    /// # use amethystate::{LocalScope, StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::cell::RefCell;
+    /// # use std::rc::Rc;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// // Coalescing, the default.
+    /// let mut scope = LocalScope::new();
+    /// let seen = Rc::new(RefCell::new(Vec::new()));
+    /// let sink = Rc::clone(&seen);
+    /// port.subscription_with().local(&mut scope).register(move |v| {
+    ///     sink.borrow_mut().push(*v);
+    /// });
+    ///
+    /// port.set(1).unwrap();
+    /// port.set(2).unwrap();
+    /// port.set(3).unwrap();
+    /// scope.drain();
+    /// assert_eq!(*seen.borrow(), [3], "only the newest survived the wait");
+    ///
+    /// // The same three writes with `every`.
+    /// let mut scope = LocalScope::new();
+    /// let seen = Rc::new(RefCell::new(Vec::new()));
+    /// let sink = Rc::clone(&seen);
+    /// port.subscription_with().local(&mut scope).every().register(move |v| {
+    ///     sink.borrow_mut().push(*v);
+    /// });
+    ///
+    /// port.set(4).unwrap();
+    /// port.set(5).unwrap();
+    /// port.set(6).unwrap();
+    /// scope.drain();
+    /// assert_eq!(*seen.borrow(), [4, 5, 6], "each one kept");
+    /// ```
     pub fn every(mut self) -> Self {
         self.delivery.coalesce = false;
         self
     }
 
+    /// Installs the callback, to be called from [`LocalScope::drain`] rather
+    /// than at the moment of the change.
+    ///
+    /// The subscription belongs to the scope and ends with it, so there is no
+    /// handle to hold. The callback is `FnMut` and needs neither `Send` nor
+    /// `Sync`, which is the whole point of a local subscription.
+    ///
+    /// [`Watch::every`] has a worked example of both this and the queueing
+    /// behind it.
     pub fn register<F>(self, mut callback: F)
     where
         F: FnMut(&W::Item) + 'static,
@@ -115,6 +242,12 @@ impl<W: Watchable> Watch<W, Local<'_>> {
         self.register_with_source(move |item, _| callback(item))
     }
 
+    /// [`Watch::register`] with the writer's id passed along, so the callback
+    /// can tell its own writes from anyone else's.
+    ///
+    /// [`Watch::external`] drops those before they are queued at all, which is
+    /// usually what you want; take the id when a write of your own needs
+    /// different treatment rather than none.
     pub fn register_with_source<F>(self, mut callback: F)
     where
         F: FnMut(&W::Item, Option<Uuid>) + 'static,

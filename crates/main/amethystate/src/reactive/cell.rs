@@ -1,5 +1,6 @@
 use crate::reactive::error::WriteResult;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::store::Durable;
 use amethystate_core::{Signal, SignalSubscription};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -78,6 +79,20 @@ where
         }
     }
 
+    /// The current value, read from the cache rather than the store.
+    ///
+    /// For a cell over a persisted value the cache is kept current by the
+    /// store subscription, so this sees writes made anywhere - including from
+    /// another process editing the file.
+    ///
+    /// ```
+    /// # use amethystate::ReactiveCell;
+    /// let mode = ReactiveCell::new("dark".to_string());
+    ///
+    /// assert_eq!(mode.get(), "dark");
+    /// mode.set("light".to_string()).unwrap();
+    /// assert_eq!(mode.get(), "light");
+    /// ```
     pub fn get(&self) -> T {
         self.cache.get()
     }
@@ -86,8 +101,8 @@ where
     ///
     /// A cell over a value held in memory has nothing to commit to, and its
     /// writes here behave as the plain ones do.
-    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
-        crate::store::Durable(self)
+    pub fn durable(&self) -> Durable<'_, Self> {
+        Durable(self)
     }
 
     /// Fails if the write is refused - by an interceptor, or by the store.
@@ -98,6 +113,16 @@ where
     }
 
     /// Read-modify-write, not atomic.
+    /// Reads the value, writes back what `f` returns, and yields the new
+    /// value.
+    ///
+    /// ```
+    /// # use amethystate::ReactiveCell;
+    /// let hits = ReactiveCell::new(0u32);
+    ///
+    /// assert_eq!(hits.update(|n| n + 1).unwrap(), 1);
+    /// assert_eq!(hits.get(), 1);
+    /// ```
     pub fn update<F>(&self, f: F) -> WriteResult<T>
     where
         F: FnOnce(T) -> T,
@@ -108,6 +133,7 @@ where
     }
 
     /// Same caveat as [`ReactiveCell::update`]: read-modify-write, not atomic.
+    /// Reads the value, lets `f` change it in place, and writes it back.
     pub fn modify<F>(&self, f: F) -> WriteResult<()>
     where
         F: FnOnce(&mut T),
@@ -117,6 +143,9 @@ where
         self.set(value)
     }
 
+    ///
+    /// A callback sees the change while it is still buffered, before it
+    /// reaches disk - see [the module docs](crate::reactive).
     #[track_caller]
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
@@ -127,6 +156,9 @@ where
 
     /// Subscribes with the provenance of each change, so a subscriber can tell
     /// its own writes from everyone else's.
+    ///
+    /// A callback sees the change while it is still buffered, before it
+    /// reaches disk - see [the module docs](crate::reactive).
     #[track_caller]
     pub fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
@@ -137,6 +169,8 @@ where
 
     /// Configures a subscription: filtering, provenance, and where the callback
     /// runs. See [`Watch`].
+    /// Configures a subscription: filtering, provenance, and where the
+    /// callback runs. See [`Watch`].
     pub fn subscription_with(&self) -> Watch<Self, Immediate> {
         Watch::new(self.clone())
     }
@@ -188,10 +222,70 @@ impl<T: std::fmt::Debug + Clone + Send + Sync + 'static> std::fmt::Debug for Rea
     }
 }
 
-impl<T> crate::store::Durable<'_, ReactiveCell<T>>
+impl<T> Durable<'_, ReactiveCell<T>>
 where
     T: Clone + Send + Sync + 'static,
 {
+    /// Writes the value.
+    ///
+    /// Returns only once it is on disk rather than buffered - or straight
+    /// away for an in-memory cell, which has nothing to commit to.
+    pub fn set(&self, value: T) -> WriteResult<()> {
+        self.0.set(value)?;
+        self.commit()
+    }
+
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
+    pub async fn set_async(&self, value: T) -> WriteResult<()> {
+        self.0.set(value)?;
+        self.commit_async().await
+    }
+
+    /// Reads the value, writes back what `f` returns, and yields it.
+    ///
+    /// Returns only once it is on disk rather than buffered.
+    pub fn update<F>(&self, f: F) -> WriteResult<T>
+    where
+        F: FnOnce(T) -> T,
+    {
+        let value = self.0.update(f)?;
+        self.commit()?;
+        Ok(value)
+    }
+
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
+    pub async fn update_async<F>(&self, f: F) -> WriteResult<T>
+    where
+        F: FnOnce(T) -> T,
+    {
+        let value = self.0.update(f)?;
+        self.commit_async().await?;
+        Ok(value)
+    }
+
+    /// Reads the value, lets `f` change it in place, and writes it back.
+    ///
+    /// Returns only once it is on disk rather than buffered.
+    pub fn modify<F>(&self, f: F) -> WriteResult<()>
+    where
+        F: FnOnce(&mut T),
+    {
+        self.0.modify(f)?;
+        self.commit()
+    }
+
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
+    pub async fn modify_async<F>(&self, f: F) -> WriteResult<()>
+    where
+        F: FnOnce(&mut T),
+    {
+        self.0.modify(f)?;
+        self.commit_async().await
+    }
+
     fn commit(&self) -> WriteResult<()> {
         match &self.0.commit {
             Some(commit) => (commit.now)(),
@@ -205,50 +299,6 @@ where
             Some(commit) => Ok(commit.await?),
             None => Ok(()),
         }
-    }
-
-    pub fn set(&self, value: T) -> WriteResult<()> {
-        self.0.set(value)?;
-        self.commit()
-    }
-
-    pub async fn set_async(&self, value: T) -> WriteResult<()> {
-        self.0.set(value)?;
-        self.commit_async().await
-    }
-
-    pub fn update<F>(&self, f: F) -> WriteResult<T>
-    where
-        F: FnOnce(T) -> T,
-    {
-        let value = self.0.update(f)?;
-        self.commit()?;
-        Ok(value)
-    }
-
-    pub async fn update_async<F>(&self, f: F) -> WriteResult<T>
-    where
-        F: FnOnce(T) -> T,
-    {
-        let value = self.0.update(f)?;
-        self.commit_async().await?;
-        Ok(value)
-    }
-
-    pub fn modify<F>(&self, f: F) -> WriteResult<()>
-    where
-        F: FnOnce(&mut T),
-    {
-        self.0.modify(f)?;
-        self.commit()
-    }
-
-    pub async fn modify_async<F>(&self, f: F) -> WriteResult<()>
-    where
-        F: FnOnce(&mut T),
-    {
-        self.0.modify(f)?;
-        self.commit_async().await
     }
 }
 

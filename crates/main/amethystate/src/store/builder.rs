@@ -7,8 +7,10 @@ use crate::migration::builder::MigrationBuilder;
 use crate::store::config::StoreConfig;
 use crate::{MigrationReport, Store};
 
-/// Which engine backs the store. Chosen when the store is built - enabling a
-/// feature adds a choice here, it does not take the default away from anyone.
+/// Which engine backs a store.
+///
+/// A variant exists for each backend feature that is enabled. Pass one to
+/// [`StoreBuilder::backend`]; without that, [`default_backend`] picks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     #[cfg(feature = "redb")]
@@ -39,6 +41,10 @@ impl Backend {
         }
     }
 
+    /// Opens a store on this engine directly, skipping the builder.
+    ///
+    /// [`StoreBuilder`] is the ordinary route - it also collects migrations
+    /// and settings this does not.
     pub fn open_public(
         self,
         config: StoreConfig,
@@ -92,9 +98,12 @@ macro_rules! first_enabled_backend {
     };
 }
 
-/// The engine used when the caller does not name one. Priority runs left to
-/// right; enabling a feature adds a candidate at its own position and never
-/// displaces one ahead of it.
+/// The engine used when the caller does not name one.
+///
+/// The first of redb, sqlite, json, toml, ron that is enabled. Naming the
+/// engine with [`StoreBuilder::backend`] is worth doing wherever it matters
+/// which one runs - the on-disk format differs, and so does what a durable
+/// write commits.
 pub const fn default_backend() -> Backend {
     first_enabled_backend! {
         "redb"   => Backend::Redb,
@@ -112,6 +121,10 @@ pub struct StoreBuilder {
 }
 
 impl StoreBuilder {
+    /// A store at an explicit path.
+    ///
+    /// The extension is left as given; [`StoreBuilder::for_app`] is the
+    /// variant that picks a location and an extension for you.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let mut path: PathBuf = path.into();
         if path.extension().is_none() {
@@ -128,8 +141,8 @@ impl StoreBuilder {
     /// directory for the given application name.
     ///
     /// The directory strategy depends on the active feature flag:
-    /// - `confy-compat-0-6`: uses the [`directories`] crate (legacy `confy` v0.6 behavior)
-    /// - default: uses the [`etcetera`] crate (XDG / native OS strategy)
+    /// - `confy-compat-0-6`: uses the `directories` crate (legacy `confy` v0.6 behavior)
+    /// - default: uses the `etcetera` crate (XDG / native OS strategy)
     pub fn for_app(
         app_name: impl AsRef<str>,
         config_name: impl AsRef<str>,
@@ -144,6 +157,11 @@ impl StoreBuilder {
         }
     }
 
+    /// [`StoreBuilder::for_app`] pinned to the `etcetera` layout, whatever
+    /// the feature flags say.
+    ///
+    /// Worth naming explicitly when a config location must not move because a
+    /// dependency elsewhere in the build turned a compatibility feature on.
     pub fn for_app_v2(
         app_name: impl AsRef<str>,
         config_name: impl AsRef<str>,
@@ -168,6 +186,11 @@ impl StoreBuilder {
     }
 
     #[cfg(feature = "confy-compat-0-6")]
+    /// [`StoreBuilder::for_app`] pinned to the layout `confy` 0.6 used, by way
+    /// of the `directories` crate.
+    ///
+    /// For reading configuration an older version of the application wrote;
+    /// [`StoreBuilder::for_app_v2`] is the current layout.
     pub fn for_app_v06(
         app_name: impl AsRef<str>,
         config_name: impl AsRef<str>,
@@ -190,16 +213,29 @@ impl StoreBuilder {
 
         Ok(Self::new(path))
     }
+    /// How long a write waits in the buffer before it is flushed, in
+    /// milliseconds.
+    ///
+    /// Raising this batches more writes into one commit; lowering it narrows
+    /// the window a crash can take. Neither affects reads, which see buffered
+    /// writes immediately either way.
     pub fn debounce(mut self, ms: u64) -> Self {
         self.config.save_debounce = Duration::from_millis(ms);
         self
     }
 
+    /// How often the file watcher polls for changes made outside the
+    /// process, in milliseconds.
     pub fn watch_interval(mut self, ms: u64) -> Self {
         self.config.watch_interval = Duration::from_millis(ms);
         self
     }
 
+    /// Declares migration steps to run when the store opens.
+    ///
+    /// Steps written with `#[migrate]` are collected automatically by
+    /// [`StoreBuilder::build_with_report`]; this is for the ones built by
+    /// hand.
     pub fn migrations(mut self, configure: impl FnOnce(&mut MigrationBuilder)) -> Self {
         configure(&mut self.migration_builder);
         self
@@ -212,6 +248,15 @@ impl StoreBuilder {
         self
     }
 
+    /// Opens the store.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// let store = StoreBuilder::new(&*path).build().unwrap();
+    /// store.kv().set("a", &1u8).unwrap();
+    /// assert_eq!(store.kv().get::<u8>("a").unwrap(), Some(1));
+    /// ```
     pub fn build(self) -> StorageResult<Store> {
         let migration_set = self.migration_builder.into_set();
         let (store, _) = self.backend.open_public(self.config, migration_set)?;
@@ -219,6 +264,11 @@ impl StoreBuilder {
         Ok(store)
     }
 
+    /// Opens the store and returns what the migration pass did.
+    ///
+    /// This is also the path that collects `#[migrate]` steps, so a store
+    /// opened with [`StoreBuilder::build`] runs only the migrations declared
+    /// by hand.
     pub fn build_with_report(mut self) -> StorageResult<(Store, MigrationReport)> {
         self.migration_builder.collect_codegen();
         let migration_set = self.migration_builder.into_set();

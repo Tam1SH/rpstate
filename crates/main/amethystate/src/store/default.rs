@@ -20,17 +20,28 @@ use crate::store::config::StoreConfig;
 use crate::store::{StorageResult, StoreBackend};
 use std::sync::Arc;
 
-/// The store as everything downstream sees it: one type, whatever the enabled
-/// backends. The engine is chosen when the store is built, not by which
-/// features happened to unify across the dependency graph.
+/// A handle on an open store.
+///
+/// One type over every engine - which one is behind it is settled by
+/// [`StoreBuilder`](crate::StoreBuilder) when the store is opened, and nothing
+/// downstream is generic over it.
+///
+/// Cheap to clone and shared by every clone: the file stays open as long as one
+/// handle is alive, and closes when the last is dropped.
 #[derive(Clone)]
 pub struct Store(Arc<dyn StoreBackend>);
 
 impl Store {
+    /// Wraps a backend that was built by hand.
+    ///
+    /// [`StoreBuilder`](crate::StoreBuilder) is the ordinary way in; this is
+    /// for a [`StoreBackend`] implemented outside the crate.
     pub fn from_arc(inner: Arc<dyn StoreBackend>) -> Self {
         Self(inner)
     }
 
+    /// The erased backend underneath, for code that is generic over
+    /// [`StoreBackend`] rather than over this handle.
     pub fn as_dyn(&self) -> &Arc<dyn StoreBackend> {
         &self.0
     }
@@ -66,15 +77,41 @@ impl std::ops::Deref for Store {
 
 /// The typed surface, inherent so a call site needs no trait in scope.
 impl Store {
+    /// Reads a value by path, or `None` if nothing is stored there.
+    ///
+    /// Sees buffered writes as well as committed ones. The type is whatever
+    /// you ask for and nothing remembers it - [`Kv::cell`](crate::store::Kv::cell)
+    /// is the variant that does.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// store.set("ui.width", &1280u32).unwrap();
+    /// assert_eq!(store.get::<u32>("ui.width").unwrap(), Some(1280));
+    /// assert_eq!(store.get::<u32>("ui.height").unwrap(), None);
+    /// ```
     pub fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
         crate::store::StoreExt::get(self, path)
     }
+    /// Writes a value at `path`, creating it or replacing what was there.
+    ///
+    /// The write lands in the buffer and notifies subscribers; the debouncer
+    /// commits it later. Nothing here carries provenance, so a subscription
+    /// cannot tell this apart from its own write - use
+    /// [`Store::set_with_source`] when it must.
     pub fn set<T: serde::Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
         crate::store::StoreExt::set(self, path, value)
     }
+    /// [`Store::set`] for a path that is already an `Arc<str>`, saving the
+    /// copy the borrowed form would make.
     pub fn set_owned<T: serde::Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
         crate::store::StoreExt::set_owned(self, path, value)
     }
+    /// [`Store::set`] tagged with who made the write.
+    ///
+    /// Subscribers receive the id, which is how a component ignores the echo
+    /// of its own change instead of reacting to it.
     pub fn set_with_source<T: serde::Serialize>(
         &self,
         path: &str,
@@ -83,6 +120,7 @@ impl Store {
     ) -> StorageResult<()> {
         crate::store::StoreExt::set_with_source(self, path, value, source)
     }
+    /// [`Store::set_with_source`] for a path that is already an `Arc<str>`.
     pub fn set_owned_with_source<T: serde::Serialize>(
         &self,
         path: Arc<str>,
@@ -91,6 +129,13 @@ impl Store {
     ) -> StorageResult<()> {
         crate::store::StoreExt::set_owned_with_source(self, path, value, source)
     }
+    /// Decodes bytes that arrived in a [`StoreEvent`](crate::StoreEvent),
+    /// in whatever format this backend writes.
+    ///
+    /// Corruption is not an error here: bytes that will not decode - because
+    /// the file was edited by hand, or the field changed type - yield
+    /// `T::default()` with a warning, which is what the next startup would
+    /// read anyway.
     pub fn decode<T: serde::de::DeserializeOwned + Default>(
         &self,
         bytes: &[u8],

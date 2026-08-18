@@ -27,6 +27,26 @@ mod ts_mapping;
 ///   * Used as a component within other structures.
 ///   * Generates `pub fn new(store: &Arc<Store>, namespace: &str) -> Result<Self>`.
 ///
+/// # How a storage path is built
+///
+/// A value's path is the struct's prefix and the field's key joined by a dot.
+/// The prefix goes in as written - it is a literal, not a name that gets
+/// derived or mangled - and joining trims a trailing dot from the prefix and a
+/// leading one from the key, so neither side has to know what the other did.
+///
+/// | Declaration | Path |
+/// | :--- | :--- |
+/// | `#[amethystate(prefix = "net")]`, field `port` | `net.port` |
+/// | the same, with `#[amestate(key = "listen_port")]` | `net.listen_port` |
+/// | nested struct at field `db` inside prefix `sys`, its field `host` | `sys.db.host` |
+/// | `#[amethystate(as_root)]`, field `port` | `port` |
+///
+/// `as_root` sets the prefix to `.`, which trims away to nothing, so the
+/// field's key becomes the whole path. An empty prefix behaves the same way.
+///
+/// The same joining is available at runtime as `amethystate::join_path`, and a
+/// field reports where it ended up through `Field::path`.
+///
 /// # Field Attributes (`#[amestate(...)]`)
 ///
 /// | Option | Type | Description |
@@ -100,6 +120,36 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
     amethystate::amethystate_impl(args, input)
 }
 
+/// Declares a migration step, discovered wherever it is written.
+///
+/// The function takes the old shape and returns the new one; the engine finds
+/// it through [`StoreBuilder::build_with_report`], so nothing has to register
+/// it by hand. `#[rename(old => new)]` moves a key whose value survives
+/// unchanged, so the body does not have to copy it.
+///
+/// ```rust,ignore
+/// mod v1 {
+///     #[amethystate(prefix = "app", version = 1)]
+///     pub struct Config {
+///         #[amestate(default = "localhost".to_string())]
+///         pub host: String,
+///     }
+/// }
+///
+/// #[amethystate(prefix = "app", version = 2)]
+/// pub struct Config {
+///     #[amestate(default = "localhost".to_string())]
+///     pub address: String,
+///     #[amestate(default = 8080)]
+///     pub port: u16,
+/// }
+///
+/// #[migrate]
+/// #[rename(host => address)]
+/// fn config_v1_to_v2(old: AmeData<v1::Config>) -> MigrationResult<AmeData<Config>> {
+///     Ok(AmeData::<Config> { address: old.host, port: 9090 })
+/// }
+/// ```
 /// Transforms a function into a migration step between two state versions.
 ///
 /// The macro derives source and target types from the function signature:

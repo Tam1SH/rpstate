@@ -1,4 +1,5 @@
 use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::store::Durable;
 use crate::store::StoreBackend;
 use crate::store::sync_backend::SyncBridge;
 use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
@@ -24,6 +25,10 @@ pub use amethystate_core::primitives::map_core::{ReactiveMapKey, ReactiveMapValu
 pub type ReadOnlyReactiveMap<TValue> = Field<TValue, ReadOnlyMode>;
 pub type WritableReactiveMap<TValue> = Field<TValue, WritableMode>;
 
+/// Another handle on the same map **and the same instance id**, so writes
+/// through it are indistinguishable from writes through the original.
+///
+/// [`ReactiveMap::fork`] is the one that gives a new id.
 impl<K, V, M: AccessMode> Clone for ReactiveMap<K, V, M> {
     fn clone(&self) -> Self {
         Self {
@@ -63,10 +68,17 @@ where
     V: ReactiveMapValue,
     M: AccessMode,
 {
+    /// The same map under a new instance id.
+    ///
+    /// Provenance travels with the id, so a subscription can tell its own
+    /// writes from someone else's. [`Clone`] keeps the id instead; the book
+    /// covers the pair in [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
     pub fn fork(&self) -> Self {
         self.fork_with_id(Uuid::new_v4())
     }
 
+    /// [`ReactiveMap::fork`] with the instance id chosen rather than
+    /// generated.
     pub fn fork_with_id(&self, new_instance_id: Uuid) -> Self {
         Self {
             core: self.core.clone(),
@@ -78,11 +90,38 @@ where
         }
     }
 
+    /// The value under `key`, or `None` when there is none.
+    ///
+    /// Unlike a field, this reads the store rather than a signal, so it sees
+    /// writes that are still buffered as well as those already on disk.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), None);
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    /// ```
     pub fn get(&self, key: &K) -> ReactiveMapResult<Option<V>> {
         let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_get(&backend, &self.path, key)?)
     }
 
+    /// Whether `key` has a value, without decoding it.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// assert!(!widths.contains_key(&"cpu".to_string()).unwrap());
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// assert!(widths.contains_key(&"cpu".to_string()).unwrap());
+    /// ```
     pub fn contains_key(&self, key: &K) -> ReactiveMapResult<bool> {
         let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_contains_key::<_, _, V>(
@@ -90,8 +129,16 @@ where
         )?)
     }
 
-    /// Every entry, sorted by key. Values are decoded as the iterator is
-    /// consumed, so `.find()` or `.take(n)` decode only what they reach.
+    /// Every entry, sorted by key.
+    ///
+    /// The order is the store's, which sorts by the key's string form rather
+    /// than by the key type's own `Ord` - see [`ReactiveMap::keys`], where the
+    /// difference is worked through.
+    ///
+    /// Decoding is lazy - `.find()` or `.take(n)` deserialise only what they
+    /// reach - but the scan behind it is not: every key and raw value is read
+    /// before the iterator is handed over. On a large map `take(1)` costs
+    /// about what consuming all of it does.
     pub fn entries(&self) -> ReactiveMapResult<impl Iterator<Item = (K, V)>> {
         let backend = SyncBridge::new(self.store.clone());
         let prefix = format!("{}.", self.path);
@@ -105,6 +152,31 @@ where
     }
 
     /// Every key, sorted. Values are neither read nor deserialized.
+    ///
+    /// The order is the store's, which sorts by the key's string form, not by
+    /// the key type's own `Ord`. For `String` keys the two agree; for numbers
+    /// they do not - `"10"` sorts before `"9"`.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// // Inserted out of order.
+    /// widths.insert("mem".into(), &80).unwrap();
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// widths.insert("disk".into(), &60).unwrap();
+    ///
+    /// assert_eq!(widths.keys().unwrap(), ["cpu", "disk", "mem"]);
+    ///
+    /// // Numeric keys sort as text, so 10 lands before 9.
+    /// let ports = store.kv().map::<u16, bool>("ports").unwrap();
+    /// ports.insert(9, &true).unwrap();
+    /// ports.insert(10, &true).unwrap();
+    /// ports.insert(100, &true).unwrap();
+    /// assert_eq!(ports.keys().unwrap(), [10, 100, 9]);
+    /// ```
     pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
         let backend = SyncBridge::new(self.store.clone());
         let prefix = format!("{}.", self.path);
@@ -116,15 +188,81 @@ where
             .collect())
     }
 
+    /// How many entries the map holds.
+    ///
+    /// Costs a scan proportional to the number of keys, and counts buffered
+    /// writes that have not reached disk yet.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// assert_eq!(widths.len().unwrap(), 0);
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// widths.insert("mem".into(), &80).unwrap();
+    /// assert_eq!(widths.len().unwrap(), 2);
+    ///
+    /// // Writing an existing key does not add one.
+    /// widths.update("cpu".into(), &200).unwrap();
+    /// assert_eq!(widths.len().unwrap(), 2);
+    /// ```
     pub fn len(&self) -> ReactiveMapResult<usize> {
         let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_len(&backend, &self.path)?)
     }
 
+    /// Whether the map holds nothing. Carries the same cost as
+    /// [`ReactiveMap::len`], for the same reason.
     pub fn is_empty(&self) -> ReactiveMapResult<bool> {
         self.len().map(|l| l == 0)
     }
 
+    /// Calls `callback` on every change to any key.
+    ///
+    /// The subscription lives as long as the returned handle: dropping it
+    /// unsubscribes. Callbacks run on whichever thread made the change, which
+    /// may be the file watcher's when the store was edited outside the
+    /// process.
+    /// Calls `callback` on every change to any key.
+    ///
+    /// The subscription lives as long as the returned handle: dropping it
+    /// unsubscribes. Callbacks run on whichever thread made the change, which
+    /// may be the file watcher's when the store was edited outside the
+    /// process - hence the `Send + Sync` bound.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    /// # use amethystate::MapChange;
+    /// # use std::sync::{Arc, Mutex};
+    /// let seen = Arc::new(Mutex::new(Vec::new()));
+    /// let sink = Arc::clone(&seen);
+    ///
+    /// let sub = widths.subscribe_any(move |change| {
+    ///     sink.lock().unwrap().push(match change {
+    ///         MapChange::Insert { .. } => "insert",
+    ///         MapChange::Update { .. } => "update",
+    ///         MapChange::Remove { .. } => "remove",
+    ///         MapChange::Clear { .. } => "clear",
+    ///     });
+    /// });
+    ///
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// widths.update("cpu".into(), &200).unwrap();
+    /// widths.remove("cpu".to_string()).unwrap();
+    /// assert_eq!(*seen.lock().unwrap(), ["insert", "update", "remove"]);
+    ///
+    /// drop(sub);
+    /// widths.insert("mem".into(), &80).unwrap();
+    /// assert_eq!(seen.lock().unwrap().len(), 3, "dropping the handle unsubscribed");
+    /// ```
+    ///
+    /// A callback sees the change while it is still buffered, before it
+    /// reaches disk - see [the module docs](crate::reactive).
     #[track_caller]
     pub fn subscribe_any<F>(&self, callback: F) -> SignalSubscription
     where
@@ -133,6 +271,34 @@ where
         self.core.subscribe_any(callback)
     }
 
+    /// Calls `callback` only for changes to one key.
+    ///
+    /// Cheaper than filtering inside [`ReactiveMap::subscribe_any`]: changes
+    /// to other keys never reach the callback at all.
+    /// Calls `callback` only for changes to one key.
+    ///
+    /// Cheaper than filtering inside [`ReactiveMap::subscribe_any`]: changes
+    /// to other keys never reach the callback at all.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    /// # use std::sync::{Arc, Mutex};
+    /// let hits = Arc::new(Mutex::new(0u32));
+    /// let sink = Arc::clone(&hits);
+    ///
+    /// let _sub = widths.subscribe_key("cpu".to_string(), move |_| {
+    ///     *sink.lock().unwrap() += 1;
+    /// });
+    ///
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// widths.insert("mem".into(), &80).unwrap();   // a different key
+    /// widths.update("cpu".into(), &200).unwrap();
+    ///
+    /// assert_eq!(*hits.lock().unwrap(), 2, "only the two writes to `cpu`");
+    /// ```
     #[track_caller]
     pub fn subscribe_key<F>(&self, key: K, callback: F) -> SignalSubscription
     where
@@ -254,10 +420,9 @@ where
     /// The same writes, each returning only once the change is on disk.
     ///
     /// `insert`, `update` and friends leave the change in the write buffer,
-    /// where a crash
-    /// loses it; these pay a commit to close that window.
-    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
-        crate::store::Durable(self)
+    /// where a crash loses it; these pay a commit to close that window.
+    pub fn durable(&self) -> Durable<'_, Self> {
+        Durable(self)
     }
 
     /// Writes a key that is already there, and fails with
@@ -268,12 +433,9 @@ where
     /// that does not exist has none. Use [`ReactiveMap::insert`] to add one.
     ///
     /// ```
-        /// # use amethystate::StoreBuilder;
-    /// # let path = std::env::temp_dir().join(format!(
-    /// #     "amethystate-doc-{}.db",
-    /// #     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    /// # ));
-    /// # let store = StoreBuilder::new(&path).build().unwrap();
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
     ///
     /// // `update` refuses a key that is not there yet.
@@ -304,6 +466,22 @@ where
     ///
     /// Subscribers see [`MapChange::Insert`] for a new key and
     /// [`MapChange::Update`] for one that existed.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// // A key that was not there.
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    ///
+    /// // The same call replaces one that was.
+    /// widths.insert("cpu".into(), &200).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(200));
+    /// assert_eq!(widths.len().unwrap(), 1, "replacing is not adding");
+    /// ```
     pub fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_insert(
@@ -316,6 +494,19 @@ where
         )?)
     }
 
+    /// Drops a key and yields the value it held, or `None` if there was
+    /// none. Removing an absent key is not an error.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// assert_eq!(widths.remove("cpu".to_string()).unwrap(), Some(120));
+    /// assert_eq!(widths.remove("cpu".to_string()).unwrap(), None);
+    /// ```
     pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
         let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_remove(
@@ -327,6 +518,21 @@ where
         )?)
     }
 
+    /// Drops every entry, as one operation rather than a removal per key.
+    ///
+    /// Subscribers see a single [`MapChange::Clear`], not one `Remove` each.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// widths.insert("mem".into(), &80).unwrap();
+    /// widths.clear().unwrap();
+    /// assert!(widths.is_empty().unwrap());
+    /// ```
     pub fn clear(&self) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.store.clone());
         Ok(amethystate_core::map_clear(
@@ -337,6 +543,37 @@ where
         )?)
     }
 
+    /// Installs a callback that sees every change to any key before it lands
+    /// and may rewrite or reject it.
+    ///
+    /// Returning `None` drops the change; returning a different
+    /// [`MapChange`] stores that instead. The interceptor stays installed
+    /// until [`InterceptDisposer::remove`] is called - dropping the disposer
+    /// only forgets the handle, unlike a subscription, which ends on drop.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// # use amethystate::MapChange;
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    ///
+    /// let guard = widths.intercept(|change| match change {
+    ///     MapChange::Insert { value, .. } if value > 500 => None,
+    ///     other => Some(other),
+    /// });
+    ///
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// assert!(widths.insert("mem".into(), &900).is_err(), "over the limit");
+    /// assert_eq!(widths.len().unwrap(), 1);
+    ///
+    /// guard.remove();
+    /// widths.insert("mem".into(), &900).unwrap();
+    /// assert_eq!(widths.len().unwrap(), 2);
+    /// ```
+    ///
+    /// Interceptors run before the value reaches the buffer at all - see
+    /// [the module docs](crate::reactive) for where that sits relative to disk.
     pub fn intercept<F>(&self, callback: F) -> InterceptDisposer
     where
         F: Fn(MapChange<K, V>) -> Option<MapChange<K, V>> + Send + Sync + 'static,
@@ -344,6 +581,10 @@ where
         self.core.intercept(self.path.clone(), callback)
     }
 
+    /// [`ReactiveMap::intercept`] narrowed to one key.
+    ///
+    /// Changes to other keys pass through untouched, so this is both cheaper
+    /// and safer than matching on the key inside a map-wide interceptor.
     pub fn intercept_key<F>(&self, key: K, callback: F) -> InterceptDisposer
     where
         F: Fn(MapChange<K, V>) -> Option<MapChange<K, V>> + Send + Sync + 'static,
@@ -362,68 +603,90 @@ impl<K, V, M: AccessMode> PartialEq for ReactiveMap<K, V, M> {
 
 impl<K, V, M: AccessMode> Eq for ReactiveMap<K, V, M> {}
 
-impl<K, V> crate::store::Durable<'_, ReactiveMap<K, V, WritableMode>>
+impl<K, V> Durable<'_, ReactiveMap<K, V, WritableMode>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    fn commit(&self) -> ReactiveMapResult<()> {
-        self.0.store.flush_prefix(&self.0.path)?;
-        Ok(())
-    }
-
-    async fn commit_async(&self) -> ReactiveMapResult<()> {
-        self.0.store.flush_async().await?;
-        Ok(())
-    }
-
-    /// [`ReactiveMap::update`], returning only once the change is on disk.
+    /// Writes a key that is already there; an absent one gives
+    /// [`ReactiveMapError::KeyNotFound`].
+    ///
+    /// Returns only once the change is on disk rather than buffered.
     pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         self.0.update(key, value)?;
         self.commit()
     }
 
-    /// [`ReactiveMap::update`], resolving once the change is on disk.
+    /// Writes a key that is already there; an absent one gives
+    /// [`ReactiveMapError::KeyNotFound`].
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn update_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         self.0.update(key, value)?;
         self.commit_async().await
     }
 
-    /// [`ReactiveMap::insert`], returning only once the change is on disk.
+    /// Writes a key whether or not it is already there.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
     pub fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         self.0.insert(key, value)?;
         self.commit()
     }
 
-    /// [`ReactiveMap::insert`], resolving once the change is on disk.
+    /// Writes a key whether or not it is already there.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn insert_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         self.0.insert(key, value)?;
         self.commit_async().await
     }
 
+    /// Drops a key and yields the value it held.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
     pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
         let previous = self.0.remove(key)?;
         self.commit()?;
         Ok(previous)
     }
 
+    /// Drops a key and yields the value it held.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn remove_async(&self, key: K) -> ReactiveMapResult<Option<V>> {
         let previous = self.0.remove(key)?;
         self.commit_async().await?;
         Ok(previous)
     }
 
+    /// Drops every entry, as one operation rather than a removal per key.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
     pub fn clear(&self) -> ReactiveMapResult<()> {
         self.0.clear()?;
         self.commit()
     }
 
+    /// Drops every entry, as one operation rather than a removal per key.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn clear_async(&self) -> ReactiveMapResult<()> {
         self.0.clear()?;
         self.commit_async().await
     }
 
-    /// [`ReactiveMap::update_with`], returning only once the change is on disk.
+    /// Reads the key, writes back what `f` returns, and yields the new value.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
     pub fn update_with<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
         F: FnOnce(V) -> V,
@@ -433,7 +696,11 @@ where
         Ok(value)
     }
 
-    /// [`ReactiveMap::update_with`], resolving once the change is on disk.
+    /// Reads the key, writes back what `f` returns, and yields the new value.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn update_with_async<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
         F: FnOnce(V) -> V,
@@ -443,7 +710,9 @@ where
         Ok(value)
     }
 
-    /// [`ReactiveMap::modify`], returning only once the change is on disk.
+    /// Reads the key, lets `f` change the value in place, and writes it back.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
     pub fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
     where
         F: FnOnce(&mut V),
@@ -452,12 +721,24 @@ where
         self.commit()
     }
 
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn modify_async<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
     where
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;
         self.commit_async().await
+    }
+
+    fn commit(&self) -> ReactiveMapResult<()> {
+        self.0.store.flush_prefix(&self.0.path)?;
+        Ok(())
+    }
+
+    async fn commit_async(&self) -> ReactiveMapResult<()> {
+        self.0.store.flush_async().await?;
+        Ok(())
     }
 }
 

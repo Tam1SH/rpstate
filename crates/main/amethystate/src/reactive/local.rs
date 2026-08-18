@@ -81,6 +81,7 @@ pub struct LocalScope {
 }
 
 impl LocalScope {
+    /// An empty scope. Subscriptions join it through [`Watch::local`](crate::reactive::watch::Watch::local).
     pub fn new() -> Self {
         Self::default()
     }
@@ -96,14 +97,19 @@ impl LocalScope {
         }
     }
 
+    /// How many values are queued, waiting for the next
+    /// [`LocalScope::drain`].
     pub fn len(&self) -> usize {
         self.subs.len()
     }
 
+    /// Whether nothing is queued.
     pub fn is_empty(&self) -> bool {
         self.subs.is_empty()
     }
 
+    /// Drops the queued values without delivering them, leaving the
+    /// subscriptions in place.
     pub fn clear(&mut self) {
         self.subs.clear();
         self.pumps.clear();

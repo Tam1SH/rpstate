@@ -65,15 +65,24 @@ pub enum ComponentOutcome {
 }
 
 impl MigrationReport {
+    /// Whether any step failed. A failure leaves that prefix at its old
+    /// version, with a snapshot kept for the next run.
     pub fn has_failures(&self) -> bool {
         self.components
             .iter()
             .any(|c| matches!(c.outcome, ComponentOutcome::Failed { .. }))
     }
+    /// Whether stored data differs in shape from what the structs now
+    /// declare, without a step to account for it - the sign of a schema
+    /// change someone forgot to write a migration for.
     pub fn has_drift(&self) -> bool {
         self.components.iter().any(|c| !c.nagging.is_empty())
     }
 
+    /// Writes the report through `tracing`, at a level per outcome.
+    ///
+    /// [`StoreBuilder::build_with_report`](crate::StoreBuilder::build_with_report)
+    /// already does this, so calling it again duplicates the lines.
     pub fn log_to_tracing(&self) {
         for comp in &self.components {
             for nag in &comp.nagging {
@@ -132,10 +141,16 @@ pub struct MigrationPlan {
 }
 
 impl MigrationPlan {
+    /// An empty plan, to be filled with [`MigrationPlan::step`].
     pub fn new() -> Self {
         Self { steps: Vec::new() }
     }
 
+    /// Adds a step taking the data to `version`, and yields the plan back for
+    /// chaining.
+    ///
+    /// Steps run in ascending version order, and only those above the version
+    /// the prefix currently records.
     pub fn step<F>(mut self, version: u32, description: &str, f: F) -> Self
     where
         F: Fn(&mut MigrationContext) -> StorageResult<()> + Send + Sync + 'static,

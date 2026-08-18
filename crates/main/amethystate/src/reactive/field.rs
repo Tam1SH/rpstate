@@ -1,6 +1,8 @@
 use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
+use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::store::Durable;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{StoreBackend, SubscriptionId};
 use crate::{AccessMode, ReadOnlyMode, Store, WritableMode};
@@ -27,11 +29,8 @@ impl Drop for StoreSubscription {
 /// # use amethystate::{StoreBuilder, WritableMode};
 /// # use amethystate::store::field_with_path;
 /// # use std::sync::Arc;
-/// # let path = std::env::temp_dir().join(format!(
-/// #     "amethystate-doc-{}.db",
-/// #     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-/// # ));
-/// # let store = StoreBuilder::new(&path).build().unwrap();
+/// # let path = amethystate_core::test_utils::TempPath::new("doc");
+/// # let store = StoreBuilder::new(&*path).build().unwrap();
 /// let port = field_with_path::<u16, WritableMode>(
 ///     &store,
 ///     Arc::from("net.port"),
@@ -67,6 +66,11 @@ where
     }
 }
 
+/// Another handle on the same value **and the same instance id**, so writes
+/// through it are indistinguishable from writes through the original.
+///
+/// [`Field::fork`] is the one that gives a new id, which is what a
+/// subscription uses to tell whose write it is looking at - see [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
 impl<TValue, M: AccessMode> Clone for Field<TValue, M> {
     fn clone(&self) -> Self {
         Self {
@@ -84,10 +88,50 @@ where
     TValue: FieldValue,
     M: AccessMode,
 {
+    /// The same value under a new instance id.
+    ///
+    /// Provenance travels with the id: a subscription can tell its own writes
+    /// from someone else's, and a fork is how you deliberately look like
+    /// someone else. [`Clone`] does the opposite and keeps the id, so a clone
+    /// stays the same actor.
+    ///
+    /// The difference only shows through [`Watch::external`], which drops
+    /// changes the watching handle made itself:
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::{Arc, Mutex};
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// let twin = port.clone();   // same instance id
+    /// let other = port.fork();   // a new one
+    ///
+    /// let seen = Arc::new(Mutex::new(Vec::new()));
+    /// let sink = Arc::clone(&seen);
+    /// let _sub = port.subscription_with().external().register(move |v| {
+    ///     sink.lock().unwrap().push(*v);
+    /// });
+    ///
+    /// port.set(1).unwrap();    // our own write
+    /// twin.set(2).unwrap();    // a clone is still us
+    /// other.set(3).unwrap();   // a fork is somebody else
+    ///
+    /// assert_eq!(*seen.lock().unwrap(), [3], "only the fork's write got through");
+    /// ```
+    ///
+    /// Without `external` all three would arrive; the id is what tells them
+    /// apart. The book works through the pair in
+    /// [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
     pub fn fork(&self) -> Self {
         self.fork_with_id(Uuid::new_v4())
     }
 
+    /// [`Field::fork`] with the instance id chosen rather than generated.
     pub fn fork_with_id(&self, new_instance_id: Uuid) -> Self {
         Self {
             core: self.core.clone(),
@@ -98,33 +142,101 @@ where
         }
     }
 
+    /// The current value, read from memory.
+    ///
+    /// This never touches the disk: the signal holds what was last loaded or
+    /// written, and the file watcher keeps it current when something outside
+    /// the process edits the store.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// assert_eq!(port.get(), 8080);
+    /// ```
     pub fn get(&self) -> TValue {
         self.core.get()
     }
 
+    /// The full path this field is stored under, prefix included.
+    ///
+    /// The prefix and the key are joined by [`join_path`](crate::join_path),
+    /// which trims a trailing dot from one and a leading dot from the other.
+    /// Which prefix and which key a declared field ends up with is the
+    /// macro's business - see [`macro@crate::amethystate`].
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// assert_eq!(amethystate::join_path("net", "port"), "net.port");
+    /// assert_eq!(amethystate::join_path("sys.db", "host"), "sys.db.host");
+    /// assert_eq!(amethystate::join_path("net.", ".port"), "net.port", "dots are trimmed");
+    /// assert_eq!(amethystate::join_path("", "port"), "port", "no prefix, no dot");
+    ///
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    /// assert_eq!(&*port.path(), "net.port");
+    ///
+    /// // The same path addresses it through `Kv`.
+    /// assert_eq!(store.kv().get::<u16>("net.port").unwrap(), Some(8080));
+    /// ```
     pub fn path(&self) -> Arc<str> {
         self.path.clone()
     }
 
-    /// Subscribes to value changes.
+    /// Calls `callback` whenever the value changes, and keeps doing so until
+    /// the returned handle is dropped.
     ///
-    /// # Thread safety
+    /// A callback sees the value while it is still buffered, before it
+    /// reaches disk - see [the module docs](crate::reactive) for what that
+    /// costs and when it matters.
     ///
-    /// The `Send + Sync` bound exists because external changes (e.g. file modified
-    /// outside the process) are delivered from a background watcher thread.
+    /// # Why `Send + Sync`
     ///
-    /// For frameworks that do not support `Send + Sync` callbacks, the recommended
-    /// workaround is to bridge via a channel:
+    /// A change can arrive from the file watcher's thread, when something
+    /// outside the process edits the store, so the callback has to be able to
+    /// run there. That rules out `Rc` state and most GUI context handles.
     ///
-    /// ```rust,ignore
+    /// [`LocalScope`](crate::LocalScope) is the way around it, and the right one: a subscription
+    /// registered there queues the value instead of calling immediately, and
+    /// runs the callback from [`LocalScope::drain`](crate::LocalScope::drain) on
+    /// whichever thread
+    /// drains. The scope is neither `Send` nor `Sync`, so the callback cannot
+    /// reach another thread at all - enforced by the type, not by convention.
+    /// Reach it through [`Field::subscription_with`] and [`Watch::local`].
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// # let host = field_with_path::<String, WritableMode>(
+    /// #     &store, Arc::from("net.host"), "localhost".to_string(),
+    /// #     amethystate::uuid::Uuid::new_v4(),
+    /// # ).unwrap();
     /// let (tx, rx) = std::sync::mpsc::channel();
     ///
-    /// field.subscribe(move |val| {
+    /// let _sub = host.subscribe(move |val| {
     ///     let _ = tx.send(val.clone());
     /// });
     ///
-    /// // drain rx in your framework's event loop
+    /// host.set("10.0.0.1".to_string()).unwrap();
+    /// assert_eq!(rx.recv().unwrap(), "10.0.0.1");
     /// ```
+    ///
+    /// Binding the handle to `_` rather than `_sub` would end the
+    /// subscription immediately, before the write it was meant to see.
     #[track_caller]
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
@@ -174,7 +286,7 @@ where
             let flush_path = self.path.clone();
             let start_store = sub.store.clone();
 
-            crate::reactive::cell::CellCommit {
+            CellCommit {
                 now: Arc::new(move || Ok(flush_store.flush_prefix(&flush_path)?)),
                 start: Arc::new(move || start_store.flush_async()),
             }
@@ -189,6 +301,25 @@ where
         )
     }
 
+    /// Reads the value, hands it to `f` and writes back what it returns,
+    /// then yields the new value.
+    ///
+    /// [`Field::modify`] does the same through `&mut` when the value is
+    /// cheaper to adjust in place than to rebuild.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let hits = field_with_path::<u32, WritableMode>(
+    ///     &store, Arc::from("stats.hits"), 0, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// assert_eq!(hits.update(|n| n + 1).unwrap(), 1);
+    /// assert_eq!(hits.get(), 1);
+    /// ```
     pub fn update<F>(&self, f: F) -> ReactiveFieldResult<TValue>
     where
         F: FnOnce(TValue) -> TValue,
@@ -199,6 +330,10 @@ where
         Ok(new_val)
     }
 
+    /// Reads the value, lets `f` change it in place, and writes it back.
+    ///
+    /// The same write as [`Field::update`], reached without rebuilding the
+    /// value - which matters when it is a large struct or a collection.
     pub fn modify<F>(&self, f: F) -> ReactiveFieldResult<()>
     where
         F: FnOnce(&mut TValue),
@@ -208,6 +343,14 @@ where
         self.set(val)
     }
 
+    /// Writes the value and notifies subscribers.
+    ///
+    /// The write lands in the store's buffer, not on disk: it survives the
+    /// process reading it back, but not a crash before the debouncer flushes.
+    /// [`Field::durable`] is the variant that waits for disk.
+    ///
+    /// Returns [`FieldError::Intercepted`] if an interceptor rejected the
+    /// change.
     pub fn set(&self, value: TValue) -> ReactiveFieldResult<()> {
         tracing::trace!(
             target: "amethystate",
@@ -240,11 +383,56 @@ where
     /// The same writes, each returning only once the value is on disk.
     ///
     /// `set` and friends leave the value in the write buffer, where a crash
-    /// loses it; these pay a commit to close that window.
-    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
-        crate::store::Durable(self)
+    /// loses it; these pay a commit to close that window. [Durability](https://uniproc-dev.github.io/amethystate/concepts/durability) in the book
+    /// covers when that window matters and what it costs to close.
+    pub fn durable(&self) -> Durable<'_, Self> {
+        Durable(self)
     }
 
+    /// Installs a callback that sees every write before it lands and may
+    /// rewrite or reject it.
+    ///
+    /// Returning `None` drops the write and gives the caller
+    /// [`FieldError::Intercepted`]; returning a changed [`Change`] stores that
+    /// instead of what was written.
+    ///
+    /// The interceptor stays installed until [`InterceptDisposer::remove`] is
+    /// called; dropping the disposer only forgets the handle. A subscription
+    /// goes the other way and ends on drop, because it belongs to whoever is
+    /// listening. An interceptor is a rule about the value itself, so it does
+    /// not end merely because nobody kept the receipt.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let volume = field_with_path::<u8, WritableMode>(
+    ///     &store, Arc::from("audio.volume"), 50, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// let guard = volume.intercept(|mut change| {
+    ///     if change.new_value > 100 {
+    ///         return None;                            // refuse it outright
+    ///     }
+    ///     change.new_value -= change.new_value % 10;  // or round it down
+    ///     Some(change)
+    /// });
+    ///
+    /// volume.set(77).unwrap();
+    /// assert_eq!(volume.get(), 70, "the interceptor rewrote the write");
+    ///
+    /// assert!(volume.set(200).is_err(), "and refused this one");
+    /// assert_eq!(volume.get(), 70, "so the old value stands");
+    ///
+    /// guard.remove();
+    /// volume.set(200).unwrap();
+    /// assert_eq!(volume.get(), 200, "with it removed, nothing filters");
+    /// ```
+    ///
+    /// Interceptors run before the value reaches the buffer at all - see
+    /// [the module docs](crate::reactive) for where that sits relative to disk.
     pub fn intercept<F>(&self, callback: F) -> InterceptDisposer
     where
         F: Fn(Change<TValue>) -> Option<Change<TValue>> + Send + Sync + 'static,
@@ -252,10 +440,36 @@ where
         self.core.intercept(self.path.clone(), callback)
     }
 
+    /// A field with no store behind it: reactive, but never read from or
+    /// written to disk.
+    ///
+    /// This is what `#[amestate(volatile)]` produces. Subscriptions and
+    /// interceptors work as usual; the value simply starts at `default` on
+    /// every run.
+    ///
+    /// The path is still carried, for tracing and for interceptors - but
+    /// nothing is ever stored under it:
+    ///
+    /// ```
+    /// # use amethystate::{Field, StoreBuilder, WritableMode};
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let session: Field<String, WritableMode> =
+    ///     Field::new_volatile(Arc::from("app.session"), "anonymous".to_string());
+    ///
+    /// session.set("alice".to_string()).unwrap();
+    /// assert_eq!(session.get(), "alice");
+    ///
+    /// // The store never heard about any of it.
+    /// assert_eq!(store.kv().get::<String>("app.session").unwrap(), None);
+    /// ```
     pub fn new_volatile(path: Arc<str>, default: TValue) -> Self {
         Self::new_volatile_with_id(path, default, Uuid::new_v4())
     }
 
+    /// [`Field::new_volatile`] with the instance id chosen rather than
+    /// generated.
     pub fn new_volatile_with_id(path: Arc<str>, default: TValue, instance_id: Uuid) -> Self {
         Self {
             core: FieldCore::new(default),
@@ -301,10 +515,152 @@ where
     }
 }
 
-impl<TValue> crate::store::Durable<'_, Field<TValue, WritableMode>>
+impl<TValue> Durable<'_, Field<TValue, WritableMode>>
 where
     TValue: FieldValue,
 {
+    /// [`Field::set`], returning only once the value is on disk.
+    ///
+    /// The write itself is identical - same subscribers, same interceptors,
+    /// same value. What differs is when the call returns: the plain one comes
+    /// back with the change still in the buffer, this one waits for the
+    /// commit.
+    ///
+    /// That only matters for an abrupt end. A graceful shutdown flushes the
+    /// buffer, because the store commits when it is dropped, so both writes
+    /// survive it; a crash in between loses the plain one and keeps this one.
+    ///
+    /// # What the three engine families commit
+    ///
+    /// The guarantee you can rely on everywhere is narrow: **this write** is
+    /// on disk when the call returns. How much else goes with it differs.
+    ///
+    /// - **redb** and **sqlite** are transactional. The flush collects the
+    ///   buffered writes under this field's prefix and commits those, leaving
+    ///   the rest of the buffer where it was. Granularity is per prefix.
+    /// - **json**, **toml** and **ron** share one document. There is nothing
+    ///   partial to write, so the flush serialises the whole file - and every
+    ///   buffered write in the store becomes durable as a side effect.
+    ///
+    /// So a text backend is accidentally stronger here. Do not build on that:
+    /// the same code on redb commits only what sits under this prefix.
+    ///
+    /// # Seeing it happen
+    ///
+    /// From inside the process this needs a backend that tolerates a second
+    /// reader while the store still holds the file. The text ones and sqlite
+    /// do; redb keeps its lock for the life of the process and refuses, so
+    /// suppressing the store's `Drop` is not enough to observe it either.
+    ///
+    /// `tests/set_durable.rs` reads the file back mid-run over the text
+    /// backend, and `tests/durability_crash.rs` covers redb the only way it
+    /// allows - a child process that writes and then aborts, skipping every
+    /// destructor, after which the parent reopens the database and finds the
+    /// durable write present and the plain one gone.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// // A debouncer a minute out: nothing reaches disk on its own.
+    /// # let store = StoreBuilder::new(&*path).debounce(60_000).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// port.durable().set(9090).unwrap();
+    /// assert_eq!(port.get(), 9090);
+    /// ```
+    pub fn set(&self, value: TValue) -> ReactiveFieldResult<()> {
+        self.0.set(value)?;
+        self.commit()
+    }
+
+    /// [`Field::set`], resolving once the value is on disk.
+    ///
+    /// Waiters ride on the commit the store was going to make anyway, so
+    /// several of them cost one commit rather than one each.
+    ///
+    /// # Nothing happens until it is awaited
+    ///
+    /// This is an `async fn`, so its whole body is lazy - the write included.
+    /// The synchronous [`Durable::set`] stores the value and then waits for
+    /// the commit; dropping this future without awaiting it does not write at
+    /// all, and the field keeps its old value.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let port = field_with_path::<u16, WritableMode>(
+    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    /// ).unwrap();
+    ///
+    /// let durable = port.durable();
+    /// let pending = durable.set_async(9090);
+    /// assert_eq!(port.get(), 8080, "the future has not been polled yet");
+    ///
+    /// futures::executor::block_on(pending).unwrap();
+    /// assert_eq!(port.get(), 9090);
+    /// ```
+    pub async fn set_async(&self, value: TValue) -> ReactiveFieldResult<()> {
+        self.0.set(value)?;
+        self.commit_async().await
+    }
+
+    /// Reads the value, writes back what `f` returns, and yields it.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
+    pub fn update<F>(&self, f: F) -> ReactiveFieldResult<TValue>
+    where
+        F: FnOnce(TValue) -> TValue,
+    {
+        let value = self.0.update(f)?;
+        self.commit()?;
+        Ok(value)
+    }
+
+    /// Reads the value, writes back what `f` returns, and yields it.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
+    pub async fn update_async<F>(&self, f: F) -> ReactiveFieldResult<TValue>
+    where
+        F: FnOnce(TValue) -> TValue,
+    {
+        let value = self.0.update(f)?;
+        self.commit_async().await?;
+        Ok(value)
+    }
+
+    /// Reads the value, lets `f` change it in place, and writes it back.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
+    pub fn modify<F>(&self, f: F) -> ReactiveFieldResult<()>
+    where
+        F: FnOnce(&mut TValue),
+    {
+        self.0.modify(f)?;
+        self.commit()
+    }
+
+    /// Reads the value, lets `f` change it in place, and writes it back.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
+    pub async fn modify_async<F>(&self, f: F) -> ReactiveFieldResult<()>
+    where
+        F: FnOnce(&mut TValue),
+    {
+        self.0.modify(f)?;
+        self.commit_async().await
+    }
+
     fn commit(&self) -> ReactiveFieldResult<()> {
         if let Some(sub) = &self.0.store_sub {
             sub.store.flush_prefix(&self.0.path)?;
@@ -317,50 +673,6 @@ where
             sub.store.flush_async().await?;
         }
         Ok(())
-    }
-
-    pub fn set(&self, value: TValue) -> ReactiveFieldResult<()> {
-        self.0.set(value)?;
-        self.commit()
-    }
-
-    pub async fn set_async(&self, value: TValue) -> ReactiveFieldResult<()> {
-        self.0.set(value)?;
-        self.commit_async().await
-    }
-
-    pub fn update<F>(&self, f: F) -> ReactiveFieldResult<TValue>
-    where
-        F: FnOnce(TValue) -> TValue,
-    {
-        let value = self.0.update(f)?;
-        self.commit()?;
-        Ok(value)
-    }
-
-    pub async fn update_async<F>(&self, f: F) -> ReactiveFieldResult<TValue>
-    where
-        F: FnOnce(TValue) -> TValue,
-    {
-        let value = self.0.update(f)?;
-        self.commit_async().await?;
-        Ok(value)
-    }
-
-    pub fn modify<F>(&self, f: F) -> ReactiveFieldResult<()>
-    where
-        F: FnOnce(&mut TValue),
-    {
-        self.0.modify(f)?;
-        self.commit()
-    }
-
-    pub async fn modify_async<F>(&self, f: F) -> ReactiveFieldResult<()>
-    where
-        F: FnOnce(&mut TValue),
-    {
-        self.0.modify(f)?;
-        self.commit_async().await
     }
 }
 
