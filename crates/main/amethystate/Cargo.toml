@@ -78,3 +78,7 @@ harness = false
 [[bench]]
 name = "cell_dispatch_bench"
 harness = false
+
+[[bench]]
+name = "reactive_map_bench"
+harness = false
