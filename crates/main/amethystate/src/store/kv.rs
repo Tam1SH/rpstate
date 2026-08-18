@@ -1,14 +1,13 @@
 use crate::observability::SchemaEntry;
 use crate::observability::{register_instance, resolve_field};
 use crate::reactive::error::{WriteError, WriteResult};
+use crate::store::Durable;
 use crate::store::{StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only};
 use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
+use crate::{ReactiveMapKey, ReactiveMapValue};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::hash::Hash;
-use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -38,15 +37,43 @@ impl Kv {
     ///
     /// Raw: the type is whatever you ask for here, and nothing remembers it.
     /// [`Kv::cell`] does, and refuses a second type for the same path.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let kv = store.kv();
+    ///
+    /// assert_eq!(kv.get::<u32>("ui.width").unwrap(), None);
+    /// kv.set("ui.width", &1280u32).unwrap();
+    /// assert_eq!(kv.get::<u32>("ui.width").unwrap(), Some(1280));
+    /// ```
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
         self.store.get(path)
     }
 
     /// The same writes, each returning only once the change is on disk.
-    pub fn durable(&self) -> crate::store::Durable<'_, Self> {
-        crate::store::Durable(self)
+    pub fn durable(&self) -> Durable<'_, Self> {
+        Durable(self)
     }
 
+    /// Writes a value at `path`, creating it or replacing what was there.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
+    /// Writes a value at `path`, creating it or replacing what was there.
+    ///
+    /// Unlike [`ReactiveMap::update`] this has no strict variant: `Kv` is
+    /// addressed by path and has no notion of a key that must already exist.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let kv = store.kv();
+    ///
+    /// kv.set("ui.theme", &"dark".to_string()).unwrap();
+    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("dark".into()));
+    /// ```
     pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
         self.guard(path)?;
         self.store
@@ -54,6 +81,24 @@ impl Kv {
         Ok(())
     }
 
+    /// Drops whatever is at `path`.
+    ///
+    /// Returns only once the change is on disk rather than buffered.
+    /// Drops whatever is at `path`. Removing an absent path is not an error.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let kv = store.kv();
+    ///
+    /// kv.set("ui.theme", &"dark".to_string()).unwrap();
+    /// kv.remove("ui.theme").unwrap();
+    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), None);
+    ///
+    /// // Again, on a path that now holds nothing.
+    /// kv.remove("ui.theme").unwrap();
+    /// ```
     pub fn remove(&self, path: &str) -> WriteResult<()> {
         self.guard(path)?;
         self.store
@@ -61,7 +106,23 @@ impl Kv {
         Ok(())
     }
 
-    /// The keys under `prefix`, sorted. Values are not read.
+    /// Every path under `prefix`, sorted, without reading the values.
+    ///
+    /// The paths come back whole, prefix included - not as the remainder
+    /// after it.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let kv = store.kv();
+    ///
+    /// kv.set("ui.theme", &"dark".to_string()).unwrap();
+    /// kv.set("ui.width", &1280u32).unwrap();
+    /// kv.set("net.port", &8080u16).unwrap();
+    ///
+    /// assert_eq!(kv.keys("ui").unwrap(), ["ui.theme", "ui.width"]);
+    /// ```
     pub fn keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
         self.store.scan_keys(prefix)
     }
@@ -71,6 +132,22 @@ impl Kv {
     ///
     /// The type is remembered, so asking for the same path as two different
     /// types fails rather than handing back garbage.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let kv = store.kv();
+    ///
+    /// let theme = kv.cell("ui.theme", "dark".to_string()).unwrap();
+    /// assert_eq!(theme.get(), "dark");
+    ///
+    /// theme.set("light".to_string()).unwrap();
+    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("light".into()));
+    ///
+    /// // The path is now typed, and a second type for it is refused.
+    /// assert!(kv.cell("ui.theme", 0u32).is_err());
+    /// ```
     pub fn cell<T>(&self, path: &str, default: T) -> WriteResult<ReactiveCell<T>>
     where
         T: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
@@ -89,10 +166,26 @@ impl Kv {
     }
 
     /// A reactive map over a prefix, for a key set that is not known up front.
+    ///
+    /// Everything a declared `ReactiveMap` field can do, without declaring a
+    /// struct - subscriptions, interceptors and durable writes included.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let kv = store.kv();
+    ///
+    /// let widths = kv.map::<String, u64>("columns").unwrap();
+    /// widths.insert("cpu".into(), &120).unwrap();
+    ///
+    /// // The same values are reachable by path.
+    /// assert_eq!(kv.get::<u64>("columns.cpu").unwrap(), Some(120));
+    /// ```
     pub fn map<K, V>(&self, prefix: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>
     where
-        K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-        V: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+        K: ReactiveMapKey,
+        V: ReactiveMapValue,
     {
         self.guard(prefix)?;
         self.check_type::<V>(prefix)?;
@@ -146,25 +239,41 @@ impl Kv {
     }
 }
 
-impl crate::store::Durable<'_, Kv> {
+impl Durable<'_, Kv> {
+    /// Writes a value at `path`, creating it or replacing what was there.
+    ///
+    /// Returns only once it is on disk rather than buffered.
     pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
         self.0.set(path, value)?;
         self.0.store.flush_prefix(path)?;
         Ok(())
     }
 
+    /// Writes a value at `path`, creating it or replacing what was there.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn set_async<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
         self.0.set(path, value)?;
         self.0.store.flush_async().await?;
         Ok(())
     }
 
+    /// Drops whatever is at `path`.
+    ///
+    /// Returns only once the removal is on disk rather than buffered.
     pub fn remove(&self, path: &str) -> WriteResult<()> {
         self.0.remove(path)?;
         self.0.store.flush_prefix(path)?;
         Ok(())
     }
 
+    /// Drops whatever is at `path`.
+    ///
+    /// Resolves once the change is on disk rather than buffered.
+    /// Like every future, this does nothing until awaited - the write
+    /// included. See [`Durable::set_async`].
     pub async fn remove_async(&self, path: &str) -> WriteResult<()> {
         self.0.remove(path)?;
         self.0.store.flush_async().await?;

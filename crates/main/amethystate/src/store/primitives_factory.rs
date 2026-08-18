@@ -4,13 +4,11 @@ use crate::{
     Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, StoreSubscription,
     SubscriptionKind,
 };
+use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::hash::Hash;
-use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -93,8 +91,8 @@ pub fn reactive_map<TScope, K, V>(
 ) -> StorageResult<ReactiveMap<K, V, WritableMode>>
 where
     TScope: StateScope,
-    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-    V: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
 {
     let path: Arc<str> = scoped_path::<TScope>(key).into();
     reactive_map_with_path::<TScope, _, _, _>(store, path, default, instance_id)
@@ -108,8 +106,8 @@ pub fn reactive_map_with_path<TScope, K, V, M>(
 ) -> StorageResult<ReactiveMap<K, V, M>>
 where
     TScope: StateScope,
-    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-    V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
     M: AccessMode,
 {
     reactive_map_with_path_only(store, path, defaults, instance_id)
@@ -122,8 +120,8 @@ pub fn reactive_map_with_path_only<K, V, M>(
     instance_id: Uuid,
 ) -> StorageResult<ReactiveMap<K, V, M>>
 where
-    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-    V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
     M: AccessMode,
 {
     let mut known_cache = HashMap::new();

@@ -1,3 +1,4 @@
+use crate::reactive::cell::CellCommit;
 use crate::reactive::cell::ReactiveCell;
 use crate::store::StoreBackend;
 use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue, WritableMode};
@@ -11,6 +12,35 @@ where
 {
     /// A live cell over one map entry. `default` stands in while the key is
     /// absent, and again if it is later removed.
+    ///
+    /// The cell writes through to the map, so a change made either way is
+    /// visible from the other. Removal does not invalidate it - the value
+    /// falls back to `default` and the cell stays usable.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    /// let cpu = widths.entry_cell("cpu".to_string(), 100);
+    ///
+    /// // The key is absent, so the cell reads the default.
+    /// assert_eq!(cpu.get(), 100);
+    ///
+    /// // Writing through the cell writes the map entry.
+    /// cpu.set(120).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    ///
+    /// // And a write to the map reaches the cell.
+    /// widths.update("cpu".into(), &200).unwrap();
+    /// assert_eq!(cpu.get(), 200);
+    ///
+    /// // Removing the key puts the default back, without breaking the cell.
+    /// widths.remove("cpu".to_string()).unwrap();
+    /// assert_eq!(cpu.get(), 100);
+    /// cpu.set(80).unwrap();
+    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(80));
+    /// ```
     pub fn entry_cell(&self, key: K, default: V) -> ReactiveCell<V> {
         let initial = self
             .get(&key)
@@ -42,7 +72,7 @@ where
         let flush_store = self.store.clone();
         let flush_path = self.path.clone();
         let start_store = self.store.clone();
-        let commit = crate::reactive::cell::CellCommit {
+        let commit = CellCommit {
             now: Arc::new(move || Ok(flush_store.flush_prefix(&flush_path)?)),
             start: Arc::new(move || start_store.flush_async()),
         };
