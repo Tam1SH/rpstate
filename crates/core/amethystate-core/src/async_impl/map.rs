@@ -42,18 +42,14 @@ impl<K, V, B> Eq for ReactiveMap<K, V, B> {}
 
 impl<K, V, B> std::fmt::Debug for ReactiveMap<K, V, B>
 where
-    K: std::fmt::Debug,
-    V: std::fmt::Debug,
+    K: std::fmt::Debug + std::hash::Hash + Eq + Clone,
+    V: std::fmt::Debug + Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("ReactiveMap");
         d.field("prefix", &self.prefix);
 
-        if let Ok(cache) = self.core.cache.try_lock() {
-            d.field("cache", &*cache);
-        } else {
-            d.field("cache", &"<locked>");
-        }
+        d.field("cache_entries", &self.core.cache.len());
 
         d.field("core", &self.core).finish()
     }
@@ -103,9 +99,8 @@ where
         let prefix = prefix.into();
         let core = ReactiveMapCore::new();
 
-        {
-            let mut cache = core.cache.lock().unwrap();
-            *cache = initial_values;
+        for (k, v) in initial_values {
+            core.cache.insert(k, v);
         }
 
         let subscription = backend.subscribe_map(prefix.clone(), core.clone());
@@ -120,7 +115,7 @@ where
     }
 
     pub fn get_sync(&self, key: &K) -> ReactiveMapResult<Option<V>, B::Error> {
-        Ok(self.core.cache.lock().unwrap().get(key).cloned())
+        Ok(self.core.cache.get(key).map(|v| v.clone()))
     }
 
     pub async fn get(&self, key: &K) -> ReactiveMapResult<Option<V>, B::Error> {
@@ -143,10 +138,8 @@ where
         let mut entries: Vec<(K, V)> = self
             .core
             .cache
-            .lock()
-            .unwrap()
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|e| (e.key().clone(), e.value().clone()))
             .collect();
 
         entries.sort_by_key(|(k, _)| k.to_string());

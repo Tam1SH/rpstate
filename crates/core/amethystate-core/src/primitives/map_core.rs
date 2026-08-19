@@ -37,7 +37,7 @@ pub struct ReactiveMapCore<K, V> {
     pub subscribers_key: Arc<Mutex<HashMap<K, Vec<(u64, SubscriberKey<K, V>, SubscriptionMeta)>>>>,
     pub next_id: Arc<AtomicU64>,
     pub intercept_depth: Arc<AtomicUsize>,
-    pub cache: Arc<Mutex<HashMap<K, V>>>,
+    pub cache: Arc<dashmap::DashMap<K, V>>,
 }
 
 impl<K, V> Clone for ReactiveMapCore<K, V> {
@@ -54,14 +54,19 @@ impl<K, V> Clone for ReactiveMapCore<K, V> {
     }
 }
 
-impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for ReactiveMapCore<K, V> {
+impl<K: std::fmt::Debug + Hash + Eq + Clone, V: std::fmt::Debug + Clone> std::fmt::Debug
+    for ReactiveMapCore<K, V>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("ReactiveMapCore");
-        if let Ok(cache) = self.cache.try_lock() {
-            d.field("cache", &*cache);
-        } else {
-            d.field("cache", &"<locked>");
-        }
+        d.field(
+            "cache",
+            &self
+                .cache
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect::<HashMap<K, V>>(),
+        );
         let interceptors_count = self
             .interceptors_any
             .try_lock()
@@ -93,7 +98,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             subscribers_key: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(0)),
             intercept_depth: Arc::new(AtomicUsize::new(0)),
-            cache: Arc::new(Mutex::new(HashMap::new())),
+            cache: Arc::new(dashmap::DashMap::new()),
         }
     }
 

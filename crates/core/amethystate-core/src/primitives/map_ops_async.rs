@@ -146,7 +146,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let exists = core.cache.lock().unwrap().contains_key(&key);
+    let exists = core.cache.contains_key(&key);
     if !exists {
         return Ok(None);
     }
@@ -162,7 +162,7 @@ where
         map_apply_change_async(backend, core, path, change).await?;
         Ok(Some(old_value))
     } else {
-        core.cache.lock().unwrap().remove(&key);
+        core.cache.remove(&key);
         Ok(None)
     }
 }
