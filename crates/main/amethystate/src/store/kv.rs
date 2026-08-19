@@ -1,3 +1,4 @@
+use crate::migration::types::AmeType;
 use crate::observability::SchemaEntry;
 use crate::observability::{register_instance, resolve_field};
 use crate::reactive::error::{WriteError, WriteResult};
@@ -23,6 +24,7 @@ use uuid::Uuid;
 pub struct Kv {
     store: Store,
     instance_id: Uuid,
+    prefix: Option<Arc<str>>,
 }
 
 impl Kv {
@@ -30,7 +32,65 @@ impl Kv {
         let instance_id = Uuid::new_v4();
         register_instance(instance_id, "amethystate::Kv");
 
-        Self { store, instance_id }
+        Self {
+            store,
+            instance_id,
+            prefix: None,
+        }
+    }
+
+    /// A handle on everything under `name`.
+    ///
+    /// Nesting is spelled here rather than punched into a string, so a name
+    /// stays a name: `namespace("ui")` then `set("dark.mode", ..)` addresses one
+    /// value called `dark.mode`, where a single `"ui.dark.mode"` would have been
+    /// three levels. A name carrying the separator is refused for the same
+    /// reason.
+    ///
+    /// Writes through a namespace carry the same provenance as the handle it
+    /// came from - it is a view on the same `Kv`, not a second writer.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let ui = store.kv().namespace("ui").unwrap();
+    ///
+    /// ui.set("width", &1280u32).unwrap();
+    /// assert_eq!(ui.get::<u32>("width").unwrap(), Some(1280));
+    ///
+    /// // The same value, spelled out from the root.
+    /// assert_eq!(store.kv().namespace("ui").unwrap().get::<u32>("width").unwrap(), Some(1280));
+    ///
+    /// // Namespaces nest.
+    /// let panels = ui.namespace("panels").unwrap();
+    /// panels.set("left", &true).unwrap();
+    /// assert_eq!(ui.namespace("panels").unwrap().get::<bool>("left").unwrap(), Some(true));
+    /// ```
+    pub fn namespace(&self, name: &str) -> WriteResult<Self> {
+        Ok(Self {
+            store: self.store.clone(),
+            instance_id: self.instance_id,
+            prefix: Some(Arc::from(self.resolve(name)?)),
+        })
+    }
+
+    /// Where this handle is rooted, or `None` at the top.
+    pub fn prefix(&self) -> Option<&str> {
+        self.prefix.as_deref()
+    }
+
+    fn resolve(&self, name: &str) -> WriteResult<String> {
+        if name.contains('.') {
+            return Err(WriteError::SeparatorInName {
+                name: name.to_string(),
+            });
+        }
+
+        Ok(match &self.prefix {
+            Some(prefix) => format!("{prefix}.{name}"),
+            None => name.to_string(),
+        })
     }
 
     /// Reads a value, or `None` if the path holds nothing.
@@ -44,12 +104,12 @@ impl Kv {
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let kv = store.kv();
     ///
-    /// assert_eq!(kv.get::<u32>("ui.width").unwrap(), None);
-    /// kv.set("ui.width", &1280u32).unwrap();
-    /// assert_eq!(kv.get::<u32>("ui.width").unwrap(), Some(1280));
+    /// assert_eq!(kv.get::<u32>("width").unwrap(), None);
+    /// kv.set("width", &1280u32).unwrap();
+    /// assert_eq!(kv.get::<u32>("width").unwrap(), Some(1280));
     /// ```
-    pub fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
-        self.store.get(path)
+    pub fn get<T: AmeType + DeserializeOwned>(&self, name: &str) -> WriteResult<Option<T>> {
+        Ok(self.store.get(&self.resolve(name)?)?)
     }
 
     /// The same writes, each returning only once the change is on disk.
@@ -71,13 +131,17 @@ impl Kv {
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let kv = store.kv();
     ///
-    /// kv.set("ui.theme", &"dark".to_string()).unwrap();
-    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("dark".into()));
+    /// kv.set("theme", &"dark".to_string()).unwrap();
+    /// assert_eq!(kv.get::<String>("theme").unwrap(), Some("dark".into()));
+    ///
+    /// // A name is a name: nesting is asked for, never punctuated into one.
+    /// assert!(kv.set("ui.theme", &"dark".to_string()).is_err());
     /// ```
-    pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
-        self.guard(path)?;
+    pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
+        let path = self.resolve(name)?;
+        self.guard(&path)?;
         self.store
-            .set_with_source(path, value, Some(self.instance_id))?;
+            .set_with_source(&path, value, Some(self.instance_id))?;
         Ok(())
     }
 
@@ -92,17 +156,18 @@ impl Kv {
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let kv = store.kv();
     ///
-    /// kv.set("ui.theme", &"dark".to_string()).unwrap();
-    /// kv.remove("ui.theme").unwrap();
-    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), None);
+    /// kv.set("theme", &"dark".to_string()).unwrap();
+    /// kv.remove("theme").unwrap();
+    /// assert_eq!(kv.get::<String>("theme").unwrap(), None);
     ///
-    /// // Again, on a path that now holds nothing.
-    /// kv.remove("ui.theme").unwrap();
+    /// // Again, on a name that now holds nothing.
+    /// kv.remove("theme").unwrap();
     /// ```
-    pub fn remove(&self, path: &str) -> WriteResult<()> {
-        self.guard(path)?;
+    pub fn remove(&self, name: &str) -> WriteResult<()> {
+        let path = self.resolve(name)?;
+        self.guard(&path)?;
         self.store
-            .delete_with_source(path, Some(self.instance_id))?;
+            .delete_with_source(&path, Some(self.instance_id))?;
         Ok(())
     }
 
@@ -117,14 +182,18 @@ impl Kv {
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let kv = store.kv();
     ///
-    /// kv.set("ui.theme", &"dark".to_string()).unwrap();
-    /// kv.set("ui.width", &1280u32).unwrap();
-    /// kv.set("net.port", &8080u16).unwrap();
+    /// let ui = kv.namespace("ui").unwrap();
+    /// ui.set("theme", &"dark".to_string()).unwrap();
+    /// ui.set("width", &1280u32).unwrap();
+    /// kv.namespace("net").unwrap().set("port", &8080u16).unwrap();
     ///
-    /// assert_eq!(kv.keys("ui").unwrap(), ["ui.theme", "ui.width"]);
+    /// assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.width"]);
     /// ```
-    pub fn keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
-        self.store.scan_keys(prefix)
+    pub fn keys(&self) -> StorageResult<Vec<String>> {
+        match &self.prefix {
+            Some(prefix) => self.store.scan_keys(prefix),
+            None => self.store.scan_keys(""),
+        }
     }
 
     /// A reactive cell over one path, seeded with `default` if the path is
@@ -133,39 +202,47 @@ impl Kv {
     /// The type is remembered, so asking for the same path as two different
     /// types fails rather than handing back garbage.
     ///
+    /// The cell owns the field behind it, since nothing else holds one: the
+    /// field exists because the cell was asked for. So it stays readable and
+    /// writable for as long as it is held - and keeps the store open for that
+    /// long - where [`Field::cell`](crate::Field::cell) is a view that empties
+    /// when its field is dropped.
+    ///
     /// ```
     /// # use amethystate::StoreBuilder;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let kv = store.kv();
     ///
-    /// let theme = kv.cell("ui.theme", "dark".to_string()).unwrap();
-    /// assert_eq!(theme.get(), "dark");
+    /// let theme = kv.cell("theme", "dark".to_string()).unwrap();
+    /// assert_eq!(theme.get(), Some("dark".to_string()));
     ///
     /// theme.set("light".to_string()).unwrap();
-    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("light".into()));
+    /// assert_eq!(kv.get::<String>("theme").unwrap(), Some("light".into()));
     ///
     /// // The path is now typed, and a second type for it is refused.
-    /// assert!(kv.cell("ui.theme", 0u32).is_err());
+    /// assert!(kv.cell("theme", 0u32).is_err());
     /// ```
-    pub fn cell<T>(&self, path: &str, default: T) -> WriteResult<ReactiveCell<T>>
+    pub fn cell<T>(&self, name: &str, default: T) -> WriteResult<ReactiveCell<T>>
     where
-        T: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+        T: AmeType + Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
     {
-        self.guard(path)?;
-        self.check_type::<T>(path)?;
+        let path = self.resolve(name)?;
+        self.guard(&path)?;
+        self.check_type::<T>(&path)?;
 
         let field = field_with_path::<T, WritableMode>(
             &self.store,
-            Arc::from(path),
+            Arc::from(path.as_str()),
             default,
             self.instance_id,
         )?;
 
-        Ok(field.cell())
+        let cell = field.cell();
+        Ok(cell.owning(Arc::new(field)))
     }
 
-    /// A reactive map over a prefix, for a key set that is not known up front.
+    /// A reactive map under `name`, for a key set that is not known up front.
     ///
     /// Everything a declared `ReactiveMap` field can do, without declaring a
     /// struct - subscriptions, interceptors and durable writes included.
@@ -179,20 +256,22 @@ impl Kv {
     /// let widths = kv.map::<String, u64>("columns").unwrap();
     /// widths.insert("cpu".into(), &120).unwrap();
     ///
-    /// // The same values are reachable by path.
-    /// assert_eq!(kv.get::<u64>("columns.cpu").unwrap(), Some(120));
+    /// // A map is a namespace with entries in it.
+    /// let columns = kv.namespace("columns").unwrap();
+    /// assert_eq!(columns.get::<u64>("cpu").unwrap(), Some(120));
     /// ```
-    pub fn map<K, V>(&self, prefix: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>
+    pub fn map<K, V>(&self, name: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>
     where
         K: ReactiveMapKey,
-        V: ReactiveMapValue,
+        V: AmeType + ReactiveMapValue,
     {
-        self.guard(prefix)?;
-        self.check_type::<V>(prefix)?;
+        let path = self.resolve(name)?;
+        self.guard(&path)?;
+        self.check_type::<V>(&path)?;
 
         Ok(reactive_map_with_path_only(
             &self.store,
-            Arc::from(prefix),
+            Arc::from(path.as_str()),
             HashMap::new(),
             self.instance_id,
         )?)
@@ -225,8 +304,8 @@ impl Kv {
     /// Only what this process has built is known, so this catches a mistake
     /// rather than guaranteeing a type. A path written by an earlier run is not
     /// checked, and neither is the raw [`Kv::set`].
-    fn check_type<T: 'static>(&self, path: &str) -> WriteResult<()> {
-        let wanted = std::any::type_name::<T>();
+    fn check_type<T: AmeType + 'static>(&self, path: &str) -> WriteResult<()> {
+        let wanted = T::TYPE_NAME;
 
         match resolve_field(path) {
             Some(meta) if meta.value_type_name != wanted => Err(WriteError::TypeMismatch {
@@ -243,9 +322,9 @@ impl Durable<'_, Kv> {
     /// Writes a value at `path`, creating it or replacing what was there.
     ///
     /// Returns only once it is on disk rather than buffered.
-    pub fn set<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
-        self.0.set(path, value)?;
-        self.0.store.flush_prefix(path)?;
+    pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
+        self.0.set(name, value)?;
+        self.0.store.flush_prefix(&self.0.resolve(name)?)?;
         Ok(())
     }
 
@@ -254,8 +333,12 @@ impl Durable<'_, Kv> {
     /// Resolves once the change is on disk rather than buffered.
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn set_async<T: Serialize>(&self, path: &str, value: &T) -> WriteResult<()> {
-        self.0.set(path, value)?;
+    pub async fn set_async<T: AmeType + Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> WriteResult<()> {
+        self.0.set(name, value)?;
         self.0.store.flush_async().await?;
         Ok(())
     }
@@ -263,9 +346,9 @@ impl Durable<'_, Kv> {
     /// Drops whatever is at `path`.
     ///
     /// Returns only once the removal is on disk rather than buffered.
-    pub fn remove(&self, path: &str) -> WriteResult<()> {
-        self.0.remove(path)?;
-        self.0.store.flush_prefix(path)?;
+    pub fn remove(&self, name: &str) -> WriteResult<()> {
+        self.0.remove(name)?;
+        self.0.store.flush_prefix(&self.0.resolve(name)?)?;
         Ok(())
     }
 

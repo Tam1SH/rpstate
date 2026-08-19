@@ -32,8 +32,8 @@ fn a_cell_is_an_ordinary_reactive_cell() {
     let store = store();
     let kv = store.kv();
 
-    let width = kv.cell("ui.width", 800u32).unwrap();
-    assert_eq!(width.get(), 800, "seeded with the default");
+    let width = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
+    assert_eq!(width.get(), Some(800), "seeded with the default");
 
     let mut ui = LocalScope::new();
     let seen = Rc::new(RefCell::new(Vec::new()));
@@ -42,7 +42,7 @@ fn a_cell_is_an_ordinary_reactive_cell() {
     width
         .subscription_with()
         .local(&mut ui)
-        .register(move |w: &u32| cap.borrow_mut().push(*w));
+        .register(move |w: &Option<u32>| cap.borrow_mut().push(w.unwrap()));
 
     width.set(1024).unwrap();
     ui.drain();
@@ -68,11 +68,15 @@ fn keys_are_sorted_and_scoped_to_the_prefix() {
     let store = store();
     let kv = store.kv();
 
-    kv.set("ui.zoom", &2u8).unwrap();
-    kv.set("ui.theme", &"dark".to_string()).unwrap();
-    kv.set("net.host", &"localhost".to_string()).unwrap();
+    let ui = kv.namespace("ui").unwrap();
+    ui.set("zoom", &2u8).unwrap();
+    ui.set("theme", &"dark".to_string()).unwrap();
+    kv.namespace("net")
+        .unwrap()
+        .set("host", &"localhost".to_string())
+        .unwrap();
 
-    assert_eq!(kv.keys("ui").unwrap(), ["ui.theme", "ui.zoom"]);
+    assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.zoom"]);
 }
 
 /// A declared struct owns its prefix. Writing there through Kv would not merely
@@ -84,12 +88,14 @@ fn writing_into_a_declared_prefix_is_refused() {
     let kv = store.kv();
 
     let err = kv
-        .set("typed.port", &"not a number".to_string())
+        .namespace("typed")
+        .unwrap()
+        .set("port", &"not a number".to_string())
         .unwrap_err();
     assert!(matches!(err, WriteError::SchemaOwned { .. }), "got {err:?}");
 
-    assert!(kv.cell("typed.port", 1u16).is_err());
-    assert!(kv.remove("typed.port").is_err());
+    assert!(kv.namespace("typed").unwrap().cell("port", 1u16).is_err());
+    assert!(kv.namespace("typed").unwrap().remove("port").is_err());
     assert!(kv.map::<String, u8>("typed").is_err());
 }
 
@@ -98,8 +104,17 @@ fn a_path_next_to_a_declared_prefix_is_allowed() {
     let store = store();
     let kv = store.kv();
 
-    kv.set("typedish.port", &1u16).unwrap();
-    assert_eq!(kv.get::<u16>("typedish.port").unwrap(), Some(1));
+    kv.namespace("typedish")
+        .unwrap()
+        .set("port", &1u16)
+        .unwrap();
+    assert_eq!(
+        kv.namespace("typedish")
+            .unwrap()
+            .get::<u16>("port")
+            .unwrap(),
+        Some(1)
+    );
 }
 
 /// Nothing connects a path to a type the way a struct field does, so asking for
@@ -109,8 +124,12 @@ fn the_same_path_cannot_be_two_types() {
     let store = store();
     let kv = store.kv();
 
-    let _width = kv.cell("ui.width", 800u32).unwrap();
-    let err = kv.cell("ui.width", String::new()).unwrap_err();
+    let _width = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
+    let err = kv
+        .namespace("ui")
+        .unwrap()
+        .cell("width", String::new())
+        .unwrap_err();
 
     assert!(
         matches!(err, WriteError::TypeMismatch { .. }),
@@ -123,11 +142,11 @@ fn asking_for_the_same_path_and_type_twice_is_fine() {
     let store = store();
     let kv = store.kv();
 
-    let a = kv.cell("ui.width", 800u32).unwrap();
-    let b = kv.cell("ui.width", 800u32).unwrap();
+    let a = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
+    let b = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
 
     a.set(42).unwrap();
-    assert_eq!(b.get(), 42, "both are views on the same path");
+    assert_eq!(b.get(), Some(42), "both are views on the same path");
 }
 
 #[test]
@@ -138,7 +157,9 @@ fn values_survive_a_reopen() {
         let store = StoreBuilder::new(&path).build().unwrap();
         store
             .kv()
-            .cell("ui.width", 800u32)
+            .namespace("ui")
+            .unwrap()
+            .cell("width", 800u32)
             .unwrap()
             .set(1280)
             .unwrap();
@@ -146,5 +167,14 @@ fn values_survive_a_reopen() {
     }
 
     let store = StoreBuilder::new(&path).build().unwrap();
-    assert_eq!(store.kv().cell("ui.width", 800u32).unwrap().get(), 1280);
+    assert_eq!(
+        store
+            .kv()
+            .namespace("ui")
+            .unwrap()
+            .cell("width", 800u32)
+            .unwrap()
+            .get(),
+        Some(1280)
+    );
 }

@@ -67,12 +67,22 @@ fn a_durable_write_survives_a_crash_and_a_plain_one_does_not() {
         .expect("the crashed writer released the lock");
 
     assert_eq!(
-        store.kv().get::<u16>("n.durable").unwrap(),
+        store
+            .kv()
+            .namespace("n")
+            .unwrap()
+            .get::<u16>("durable")
+            .unwrap(),
         Some(888),
         "the durable write had committed before the abort"
     );
     assert_eq!(
-        store.kv().get::<u16>("n.plain").unwrap(),
+        store
+            .kv()
+            .namespace("n")
+            .unwrap()
+            .get::<u16>("plain")
+            .unwrap(),
         None,
         "the plain write was still buffered and died with the process"
     );
