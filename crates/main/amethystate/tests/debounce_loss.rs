@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::{TempPath, unique_path};
 use std::time::Duration;
 
 #[amethystate(prefix = "dbl")]
@@ -64,4 +64,24 @@ fn a_burst_of_writes_settles_on_the_last_one() {
         Some(300),
         "and it survives a reopen"
     );
+}
+
+/// A short-lived process gets one chance to write what is still buffered, and
+/// it is the drop. Every backend family flushes from its own `Drop`, so this
+/// holds even while the quiet period has tens of seconds left to run.
+#[test]
+fn dropping_the_store_writes_what_is_still_buffered() {
+    let path = TempPath::new("debounce_drop");
+
+    {
+        let store = StoreBuilder::new(path.path())
+            .debounce(30_000)
+            .build()
+            .unwrap();
+        let cfg = Cfg::new_with(&store).unwrap();
+        cfg.counter().set(777).unwrap();
+    }
+
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+    assert_eq!(store.get::<u64>("dbl.counter").unwrap(), Some(777));
 }

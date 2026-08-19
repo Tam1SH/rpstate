@@ -52,7 +52,7 @@ impl Debouncer {
                         Ok(Trigger::Schedule) => continue,
                         Ok(Trigger::Now) => break,
                         Err(RecvTimeoutError::Timeout) => break,
-                        Err(RecvTimeoutError::Disconnected) => return,
+                        Err(RecvTimeoutError::Disconnected) => break,
                     }
                 }
 
@@ -140,6 +140,35 @@ mod tests {
 
         assert!(d.is_poisoned());
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_pending_op_runs_when_dropped_mid_interval() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_inner = call_count.clone();
+
+        let d = Debouncer::new(Duration::from_secs(30), move || {
+            count_inner.fetch_add(1, Ordering::SeqCst);
+        });
+
+        d.schedule();
+        drop(d);
+
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_idle_drop_runs_nothing() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_inner = call_count.clone();
+
+        let d = Debouncer::new(Duration::from_millis(10), move || {
+            count_inner.fetch_add(1, Ordering::SeqCst);
+        });
+
+        drop(d);
+
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
     }
 
     #[test]
