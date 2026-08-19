@@ -381,25 +381,234 @@ Scope, since it decides the memory question: millions of rows and blobs are not
 this library's business - reach for the database directly there. Within the size
 it does target, holding the map resident is the right trade.
 
-## `ReactiveCache`
+## The last write of a store's life can fail without a trace
 
-A cache primitive shaped like `ReactiveMap`, for derived data that is expensive
-to recompute and cheap to throw away. Designed, not built.
+Every backend family flushes its buffer from `Drop` - [`redb`](crates/main/amethystate/src/store/backend/redb/mod.rs),
+[`sqlite`](crates/main/amethystate/src/store/backend/sqlite/mod.rs), [`text`](crates/main/amethystate/src/store/backend/text/store.rs) -
+and all three discard the result: `let _ = self.save_now();`.
 
-- `get_or_insert_with(key, stamp, f)` is the only way to read. The stamp is an
-  opaque `u64` supplied by the caller — a file hash, an mtime, `now / ttl`, or
-  any mix. A stamp that does not match is a miss, so time-based expiry, input-
-  based invalidation and schema-based invalidation are all the same mechanism.
-- No epoch and no lazy invalidation: `remove` and `clear` delete. Two ways to
-  invalidate, one of which quietly leaks disk, is the kind of pair that gets
-  chosen wrong.
-- Excluded from migrations by living under its own prefix, and dropped rather
-  than migrated when the schema hash changes — derived data recomputes.
-- Everything the cache itself needs lives in the meta space, keyed per entry
-  rather than per prefix, so values on disk stay plain and readable and a write
-  does not rewrite a shared blob.
-- Write the value first and the stamp second: a crash between them costs a miss,
-  never a false hit.
+That flush is the one a short-lived process depends on, and it is the one whose
+failure nobody can observe. A locked file, a full disk, a permission error at
+exit - the process ends reporting success and the data is not there. `Drop`
+cannot return an error, so the value is real, but it can log, and today it does
+not even do that.
+
+Two levels worth having:
+
+- log the failure at `error`, so the loss leaves a trace;
+- an explicit `close()` that returns the result, for callers that would rather
+  find out while they can still do something about it.
+
+Found while chasing a suspected loss that turned out to be the separator bug
+above. The flush had in fact succeeded - which was only knowable by adding a
+probe to `Drop`.
+
+## Migration cleanup addresses a field by its Rust name, not by where it is stored
+
+`#[amestate(key = "...")]` moves a field somewhere else on disk, and the
+cleanup that runs after a migration does not follow. `FieldDescriptor.name`
+carries the Rust identifier - `fname_str` in `generate/data.rs` - while the path
+is built from `e.key.unwrap_or(fname)` a few lines below. With an override the
+two are different strings, and the bookkeeping uses the first.
+
+Reproduced in `tests/keyed_field_rename.rs`, the two failing cases `#[ignore]`d
+so the suite stays green. A third case is the control: the same removal without
+an override cleans up correctly, so the override is what breaks it.
+
+**Reading the old value works.** The migration function is handed the old struct
+through `AmeData`, which respects the override, so a rename carries the value
+across exactly as written. What fails is only the removal afterwards.
+
+**The old location is never emptied.** `delete(old_f.name)` in
+`migration/context.rs` removes `keyed.left_panel_visible` while the value sits
+at `keyed.panels.left.visible`. Deleting an absent key is deliberately not an
+error, so nothing is reported.
+
+So a renamed field leaves a copy of itself behind at the old path, and a field
+dropped from the schema keeps its value forever - which is the worse of the two,
+since dropping a field is how a migration is supposed to get rid of something
+that should no longer be stored.
+
+**`schema_hash` has the same blind spot.** It folds `name`, so changing only the
+`key` moves the data on disk and leaves the hash identical: no migration runs
+and no drift is reported. Not covered by the tests above.
+
+The descriptor should carry the stored name alongside the Rust identifier, and
+each user should take the one it means. A stored name is a path, and saying so
+in the type is what keeps the two from being confused - so this lands as step 1
+of the plan under "The API does not distinguish a path from a name".
+
+## The API does not distinguish a path from a name
+
+A dot inside a string means "next level" in some places and is meant to be an
+ordinary character in others, and nothing in the types says which is which.
+Where the two meet, the composed string has already lost the boundary.
+
+| takes a string that means | | stated anywhere |
+| --- | --- | --- |
+| `prefix = "..."` | a path | no |
+| `key = "..."` | a path - `tests/migration_complex.rs` relies on it | no |
+| `Kv` paths | a path | no |
+| a `ReactiveMap` key | a name | no, and it is split anyway |
+
+The first three work as intended; they are an unwritten convention, and under
+it there is no way to write a name that simply contains a dot. The fourth is a
+bug, because the intent there is the opposite.
+
+`#[rename(old => new)]` is safe by construction - it parses `Ident`s, which
+cannot contain a dot.
+
+**What the bug costs.** Reproduced in `tests/map_dotted_keys.rs`, both cases
+`#[ignore]`d so the suite stays green. Flat backends store the key whole and are
+unaffected, so a single-backend run never sees it:
+
+| | `get` by exact key | `keys` / `entries` / `len` | key that prefixes another |
+| --- | --- | --- | --- |
+| redb, sqlite | correct | correct | correct |
+| json, toml, ron | correct | counts nodes at the level | value destroyed |
+
+Three keys `a.exe`, `a.dll`, `b.exe` give `len() == 2`: `a` and `b` are the
+nodes. Now that reads come from the map's projection this is invisible while the
+process runs - the projection is keyed by `K`, not by the document tree - and
+appears on the next start, when the projection is rebuilt from the prefix. The
+reproduction reopens the store for exactly that reason.
+
+Worse, writing `a` and then `a.b` turns the leaf into a branch and the value
+under `a` is gone - reading it fails to decode. Both writes returned `Ok`.
+
+**Two schemas can claim the same place on disk.** `key = "panels.left.visible"`
+under `prefix = "coll"` and a plain field under `prefix = "coll.panels"` compose
+to the same path, and nothing checks for it. Reproduced in
+`tests/prefix_overlap.rs`, both cases `#[ignore]`d:
+
+- matching types share the slot silently - a write through one struct lands on
+  the other's field, last writer wins;
+- disagreeing types surface as `invalid type: boolean, expected u32` while the
+  second struct is being constructed, which is a decode failure standing in for
+  a name collision.
+
+**A prefix can land on another struct's field.** `prefix = "root"` with a field
+`b`, and `prefix = "root.b"`, put a leaf and a branch on the same node. This one
+is invisible from the public API: `Field::get()` answers from the signal in
+memory, so both structs report their own values for as long as the process
+lives. Only the store disagrees:
+
+| | `store.get("root.b")` | `store.get("root.b.x")` |
+| --- | --- | --- |
+| redb | `Some(10)` | `Some(20)` |
+| json | `Err(invalid type: map, expected u32)` | - |
+| toml | `Some(20)` - the branch's value | - |
+
+The toml row is the worst of the three: no error, the type matches, the number
+is wrong. And the damage only becomes visible on the next start, when the
+signals have to come off the disk.
+
+Forbidding a dot inside `key` is a check the macro can make on its own, ahead of
+any of the above, and it makes `key` mean a name rather than a path. It closes
+one of the three ways to nest - `prefix` and nested field names remain - but it
+is the surprising one, and it is compile-time.
+
+### Decided: paths carry segments
+
+Compatibility with existing files is not a constraint - the implementation has
+enough bugs that the data written by it is not worth preserving. That removes
+the format migration from the work and lets each step land on its own.
+
+Escaping does not disappear, it moves: a flat backend still has to compose one
+byte string, and the separator inside it has to be escaped. The difference is
+that this becomes a private detail of one engine's key encoding rather than a
+rule the API asks callers to observe. Tree backends escape nothing - they walk a
+node per segment.
+
+Since the layout breaks anyway, this is the one cheap moment to put a format
+version in the metadata. Without it an older file reads as a corrupt one rather
+than an old one, and adding it later is a second break.
+
+The steps, each standing on its own:
+
+1. the descriptor carries the stored name next to the Rust identifier - fixes
+   the migration cleanup above, touches no layout;
+2. a path type carrying segments, with the join done at the boundary with the
+   engine; the macro knows its segments at compile time, so the static case is
+   `&'static [&'static str]` and allocates nothing;
+3. a map key becomes exactly one segment;
+4. the macro separates a name from a path - `key` is a name and a dot in it is
+   an error, nesting gets its own attribute;
+5. `scan_prefix` matches a segment boundary rather than a string prefix;
+6. registration refuses two schemas that claim the same path - segments do not
+   prevent a collision, they only stop one from happening by accident;
+7. a format version in the metadata.
+
+## A prefix is a string prefix, not a segment boundary
+
+`scan_keys` is documented as "the keys under `prefix`" and `delete_prefix` as
+"removes every key under `prefix`", and on the flat engines both match a raw
+string prefix instead.
+
+With `ui.width = 1280` and `uix.width = 640`, `kv.keys("ui")` returns both, and
+`store.delete_prefix("ui")` destroys `uix.width` - an unrelated subtree. The
+text backends walk the document tree and are segment-correct, so the same call
+has a different blast radius depending on the engine.
+
+Reproduced in `tests/prefix_boundary.rs`, with a control that spells the
+separator and passes.
+
+**sqlite additionally feeds the prefix to `GLOB` unescaped.** `sqlite/mod.rs`
+builds `format!("{}*", prefix)` and runs `key GLOB ?`, so `[`, `?` and `*` in a
+path become wildcards. A map at `panel[0].widths` reads correctly by point key -
+those use `=` - while `len()` reports 0 and `clear()` deletes nothing, because
+`[0]` parses as a character class. Reachable through a `key` override or any
+caller-supplied `Kv` path, and `delete_prefix` rides the same scan, so it can
+under-delete as easily as the case above over-deletes.
+
+Checked and clean: subscription prefix matching in `backend/utils.rs` is
+segment-correct, so this does not leak into the event layer.
+
+## Migration cleanup deletes one key, so a composite field survives being dropped
+
+The cleanup emitted by `migrate.rs` and the same loop in
+`MigrationContext::nested` call `ctx.delete(field.name)` - a single key. A
+`ReactiveMap` field lives at `prefix.field.<key>` and a `nested` field at
+`prefix.field.<leaf>`; the branch itself holds nothing, so the delete removes
+nothing and every entry stays on disk.
+
+Dropping a `ReactiveMap<String, u32>` field that held `alpha = 7` leaves
+`dropmap.cache.alpha` readable afterwards. Same for a dropped `nested` field.
+
+Fails on **redb and sqlite**; the text backends delete a document node and take
+the subtree with it, so the two families disagree about what a migration leaves
+behind. Reproduced in `tests/migration_cleanup_composite.rs`, with a control
+dropping a plain scalar that is cleaned up correctly.
+
+That this is unhandled rather than deliberate is visible in
+`tests/migration_reactive_map.rs`, where the migration hand-deletes
+`routes.{key}` in a loop to work around it.
+
+Renaming such a field is the same cause with a worse result: the new location is
+written while the old subtree stays, leaving two live copies. Distinct from the
+`key`-override finding above - this one needs no override at all.
+
+## `Kv::guard` does not cover `as_root` structs
+
+`guard` rejects a path under a declared `prefix`, and an `as_root` struct's
+fields sit at bare paths, so nothing matches and `Kv` writes over them with any
+type.
+
+`store.kv().set("width", &"oops".to_string())` against an `as_root` struct
+owning `width: u32` returns `Ok`, and after a reopen the struct fails to
+construct - which is the failure `guard`'s own doc says it exists to prevent.
+All five backends. Reproduced in `tests/kv_guard_root.rs`, with a control
+showing the identical write against a prefixed struct is refused.
+
+## Deleting a map's prefix notifies nobody
+
+`primitives_factory.rs` recognises a `DeletePrefix` event only when its path is
+`"<path>."`, while `store.delete_prefix("columns")` emits the path without the
+separator - and a prefix delete emits one event rather than a delete per key.
+Every entry disappears while the map's cache and its subscribers hear nothing.
+
+Reproduced in `tests/map_delete_prefix_notify.rs`, with a control showing
+`map.clear()` emits the dotted form and does notify.
 
 ## Documentation
 
