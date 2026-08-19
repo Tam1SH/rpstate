@@ -1,4 +1,4 @@
-use crate::reactive::error::WriteResult;
+use crate::reactive::error::{WriteError, WriteResult};
 use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::Durable;
 use amethystate_core::{Signal, SignalSubscription};
@@ -15,17 +15,28 @@ pub(crate) struct CellCommit {
     pub(crate) start: Arc<dyn Fn() -> crate::store::Commit + Send + Sync>,
 }
 
-/// A reactive value you can read, write and subscribe to, with the primitive
+/// A view on a reactive value that lives somewhere else, with the primitive
 /// behind it erased - along with its type parameters, so fields, map entries
 /// and in-memory values share one type and one collection.
 ///
-/// Writes always reach where the value lives.
+/// A cell holds nothing open: it keeps a weak reference to the primitive it
+/// views, so a forgotten cell in a UI does not keep the store file open. Once
+/// that primitive is dropped every write fails with
+/// [`WriteError::SourceGone`]
+/// and [`get`](ReactiveCell::get) returns `None`.
+///
+/// Absence is a value here, not a hole to fill: a cell over a map entry whose
+/// key is missing reads `None` and refuses to write, because creating the entry
+/// is the map's job. A cell holding a value in memory has no source to lose and
+/// never takes either branch.
 pub struct ReactiveCell<T> {
-    cache: Signal<T>,
+    cache: Signal<Option<T>>,
     writer: Writer<T>,
+    alive: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     origin: Uuid,
     commit: Option<CellCommit>,
     _keepalive: Option<Arc<dyn Send + Sync>>,
+    _owner: Option<Arc<dyn Send + Sync>>,
 }
 
 impl<T> Clone for ReactiveCell<T> {
@@ -33,9 +44,11 @@ impl<T> Clone for ReactiveCell<T> {
         Self {
             cache: self.cache.clone(),
             writer: Arc::clone(&self.writer),
+            alive: self.alive.clone(),
             origin: self.origin,
             commit: self.commit.clone(),
             _keepalive: self._keepalive.clone(),
+            _owner: self._owner.clone(),
         }
     }
 }
@@ -47,8 +60,9 @@ where
     /// `keepalive` must hold the subscription feeding `cache` unless something
     /// captured by `writer` already does.
     pub(crate) fn from_parts(
-        cache: Signal<T>,
+        cache: Signal<Option<T>>,
         writer: Writer<T>,
+        alive: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
         origin: Uuid,
         commit: Option<CellCommit>,
         keepalive: Option<Arc<dyn Send + Sync>>,
@@ -56,30 +70,58 @@ where
         Self {
             cache,
             writer,
+            alive,
             origin,
             commit,
             _keepalive: keepalive,
+            _owner: None,
         }
+    }
+
+    /// Keeps `owner` alive for as long as the cell is.
+    ///
+    /// A cell is a view, and normally something else owns what it views. Where
+    /// nothing does - a cell handed out for a bare path, whose field exists
+    /// only because the cell was asked for - the cell is the owner, and says so
+    /// here rather than by holding a strong reference it cannot explain.
+    pub(crate) fn owning(mut self, owner: Arc<dyn Send + Sync>) -> Self {
+        self._owner = Some(owner);
+        self
     }
 
     /// An in-memory cell, for reactive values that are not persisted.
     pub fn new(initial: T) -> Self {
-        let cache = Signal::new(initial);
+        let cache = Signal::new(Some(initial));
         let sink = cache.clone();
 
         Self {
             cache,
             writer: Arc::new(move |value| {
-                sink.set(value);
+                sink.set(Some(value));
                 Ok(())
             }),
+            alive: None,
             origin: Uuid::new_v4(),
             commit: None,
             _keepalive: None,
+            _owner: None,
         }
     }
 
     /// The current value, read from the cache rather than the store.
+    ///
+    /// `None` means there is nothing to read, and what can put it there depends
+    /// on how the cell was made:
+    ///
+    /// - a view - [`Field::cell`](crate::Field::cell),
+    ///   [`ReactiveMap::entry_cell`](crate::ReactiveMap::entry_cell) - reads
+    ///   `None` once the primitive it views is dropped, and an entry view reads
+    ///   `None` while its key is absent;
+    /// - an owning cell - [`Field::into_cell`](crate::Field::into_cell),
+    ///   [`ReactiveMap::into_entry_cell`](crate::ReactiveMap::into_entry_cell),
+    ///   [`Kv::cell`](crate::store::Kv::cell) - cannot lose its source, so only
+    ///   an absent entry reads `None`, and one over a field never does;
+    /// - a cell holding a value in memory is always `Some`.
     ///
     /// For a cell over a persisted value the cache is kept current by the
     /// store subscription, so this sees writes made anywhere - including from
@@ -89,12 +131,15 @@ where
     /// # use amethystate::ReactiveCell;
     /// let mode = ReactiveCell::new("dark".to_string());
     ///
-    /// assert_eq!(mode.get(), "dark");
+    /// assert_eq!(mode.get(), Some("dark".to_string()));
     /// mode.set("light".to_string()).unwrap();
-    /// assert_eq!(mode.get(), "light");
+    /// assert_eq!(mode.get(), Some("light".to_string()));
     /// ```
-    pub fn get(&self) -> T {
-        self.cache.get()
+    pub fn get(&self) -> Option<T> {
+        match &self.alive {
+            Some(alive) if !alive() => None,
+            _ => self.cache.get(),
+        }
     }
 
     /// The same writes, each returning only once the value is on disk.
@@ -116,18 +161,21 @@ where
     /// Reads the value, writes back what `f` returns, and yields the new
     /// value.
     ///
+    /// Fails with [`WriteError::SourceGone`]
+    /// when there is nothing to read - there is no value to hand `f`.
+    ///
     /// ```
     /// # use amethystate::ReactiveCell;
     /// let hits = ReactiveCell::new(0u32);
     ///
     /// assert_eq!(hits.update(|n| n + 1).unwrap(), 1);
-    /// assert_eq!(hits.get(), 1);
+    /// assert_eq!(hits.get(), Some(1));
     /// ```
     pub fn update<F>(&self, f: F) -> WriteResult<T>
     where
         F: FnOnce(T) -> T,
     {
-        let next = f(self.get());
+        let next = f(self.get().ok_or(WriteError::SourceGone)?);
         self.set(next.clone())?;
         Ok(next)
     }
@@ -138,7 +186,7 @@ where
     where
         F: FnOnce(&mut T),
     {
-        let mut value = self.get();
+        let mut value = self.get().ok_or(WriteError::SourceGone)?;
         f(&mut value);
         self.set(value)
     }
@@ -149,7 +197,7 @@ where
     #[track_caller]
     pub fn subscribe<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(&T) + Send + Sync + 'static,
+        F: Fn(&Option<T>) + Send + Sync + 'static,
     {
         self.cache.subscribe(callback)
     }
@@ -162,7 +210,7 @@ where
     #[track_caller]
     pub fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(&T, Option<Uuid>) + Send + Sync + 'static,
+        F: Fn(&Option<T>, Option<Uuid>) + Send + Sync + 'static,
     {
         self.cache.subscribe_with_source(callback)
     }
@@ -180,7 +228,7 @@ impl<T> Watchable for ReactiveCell<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    type Item = T;
+    type Item = Option<T>;
 
     fn watch_id(&self) -> Uuid {
         self.origin
@@ -188,23 +236,23 @@ where
 
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
-        F: Fn(&T, Option<Uuid>) + Send + Sync + 'static,
+        F: Fn(&Option<T>, Option<Uuid>) + Send + Sync + 'static,
     {
         self.cache.subscribe_with_source(callback)
     }
 }
 
-impl<T> amethystate_core::pipeline::Reactive<T> for ReactiveCell<T>
+impl<T> amethystate_core::pipeline::Reactive<Option<T>> for ReactiveCell<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    fn get(&self) -> T {
+    fn get(&self) -> Option<T> {
         self.get()
     }
 
     fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
     where
-        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
+        F: for<'a> Fn(&'a Option<T>, Option<Uuid>) + Send + Sync + 'static,
     {
         self.cache.subscribe_with_source(callback)
     }
@@ -323,10 +371,10 @@ mod tests {
     #[test]
     fn volatile_cell_round_trips() {
         let cell = ReactiveCell::new(7u64);
-        assert_eq!(cell.get(), 7);
+        assert_eq!(cell.get(), Some(7));
 
         cell.set(9).expect("volatile write cannot fail");
-        assert_eq!(cell.get(), 9);
+        assert_eq!(cell.get(), Some(9));
     }
 
     #[test]
@@ -338,30 +386,31 @@ mod tests {
         cell.set(200).expect("write should reach the store");
 
         assert_eq!(store.get::<u64>("ui.width").unwrap(), Some(200));
-        assert_eq!(cell.get(), 200, "cache must reflect the committed value");
+        assert_eq!(
+            cell.get(),
+            Some(200),
+            "cache must reflect the committed value"
+        );
         assert_eq!(field.get(), 200, "field and cell share one cache");
     }
 
     #[test]
-    fn cell_outlives_the_field_it_came_from() {
-        // The cache is fed by the store subscription, which the field owns. If
-        // the cell did not keep that alive, `get()` would go on answering with
-        // a value that stopped being updated - a silent lie rather than a
-        // failure. Here the writer holds the field, so dropping our handle
-        // changes nothing.
+    fn a_cell_dies_with_the_field_it_views() {
+        // A cell is a view, not an owner. Once the field is gone there is
+        // nothing to view: reads answer `None` rather than going on reporting
+        // the last value they saw, and writes say so instead of landing
+        // somewhere nobody is watching.
         let store = unique_store("outlive");
         let cell = {
             let field = stored_field(&store, "height", 10);
+            assert_eq!(field.cell().get(), Some(10));
             field.cell()
         };
 
         store.set("ui.height", &42u64).expect("external write");
 
-        assert_eq!(
-            cell.get(),
-            42,
-            "cache must still be fed after the field is dropped"
-        );
+        assert_eq!(cell.get(), None, "the field is gone, so the view is empty");
+        assert!(cell.set(1).is_err(), "and there is nowhere to write");
     }
 
     #[test]
@@ -372,7 +421,7 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let cap = seen.clone();
-        let _sub = cell.subscribe(move |v: &u64| cap.lock().unwrap().push(*v));
+        let _sub = cell.subscribe(move |v: &Option<u64>| cap.lock().unwrap().push(v.unwrap()));
 
         cell.set(2).unwrap();
         field.set(3).unwrap();
@@ -388,11 +437,12 @@ mod tests {
         // for one write. With the store as the only writer, one write is one
         // notification.
         let store = unique_store("single-fire");
-        let cell = stored_field(&store, "fires", 0).cell();
+        let field = stored_field(&store, "fires", 0);
+        let cell = field.cell();
 
         let fires = Arc::new(AtomicUsize::new(0));
         let cap = fires.clone();
-        let _sub = cell.subscribe(move |_: &u64| {
+        let _sub = cell.subscribe(move |_: &Option<u64>| {
             cap.fetch_add(1, Ordering::SeqCst);
         });
 
@@ -416,7 +466,7 @@ mod tests {
         assert!(result.is_err(), "rejected write must not report success");
         assert_eq!(
             cell.get(),
-            5,
+            Some(5),
             "cache must not hold a value the store refused"
         );
         assert_eq!(store.get::<u64>("ui.guarded").unwrap(), Some(5));
@@ -429,6 +479,6 @@ mod tests {
 
         twin.set(2).unwrap();
 
-        assert_eq!(cell.get(), 2, "clones are handles onto the same cell");
+        assert_eq!(cell.get(), Some(2), "clones are handles onto the same cell");
     }
 }

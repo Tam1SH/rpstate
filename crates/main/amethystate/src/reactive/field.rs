@@ -42,11 +42,15 @@ impl Drop for StoreSubscription {
 /// port.set(9090).unwrap();
 /// assert_eq!(port.get(), 9090);
 /// ```
-pub struct Field<TValue, M: AccessMode = ReadOnlyMode> {
+pub(crate) struct FieldInner<TValue> {
     pub(crate) core: FieldCore<TValue>,
     pub(crate) path: Arc<str>,
     pub(crate) instance_id: Uuid,
     pub(crate) store_sub: Option<Arc<StoreSubscription>>,
+}
+
+pub struct Field<TValue, M: AccessMode = ReadOnlyMode> {
+    pub(crate) inner: Arc<FieldInner<TValue>>,
     pub(crate) _mode: std::marker::PhantomData<M>,
 }
 
@@ -60,7 +64,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Field")
-            .field("path", &self.path)
+            .field("path", &self.inner.path)
             .field("value", &self.get())
             .finish_non_exhaustive()
     }
@@ -74,10 +78,7 @@ where
 impl<TValue, M: AccessMode> Clone for Field<TValue, M> {
     fn clone(&self) -> Self {
         Self {
-            core: self.core.clone(),
-            path: Arc::clone(&self.path),
-            instance_id: self.instance_id,
-            store_sub: self.store_sub.clone(),
+            inner: Arc::clone(&self.inner),
             _mode: std::marker::PhantomData,
         }
     }
@@ -134,10 +135,12 @@ where
     /// [`Field::fork`] with the instance id chosen rather than generated.
     pub fn fork_with_id(&self, new_instance_id: Uuid) -> Self {
         Self {
-            core: self.core.clone(),
-            path: Arc::clone(&self.path),
-            instance_id: new_instance_id,
-            store_sub: self.store_sub.clone(),
+            inner: Arc::new(FieldInner {
+                core: self.inner.core.clone(),
+                path: Arc::clone(&self.inner.path),
+                instance_id: new_instance_id,
+                store_sub: self.inner.store_sub.clone(),
+            }),
             _mode: std::marker::PhantomData,
         }
     }
@@ -161,7 +164,7 @@ where
     /// assert_eq!(port.get(), 8080);
     /// ```
     pub fn get(&self) -> TValue {
-        self.core.get()
+        self.inner.core.get()
     }
 
     /// The full path this field is stored under, prefix included.
@@ -187,11 +190,12 @@ where
     /// ).unwrap();
     /// assert_eq!(&*port.path(), "net.port");
     ///
-    /// // The same path addresses it through `Kv`.
-    /// assert_eq!(store.kv().get::<u16>("net.port").unwrap(), Some(8080));
+    /// // The same path addresses it through `Kv`, one segment at a time.
+    /// let net = store.kv().namespace("net").unwrap();
+    /// assert_eq!(net.get::<u16>("port").unwrap(), Some(8080));
     /// ```
     pub fn path(&self) -> Arc<str> {
-        self.path.clone()
+        self.inner.path.clone()
     }
 
     /// Calls `callback` whenever the value changes, and keeps doing so until
@@ -242,7 +246,7 @@ where
     where
         F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
     {
-        self.core.subscribe(callback)
+        self.inner.core.subscribe(callback)
     }
 
     /// Configures a subscription: filtering, provenance, and where the callback
@@ -260,14 +264,14 @@ where
     type Item = TValue;
 
     fn watch_id(&self) -> Uuid {
-        self.instance_id
+        self.inner.instance_id
     }
 
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&TValue, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.core.subscribe_with_source(callback)
+        self.inner.core.subscribe_with_source(callback)
     }
 }
 
@@ -275,29 +279,96 @@ impl<TValue> Field<TValue, WritableMode>
 where
     TValue: FieldValue,
 {
+    /// A cell that keeps the field alive, for handing the value somewhere and
+    /// letting go of the field.
+    ///
+    /// [`Field::cell`] is a view and holds the field weakly, which is the wrong
+    /// default when the cell is the only handle that survives: build a struct,
+    /// pass one of its fields to a widget, drop the struct, and a view would go
+    /// empty. This one owns what it views, so it stays readable and writable
+    /// for as long as it is held - and keeps the store open for that long too.
+    ///
+    /// ```
+    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::store::field_with_path;
+    /// # use std::sync::Arc;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let width = {
+    ///     let field = field_with_path::<u64, WritableMode>(
+    ///         &store,
+    ///         Arc::from("ui.width"),
+    ///         800,
+    ///         amethystate::uuid::Uuid::new_v4(),
+    ///     ).unwrap();
+    ///     field.into_cell()
+    /// };
+    ///
+    /// assert_eq!(width.get(), Some(800));
+    /// width.set(1024).unwrap();
+    /// assert_eq!(width.get(), Some(1024));
+    /// ```
+    pub fn into_cell(self) -> ReactiveCell<TValue> {
+        let cell = self.cell();
+        cell.owning(Arc::new(self))
+    }
+
     /// This field as a [`ReactiveCell`], with the store backend and access
     /// mode erased. Writes go through [`Field::set`], keeping this field's
     /// provenance.
+    ///
+    /// The cell is a view: it holds the field weakly, so it never keeps the
+    /// store file open, and it reads `None` once the field is dropped. Where
+    /// the cell is the only handle that survives, use [`Field::into_cell`].
     pub fn cell(&self) -> ReactiveCell<TValue> {
-        let me = self.clone();
+        let cache = amethystate_core::Signal::new(Some(self.get()));
 
-        let commit = self.store_sub.as_ref().map(|sub| {
-            let flush_store = sub.store.clone();
-            let flush_path = self.path.clone();
-            let start_store = sub.store.clone();
+        let sink = cache.clone();
+        let read = self
+            .inner
+            .core
+            .signal
+            .subscribe_with_source(move |value, source| {
+                sink.set_forwarded(Some(value.clone()), source);
+            });
+
+        let weak = Arc::downgrade(&self.inner);
+
+        let commit = self.inner.store_sub.as_ref().map(|_| {
+            let flush = weak.clone();
+            let start = weak.clone();
 
             CellCommit {
-                now: Arc::new(move || Ok(flush_store.flush_prefix(&flush_path)?)),
-                start: Arc::new(move || start_store.flush_async()),
+                now: Arc::new(move || {
+                    let inner = flush.upgrade().ok_or(FieldError::SourceGone)?;
+                    let sub = inner.store_sub.as_ref().ok_or(FieldError::SourceGone)?;
+                    Ok(sub.store.flush_prefix(&inner.path)?)
+                }),
+                start: Arc::new(move || match start.upgrade() {
+                    Some(inner) => match inner.store_sub.as_ref() {
+                        Some(sub) => sub.store.flush_async(),
+                        None => crate::store::Commit::gone(),
+                    },
+                    None => crate::store::Commit::gone(),
+                }),
             }
         });
 
+        let alive = weak.clone();
         ReactiveCell::from_parts(
-            self.core.signal.clone(),
-            Arc::new(move |value| me.set(value)),
-            self.instance_id,
+            cache,
+            Arc::new(move |value| {
+                let inner = weak.upgrade().ok_or(FieldError::SourceGone)?;
+                let field = Field::<TValue, WritableMode> {
+                    inner,
+                    _mode: std::marker::PhantomData,
+                };
+                field.set(value)
+            }),
+            Some(Arc::new(move || alive.strong_count() > 0)),
+            self.inner.instance_id,
             commit,
-            None,
+            Some(Arc::new(read)),
         )
     }
 
@@ -354,26 +425,28 @@ where
     pub fn set(&self, value: TValue) -> ReactiveFieldResult<()> {
         tracing::trace!(
             target: "amethystate",
-            path = %self.path,
-            source = crate::observability::resolve_instance_short(self.instance_id).unwrap_or("external"),
+            path = %self.inner.path,
+            source = crate::observability::resolve_instance_short(self.inner.instance_id).unwrap_or("external"),
             "field write",
         );
 
-        if let Some(sub) = &self.store_sub {
+        if let Some(sub) = &self.inner.store_sub {
             let backend = SyncBridge::new(sub.store.clone());
             amethystate_core::field_set(
                 &backend,
-                &self.core,
-                self.path.clone(),
+                &self.inner.core,
+                self.inner.path.clone(),
                 value,
-                Some(self.instance_id),
+                Some(self.inner.instance_id),
             )?;
         } else {
             let change = self
+                .inner
                 .core
-                .run_interceptors(self.path.clone(), value, Some(self.instance_id))
+                .run_interceptors(self.inner.path.clone(), value, Some(self.inner.instance_id))
                 .map_err(|_| FieldError::Intercepted)?;
-            self.core
+            self.inner
+                .core
                 .signal
                 .set_forwarded(change.new_value, change.source);
         }
@@ -437,7 +510,7 @@ where
     where
         F: Fn(Change<TValue>) -> Option<Change<TValue>> + Send + Sync + 'static,
     {
-        self.core.intercept(self.path.clone(), callback)
+        self.inner.core.intercept(self.inner.path.clone(), callback)
     }
 
     /// A field with no store behind it: reactive, but never read from or
@@ -462,7 +535,8 @@ where
     /// assert_eq!(session.get(), "alice");
     ///
     /// // The store never heard about any of it.
-    /// assert_eq!(store.kv().get::<String>("app.session").unwrap(), None);
+    /// let app = store.kv().namespace("app").unwrap();
+    /// assert_eq!(app.get::<String>("session").unwrap(), None);
     /// ```
     pub fn new_volatile(path: Arc<str>, default: TValue) -> Self {
         Self::new_volatile_with_id(path, default, Uuid::new_v4())
@@ -472,10 +546,12 @@ where
     /// generated.
     pub fn new_volatile_with_id(path: Arc<str>, default: TValue, instance_id: Uuid) -> Self {
         Self {
-            core: FieldCore::new(default),
-            path,
-            instance_id,
-            store_sub: None,
+            inner: Arc::new(FieldInner {
+                core: FieldCore::new(default),
+                path,
+                instance_id,
+                store_sub: None,
+            }),
             _mode: std::marker::PhantomData,
         }
     }
@@ -483,9 +559,12 @@ where
 
 impl<TValue, M: AccessMode> PartialEq for Field<TValue, M> {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.instance_id == other.instance_id
-            && Arc::ptr_eq(&self.core.signal.value, &other.core.signal.value)
+        self.inner.path == other.inner.path
+            && self.inner.instance_id == other.inner.instance_id
+            && Arc::ptr_eq(
+                &self.inner.core.signal.value,
+                &other.inner.core.signal.value,
+            )
     }
 }
 
@@ -504,7 +583,7 @@ where
     where
         F: for<'a> Fn(&'a TValue, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.core.subscribe_with_source(callback)
+        self.inner.core.subscribe_with_source(callback)
     }
 
     fn subscribe<F>(&self, callback: F) -> SignalSubscription
@@ -662,14 +741,14 @@ where
     }
 
     fn commit(&self) -> ReactiveFieldResult<()> {
-        if let Some(sub) = &self.0.store_sub {
-            sub.store.flush_prefix(&self.0.path)?;
+        if let Some(sub) = &self.0.inner.store_sub {
+            sub.store.flush_prefix(&self.0.inner.path)?;
         }
         Ok(())
     }
 
     async fn commit_async(&self) -> ReactiveFieldResult<()> {
-        if let Some(sub) = &self.0.store_sub {
+        if let Some(sub) = &self.0.inner.store_sub {
             sub.store.flush_async().await?;
         }
         Ok(())
@@ -709,7 +788,7 @@ mod tests {
             *cap.lock().unwrap() = *v;
         });
 
-        field.core.signal.set(22);
+        field.inner.core.signal.set(22);
         assert_eq!(*callback_val.lock().unwrap(), 22);
     }
 
@@ -730,13 +809,15 @@ mod tests {
             );
 
             let field: Field<String, WritableMode> = Field {
-                core,
-                path: Arc::from("test.field"),
-                store_sub: Some(Arc::new(StoreSubscription {
-                    store: store.clone(),
-                    id: sub_id,
-                })),
-                instance_id: Default::default(),
+                inner: Arc::new(FieldInner {
+                    core,
+                    path: Arc::from("test.field"),
+                    store_sub: Some(Arc::new(StoreSubscription {
+                        store: store.clone(),
+                        id: sub_id,
+                    })),
+                    instance_id: Default::default(),
+                }),
                 _mode: Default::default(),
             };
 
@@ -765,7 +846,7 @@ mod tests {
         let cell = field.cell();
         field.set(7).unwrap();
 
-        assert_eq!(cell.get(), 7);
+        assert_eq!(cell.get(), Some(7));
     }
 
     #[test]
@@ -836,7 +917,11 @@ mod tests {
     fn test_field_depth_guard() {
         let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test"), 1);
 
-        field.core.intercept_depth.store(100, Ordering::SeqCst);
+        field
+            .inner
+            .core
+            .intercept_depth
+            .store(100, Ordering::SeqCst);
 
         let _disp = field.intercept(|mut c| {
             c.new_value = 999;
@@ -897,7 +982,7 @@ mod tests {
             "Updates from fork should trigger"
         );
 
-        field.core.signal.set(3);
+        field.inner.core.signal.set(3);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,

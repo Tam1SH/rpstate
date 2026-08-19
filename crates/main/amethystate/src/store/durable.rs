@@ -62,6 +62,14 @@ impl Commit {
         let start = signal.generation();
         Self { signal, start }
     }
+
+    /// A commit for a store that is no longer there: already finished, and
+    /// finished as a failure, so an awaiting caller is told rather than hung.
+    pub(crate) fn gone() -> Self {
+        let signal = Arc::new(CommitSignal::default());
+        signal.finished(false);
+        Self { signal, start: 0 }
+    }
 }
 
 impl Future for Commit {

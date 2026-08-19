@@ -156,7 +156,7 @@ mod tests {
         let cap = Rc::clone(&seen);
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |v: &u64| cap.borrow_mut().push(*v));
+            .register(move |v: &Option<u64>| cap.borrow_mut().push(v.unwrap()));
 
         cell.set(2).unwrap();
         scope.drain();
@@ -173,7 +173,7 @@ mod tests {
         let cap = Rc::clone(&seen);
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |v: &u64| cap.borrow_mut().push(*v));
+            .register(move |v: &Option<u64>| cap.borrow_mut().push(v.unwrap()));
 
         cell.set(2).unwrap();
         assert!(seen.borrow().is_empty());
@@ -191,7 +191,7 @@ mod tests {
         let cap = Rc::clone(&seen);
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |v: &u64| cap.borrow_mut().push(*v));
+            .register(move |v: &Option<u64>| cap.borrow_mut().push(v.unwrap()));
 
         for n in 1..=5 {
             cell.set(n).unwrap();
@@ -210,7 +210,7 @@ mod tests {
         let cap = Rc::clone(&calls);
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |_: &u64| *cap.borrow_mut() += 1);
+            .register(move |_: &Option<u64>| *cap.borrow_mut() += 1);
 
         scope.drain();
         scope.drain();
@@ -229,9 +229,9 @@ mod tests {
 
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |v: &u64| {
+            .register(move |v: &Option<u64>| {
                 *cap.borrow_mut() += 1;
-                let _ = writer.set(v + 1);
+                let _ = writer.set(v.unwrap_or(0) + 1);
             });
 
         cell.set(1).unwrap();
@@ -273,7 +273,7 @@ mod tests {
         let cap = Rc::clone(&seen);
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |v: &u64| cap.borrow_mut().push(*v));
+            .register(move |v: &Option<u64>| cap.borrow_mut().push(v.unwrap()));
 
         cell.set(7).unwrap();
 
@@ -289,7 +289,7 @@ mod tests {
         let mut scope = LocalScope::new();
         cell.subscription_with()
             .local(&mut scope)
-            .register(|_: &u64| {});
+            .register(|_: &Option<u64>| {});
 
         let mut fut = scope.changed();
         let waker = Waker::noop();
@@ -311,7 +311,7 @@ mod tests {
         let cap = Rc::clone(&seen);
         cell.subscription_with()
             .local(&mut scope)
-            .register(move |v: &u64| cap.borrow_mut().push(*v));
+            .register(move |v: &Option<u64>| cap.borrow_mut().push(v.unwrap()));
 
         let writer = cell.clone();
         let handle = std::thread::spawn(move || {
@@ -336,7 +336,7 @@ mod tests {
             let cap = Rc::clone(&seen);
             cell.subscription_with()
                 .local(&mut scope)
-                .register(move |v: &u64| cap.borrow_mut().push(*v));
+                .register(move |v: &Option<u64>| cap.borrow_mut().push(v.unwrap()));
             assert_eq!(scope.len(), 1);
         }
 

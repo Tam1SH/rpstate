@@ -198,9 +198,10 @@ mod on_disk {
             .unwrap();
         let state = Mapped::new_with(&store).unwrap();
 
+        state.limits().insert("cpu".into(), &0).unwrap();
         state
             .limits()
-            .entry_cell("cpu".into(), 0)
+            .entry_cell("cpu".into())
             .durable()
             .set(55)
             .unwrap();
@@ -221,7 +222,7 @@ fn an_in_memory_cell_has_nothing_to_commit() {
 
     assert_eq!(
         cell.get(),
-        3,
+        Some(3),
         "the writes still land, there is just no disk"
     );
 }

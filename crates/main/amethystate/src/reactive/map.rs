@@ -3,19 +3,33 @@ use crate::store::Durable;
 use crate::store::StoreBackend;
 use crate::store::sync_backend::SyncBridge;
 use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
-use amethystate_core::backend::AmeBackendSync;
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use std::marker::PhantomData;
 
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
-    pub core: ReactiveMapCore<K, V>,
-    pub path: Arc<str>,
-    pub instance_id: Uuid,
-    pub store: Store,
+pub(crate) struct MapInner<K, V> {
+    pub(crate) core: ReactiveMapCore<K, V>,
+    pub(crate) path: Arc<str>,
+    pub(crate) instance_id: Uuid,
+    pub(crate) store: Store,
     pub(crate) store_sub: Arc<StoreSubscription>,
+}
+
+/// A keyed collection in the store, with subscriptions per key.
+///
+/// The map is resident: it holds every entry in memory, built by one scan when
+/// the map is opened and kept current by the store subscription afterwards.
+/// Reads are answered from there, so they never touch the disk and never
+/// decode - and they see writes that are still buffered as well as those
+/// already committed, including edits another process made to the file.
+///
+/// That residency is the trade this type makes, and it sets the size it is for:
+/// thousands of entries, not millions. A map that will not fit in memory wants
+/// the database directly.
+pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
+    pub(crate) inner: Arc<MapInner<K, V>>,
     pub(crate) _mode: PhantomData<M>,
 }
 
@@ -32,11 +46,7 @@ pub type WritableReactiveMap<TValue> = Field<TValue, WritableMode>;
 impl<K, V, M: AccessMode> Clone for ReactiveMap<K, V, M> {
     fn clone(&self) -> Self {
         Self {
-            core: self.core.clone(),
-            path: self.path.clone(),
-            instance_id: self.instance_id,
-            store: self.store.clone(),
-            store_sub: self.store_sub.clone(),
+            inner: Arc::clone(&self.inner),
             _mode: PhantomData,
         }
     }
@@ -50,15 +60,11 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("ReactiveMap");
-        d.field("path", &self.path);
+        d.field("path", &self.inner.path);
 
-        if let Ok(cache) = self.core.cache.try_lock() {
-            d.field("cache_entries", &*cache);
-        } else {
-            d.field("cache_entries", &"<locked>");
-        }
+        d.field("cache_entries", &self.inner.core.cache.len());
 
-        d.field("core", &self.core).finish()
+        d.field("core", &self.inner.core).finish()
     }
 }
 
@@ -77,23 +83,36 @@ where
         self.fork_with_id(Uuid::new_v4())
     }
 
+    /// The id writes through this handle carry, so a subscriber can tell them
+    /// from someone else's.
+    pub fn instance_id(&self) -> Uuid {
+        self.inner.instance_id
+    }
+
+    /// Where the map lives in the store.
+    pub fn path(&self) -> Arc<str> {
+        self.inner.path.clone()
+    }
+
     /// [`ReactiveMap::fork`] with the instance id chosen rather than
     /// generated.
     pub fn fork_with_id(&self, new_instance_id: Uuid) -> Self {
         Self {
-            core: self.core.clone(),
-            path: self.path.clone(),
-            instance_id: new_instance_id,
-            store: self.store.clone(),
-            store_sub: self.store_sub.clone(),
+            inner: Arc::new(MapInner {
+                core: self.inner.core.clone(),
+                path: self.inner.path.clone(),
+                instance_id: new_instance_id,
+                store: self.inner.store.clone(),
+                store_sub: self.inner.store_sub.clone(),
+            }),
             _mode: PhantomData,
         }
     }
 
     /// The value under `key`, or `None` when there is none.
     ///
-    /// Unlike a field, this reads the store rather than a signal, so it sees
-    /// writes that are still buffered as well as those already on disk.
+    /// Read from the map's projection - see the type docs - so it costs a
+    /// lookup and no disk.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -106,11 +125,10 @@ where
     /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
     /// ```
     pub fn get(&self, key: &K) -> ReactiveMapResult<Option<V>> {
-        let backend = SyncBridge::new(self.store.clone());
-        Ok(amethystate_core::map_get(&backend, &self.path, key)?)
+        Ok(self.inner.core.cache.get(key).map(|v| v.clone()))
     }
 
-    /// Whether `key` has a value, without decoding it.
+    /// Whether `key` has a value, without cloning it.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -123,39 +141,35 @@ where
     /// assert!(widths.contains_key(&"cpu".to_string()).unwrap());
     /// ```
     pub fn contains_key(&self, key: &K) -> ReactiveMapResult<bool> {
-        let backend = SyncBridge::new(self.store.clone());
-        Ok(amethystate_core::map_contains_key::<_, _, V>(
-            &backend, &self.path, key,
-        )?)
+        Ok(self.inner.core.cache.contains_key(key))
     }
 
     /// Every entry, sorted by key.
     ///
-    /// The order is the store's, which sorts by the key's string form rather
-    /// than by the key type's own `Ord` - see [`ReactiveMap::keys`], where the
-    /// difference is worked through.
+    /// Sorted by the key's string form rather than by the key type's own `Ord`
+    /// - see [`ReactiveMap::keys`], where the difference is worked through.
     ///
-    /// Decoding is lazy - `.find()` or `.take(n)` deserialise only what they
-    /// reach - but the scan behind it is not: every key and raw value is read
-    /// before the iterator is handed over. On a large map `take(1)` costs
-    /// about what consuming all of it does.
+    /// Read from the map's projection, so nothing is decoded and the disk is
+    /// not touched, but the whole map is cloned and sorted before the iterator
+    /// is handed over.
     pub fn entries(&self) -> ReactiveMapResult<impl Iterator<Item = (K, V)>> {
-        let backend = SyncBridge::new(self.store.clone());
-        let prefix = format!("{}.", self.path);
-        let scanned = backend.scan_prefix(&prefix)?;
-
-        Ok(scanned.into_iter().filter_map(move |(full_path, raw)| {
-            let key = K::from_str(full_path.strip_prefix(&prefix)?).ok()?;
-            let value = backend.decode::<V>(&raw).ok()?;
-            Some((key, value))
-        }))
+        let mut entries: Vec<(K, V)> = self
+            .inner
+            .core
+            .cache
+            .iter()
+            .map(|e| (e.key().clone(), e.value().clone()))
+            .collect();
+        entries.sort_by_cached_key(|(k, _)| k.to_string());
+        Ok(entries.into_iter())
     }
 
     /// Every key, sorted. Values are neither read nor deserialized.
     ///
-    /// The order is the store's, which sorts by the key's string form, not by
-    /// the key type's own `Ord`. For `String` keys the two agree; for numbers
-    /// they do not - `"10"` sorts before `"9"`.
+    /// Sorted by the key's string form, not by the key type's own `Ord` - the
+    /// store orders keys that way, and the two agree so that a reopen does not
+    /// reshuffle anything. For `String` keys the difference does not show; for
+    /// numbers it does - `"10"` sorts before `"9"`.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -178,20 +192,21 @@ where
     /// assert_eq!(ports.keys().unwrap(), [10, 100, 9]);
     /// ```
     pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
-        let backend = SyncBridge::new(self.store.clone());
-        let prefix = format!("{}.", self.path);
-
-        Ok(backend
-            .scan_keys(&prefix)?
-            .into_iter()
-            .filter_map(|full_path| K::from_str(full_path.strip_prefix(&prefix)?).ok())
-            .collect())
+        let mut keys: Vec<K> = self
+            .inner
+            .core
+            .cache
+            .iter()
+            .map(|e| e.key().clone())
+            .collect();
+        keys.sort_by_cached_key(|k| k.to_string());
+        Ok(keys)
     }
 
     /// How many entries the map holds.
     ///
-    /// Costs a scan proportional to the number of keys, and counts buffered
-    /// writes that have not reached disk yet.
+    /// Answered from the map's projection, so it is a counter read rather than
+    /// a scan, and it counts buffered writes that have not reached disk yet.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -209,14 +224,12 @@ where
     /// assert_eq!(widths.len().unwrap(), 2);
     /// ```
     pub fn len(&self) -> ReactiveMapResult<usize> {
-        let backend = SyncBridge::new(self.store.clone());
-        Ok(amethystate_core::map_len(&backend, &self.path)?)
+        Ok(self.inner.core.cache.len())
     }
 
-    /// Whether the map holds nothing. Carries the same cost as
-    /// [`ReactiveMap::len`], for the same reason.
+    /// Whether the map holds nothing.
     pub fn is_empty(&self) -> ReactiveMapResult<bool> {
-        self.len().map(|l| l == 0)
+        Ok(self.inner.core.cache.is_empty())
     }
 
     /// Calls `callback` on every change to any key.
@@ -268,7 +281,7 @@ where
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        self.core.subscribe_any(callback)
+        self.inner.core.subscribe_any(callback)
     }
 
     /// Calls `callback` only for changes to one key.
@@ -304,7 +317,7 @@ where
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        self.core.subscribe_key(key, callback)
+        self.inner.core.subscribe_key(key, callback)
     }
 
     /// Configures a subscription. See [`Watch`].
@@ -341,7 +354,7 @@ where
     }
 
     fn watch_id(&self) -> Uuid {
-        self.map.instance_id
+        self.map.inner.instance_id
     }
 
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
@@ -349,6 +362,7 @@ where
         F: Fn(&MapChange<K, V>, Option<Uuid>) + Send + Sync + 'static,
     {
         self.map
+            .inner
             .core
             .subscribe_key(self.key.clone(), move |change| {
                 callback(change, change.source())
@@ -369,14 +383,15 @@ where
     }
 
     fn watch_id(&self) -> Uuid {
-        self.instance_id
+        self.inner.instance_id
     }
 
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&MapChange<K, V>, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.core
+        self.inner
+            .core
             .subscribe_any(move |change| callback(change, change.source()))
     }
 }
@@ -450,14 +465,14 @@ where
     /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(200));
     /// ```
     pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        let backend = SyncBridge::new(self.store.clone());
+        let backend = SyncBridge::new(self.inner.store.clone());
         Ok(amethystate_core::map_update(
             &backend,
-            &self.core,
-            self.path.clone(),
+            &self.inner.core,
+            self.inner.path.clone(),
             key,
             value,
-            Some(self.instance_id),
+            Some(self.inner.instance_id),
         )?)
     }
 
@@ -483,14 +498,14 @@ where
     /// assert_eq!(widths.len().unwrap(), 1, "replacing is not adding");
     /// ```
     pub fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
-        let backend = SyncBridge::new(self.store.clone());
+        let backend = SyncBridge::new(self.inner.store.clone());
         Ok(amethystate_core::map_insert(
             &backend,
-            &self.core,
-            self.path.clone(),
+            &self.inner.core,
+            self.inner.path.clone(),
             key,
             value,
-            Some(self.instance_id),
+            Some(self.inner.instance_id),
         )?)
     }
 
@@ -508,13 +523,13 @@ where
     /// assert_eq!(widths.remove("cpu".to_string()).unwrap(), None);
     /// ```
     pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
-        let backend = SyncBridge::new(self.store.clone());
+        let backend = SyncBridge::new(self.inner.store.clone());
         Ok(amethystate_core::map_remove(
             &backend,
-            &self.core,
-            self.path.clone(),
+            &self.inner.core,
+            self.inner.path.clone(),
             key,
-            Some(self.instance_id),
+            Some(self.inner.instance_id),
         )?)
     }
 
@@ -534,12 +549,12 @@ where
     /// assert!(widths.is_empty().unwrap());
     /// ```
     pub fn clear(&self) -> ReactiveMapResult<()> {
-        let backend = SyncBridge::new(self.store.clone());
+        let backend = SyncBridge::new(self.inner.store.clone());
         Ok(amethystate_core::map_clear(
             &backend,
-            &self.core,
-            self.path.clone(),
-            Some(self.instance_id),
+            &self.inner.core,
+            self.inner.path.clone(),
+            Some(self.inner.instance_id),
         )?)
     }
 
@@ -578,7 +593,7 @@ where
     where
         F: Fn(MapChange<K, V>) -> Option<MapChange<K, V>> + Send + Sync + 'static,
     {
-        self.core.intercept(self.path.clone(), callback)
+        self.inner.core.intercept(self.inner.path.clone(), callback)
     }
 
     /// [`ReactiveMap::intercept`] narrowed to one key.
@@ -589,15 +604,15 @@ where
     where
         F: Fn(MapChange<K, V>) -> Option<MapChange<K, V>> + Send + Sync + 'static,
     {
-        self.core.intercept_key(key, callback)
+        self.inner.core.intercept_key(key, callback)
     }
 }
 
 impl<K, V, M: AccessMode> PartialEq for ReactiveMap<K, V, M> {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.instance_id == other.instance_id
-            && Arc::ptr_eq(&self.core.next_id, &other.core.next_id)
+        self.inner.path == other.inner.path
+            && self.inner.instance_id == other.inner.instance_id
+            && Arc::ptr_eq(&self.inner.core.next_id, &other.inner.core.next_id)
     }
 }
 
@@ -732,12 +747,12 @@ where
     }
 
     fn commit(&self) -> ReactiveMapResult<()> {
-        self.0.store.flush_prefix(&self.0.path)?;
+        self.0.inner.store.flush_prefix(&self.0.inner.path)?;
         Ok(())
     }
 
     async fn commit_async(&self) -> ReactiveMapResult<()> {
-        self.0.store.flush_async().await?;
+        self.0.inner.store.flush_async().await?;
         Ok(())
     }
 }

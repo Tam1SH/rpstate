@@ -1,5 +1,6 @@
 use crate::reactive::cell::CellCommit;
 use crate::reactive::cell::ReactiveCell;
+use crate::reactive::error::WriteError;
 use crate::store::StoreBackend;
 use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue, WritableMode};
 use amethystate_core::{MapChange, Signal};
@@ -10,22 +11,37 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    /// A live cell over one map entry. `default` stands in while the key is
-    /// absent, and again if it is later removed.
+    /// An entry cell that keeps the map alive, for handing one entry somewhere
+    /// and letting go of the map.
     ///
-    /// The cell writes through to the map, so a change made either way is
-    /// visible from the other. Removal does not invalidate it - the value
-    /// falls back to `default` and the cell stays usable.
+    /// [`ReactiveMap::entry_cell`] is a view and holds the map weakly, which is
+    /// the wrong default when the cell is the only handle that survives.
+    pub fn into_entry_cell(self, key: K) -> ReactiveCell<V> {
+        let cell = self.entry_cell(key);
+        cell.owning(Arc::new(self))
+    }
+
+    /// A live cell over one map entry.
+    ///
+    /// The cell is a view, and it keeps only a weak reference to the map: once
+    /// the map is dropped every write fails and [`get`](ReactiveCell::get)
+    /// reads `None`, rather than the cell keeping the store file open. Where
+    /// the cell is the only handle that survives, use
+    /// [`ReactiveMap::into_entry_cell`].
+    ///
+    /// An absent key reads `None`, and writing to one fails - creating the
+    /// entry is [`ReactiveMap::insert`]'s job, not a side effect of writing
+    /// through a view of something that is not there.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
-    /// let cpu = widths.entry_cell("cpu".to_string(), 100);
+    /// widths.insert("cpu".to_string(), &100).unwrap();
+    /// let cpu = widths.entry_cell("cpu".to_string());
     ///
-    /// // The key is absent, so the cell reads the default.
-    /// assert_eq!(cpu.get(), 100);
+    /// assert_eq!(cpu.get(), Some(100));
     ///
     /// // Writing through the cell writes the map entry.
     /// cpu.set(120).unwrap();
@@ -33,21 +49,15 @@ where
     ///
     /// // And a write to the map reaches the cell.
     /// widths.update("cpu".into(), &200).unwrap();
-    /// assert_eq!(cpu.get(), 200);
+    /// assert_eq!(cpu.get(), Some(200));
     ///
-    /// // Removing the key puts the default back, without breaking the cell.
+    /// // Removing the key empties the cell, and it refuses to put it back.
     /// widths.remove("cpu".to_string()).unwrap();
-    /// assert_eq!(cpu.get(), 100);
-    /// cpu.set(80).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(80));
+    /// assert_eq!(cpu.get(), None);
+    /// assert!(cpu.set(80).is_err());
     /// ```
-    pub fn entry_cell(&self, key: K, default: V) -> ReactiveCell<V> {
-        let initial = self
-            .get(&key)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| default.clone());
-        let cache = Signal::new(initial);
+    pub fn entry_cell(&self, key: K) -> ReactiveCell<V> {
+        let cache = Signal::new(self.get(&key).ok().flatten());
 
         let sink = cache.clone();
         let read = self.subscribe_key(key.clone(), move |change| {
@@ -57,29 +67,41 @@ where
                     new_value: value,
                     source,
                     ..
-                } => (value.clone(), *source),
-                MapChange::Remove { source, .. } | MapChange::Clear { source } => {
-                    (default.clone(), *source)
-                }
+                } => (Some(value.clone()), *source),
+                MapChange::Remove { source, .. } | MapChange::Clear { source } => (None, *source),
             };
             sink.set_forwarded(next, source);
         });
 
-        let origin = self.instance_id;
-        let map = self.clone();
+        let origin = self.inner.instance_id;
+        let weak = Arc::downgrade(&self.inner);
         let write_key = key;
 
-        let flush_store = self.store.clone();
-        let flush_path = self.path.clone();
-        let start_store = self.store.clone();
+        let flush = weak.clone();
+        let start = weak.clone();
         let commit = CellCommit {
-            now: Arc::new(move || Ok(flush_store.flush_prefix(&flush_path)?)),
-            start: Arc::new(move || start_store.flush_async()),
+            now: Arc::new(move || {
+                let inner = flush.upgrade().ok_or(WriteError::SourceGone)?;
+                Ok(inner.store.flush_prefix(&inner.path)?)
+            }),
+            start: Arc::new(move || match start.upgrade() {
+                Some(inner) => inner.store.flush_async(),
+                None => crate::store::Commit::gone(),
+            }),
         };
 
+        let alive = weak.clone();
         ReactiveCell::from_parts(
             cache,
-            Arc::new(move |value: V| Ok(map.insert(write_key.clone(), &value)?)),
+            Arc::new(move |value: V| {
+                let inner = weak.upgrade().ok_or(WriteError::SourceGone)?;
+                let map = ReactiveMap::<K, V, WritableMode> {
+                    inner,
+                    _mode: std::marker::PhantomData,
+                };
+                Ok(map.update(write_key.clone(), &value)?)
+            }),
+            Some(Arc::new(move || alive.strong_count() > 0)),
             origin,
             Some(commit),
             Some(Arc::new(read)),

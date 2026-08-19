@@ -17,6 +17,16 @@ pub enum WriteError {
     #[error("Key not found: {0}")]
     KeyNotFound(String),
 
+    /// The primitive a cell views has been dropped.
+    #[error(
+        "the value this cell views is gone: the field or map it came from was dropped (`into_cell` gives a cell that keeps it alive)"
+    )]
+    SourceGone,
+
+    /// A name that would silently become two levels.
+    #[error("`{name}` is a name, not a path: use `namespace(..)` for nesting")]
+    SeparatorInName { name: String },
+
     /// A `Kv` write aimed at a path a declared struct owns.
     #[error("path `{path}` belongs to the schema at `{prefix}`")]
     SchemaOwned { path: String, prefix: String },

@@ -72,13 +72,15 @@ where
     );
 
     Ok(Field {
-        core: FieldCore::new_with_signal(signal),
-        path,
-        instance_id,
-        store_sub: Some(Arc::new(StoreSubscription {
-            store: store.clone(),
-            id,
-        })),
+        inner: Arc::new(crate::reactive::field::FieldInner {
+            core: FieldCore::new_with_signal(signal),
+            path,
+            instance_id,
+            store_sub: Some(Arc::new(StoreSubscription {
+                store: store.clone(),
+                id,
+            })),
+        }),
         _mode: std::marker::PhantomData,
     })
 }
@@ -156,9 +158,8 @@ where
     store.mark_initialized(&path)?;
 
     let core = ReactiveMapCore::new();
-    {
-        let mut keys = core.cache.lock().unwrap();
-        *keys = known_cache;
+    for (k, v) in known_cache {
+        core.cache.insert(k, v);
     }
 
     let core_clone = core.clone();
@@ -170,7 +171,7 @@ where
         SubscriptionKind::Prefix(path_for_sub),
         Arc::new(move |event| {
             if event.op == StoreOp::DeletePrefix && *event.path == *prefix_for_strip {
-                core_clone.cache.lock().unwrap().clear();
+                core_clone.cache.clear();
                 core_clone.notify(&MapChange::Clear {
                     source: event.source,
                 });
@@ -192,7 +193,7 @@ where
                     .and_then(|b| store_clone.decode::<V>(b).ok());
 
                 let change = {
-                    let mut keys = core_clone.cache.lock().unwrap();
+                    let keys = &core_clone.cache;
 
                     match event.op {
                         StoreOp::Set => {
@@ -233,13 +234,15 @@ where
     );
 
     Ok(ReactiveMap {
-        core,
-        path,
-        instance_id,
-        store: store.clone(),
-        store_sub: Arc::new(StoreSubscription {
+        inner: Arc::new(crate::reactive::map::MapInner {
+            core,
+            path,
+            instance_id,
             store: store.clone(),
-            id,
+            store_sub: Arc::new(StoreSubscription {
+                store: store.clone(),
+                id,
+            }),
         }),
         _mode: std::marker::PhantomData,
     })

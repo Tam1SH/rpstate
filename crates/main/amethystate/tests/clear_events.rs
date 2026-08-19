@@ -102,5 +102,5 @@ fn clear_carries_the_provenance_of_the_handle_that_issued_it() {
 
     items.clear().unwrap();
 
-    assert_eq!(*seen.lock().unwrap(), vec![Some(items.instance_id)]);
+    assert_eq!(*seen.lock().unwrap(), vec![Some(items.instance_id())]);
 }
