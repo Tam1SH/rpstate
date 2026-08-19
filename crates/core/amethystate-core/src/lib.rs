@@ -5,6 +5,7 @@ pub mod change;
 
 #[cfg(feature = "async")]
 pub mod async_impl;
+pub mod path;
 pub mod primitives;
 pub mod scheme;
 mod state;

@@ -31,3 +31,6 @@ uuid = { workspace = true, features = [ "v4", "js", "serde"] }
 [features]
 test-utils = []
 async = ["dep:futures", "dep:serde_json", "dep:async-trait"]
+
+[dev-dependencies]
+proptest.workspace = true
