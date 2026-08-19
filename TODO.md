@@ -381,6 +381,89 @@ Scope, since it decides the memory question: millions of rows and blobs are not
 this library's business - reach for the database directly there. Within the size
 it does target, holding the map resident is the right trade.
 
+## Two type hashes, both weak, and the weaker one feeds the gate
+
+There are two computations and confusing them sends a fix to the wrong file.
+
+`schema_hash` in `migration/types.rs` folds each field with
+`h ^= fnv1a(name) ^ type_hash; h = h.wrapping_mul(..)`. The multiply makes it
+order-sensitive, so swapping two fields' types *is* caught here.
+
+`gen_recursive_type_hash` in `amethystate-macros/src/hash.rs` is a bare
+`0 ^ fnv1a(name) ^ H(ty) ^ ..` with no seed and no mixing. It emits `TYPE_HASH`
+for every derived type and every generated `_Data` struct - and it reaches the
+migration gate through `FieldDescriptor::type_hash`, which is an input to
+`schema_hash`. So the pure XOR is not a side channel; it is laundered into the
+decision that runs migrations.
+
+Reproduced in `tests/type_identity.rs`: 22 `const _: () = assert!(..)`, so the
+build fails the moment any of them stops holding. Nothing runs at test time
+because nothing needs to.
+
+**The generic impls cancel with themselves.** Three lines in `types.rs` settle
+it: `Vec<T>` is `fnv1a("Vec") ^ T`, `Option<T>` likewise, `HashMap<K, V>` is
+`fnv1a("HashMap") ^ K ^ V`. Therefore
+
+| | equals |
+| --- | --- |
+| `Option<Option<u32>>` | `u32` |
+| `Vec<Vec<u32>>` | `u32` |
+| `Vec<Option<u32>>` | `Option<Vec<u32>>` |
+| `HashMap<u32, u64>` | `HashMap<u64, u32>` |
+| `HashMap<T, T>` for every `T` | `fnv1a("HashMap")` |
+
+The map row reaches the gate: a `ReactiveMap<u32, u64>` field changed to
+`ReactiveMap<u64, u32>` leaves `SCHEMA_HASH` identical. Keys are stored as path
+text and parsed with `FromStr`, values decoded by the codec, so every entry is
+then read with the two decoders exchanged. No step runs and no drift is
+reported.
+
+**Zero is both a value and the sentinel for "unknown".** `component_needs_work`
+and `migrate_prefix` both guard on `target_hash != 0`, and a schema hashing to
+exactly zero is constructible. Such a prefix leaves schema checking for the life
+of the application: no drift is ever detected whatever its fields become.
+Separately, five unrelated shapes all hash to zero today - an empty struct, a
+unit struct, a tuple struct, an enum, and a union, which the derive accepts
+rather than refusing.
+
+**A name and a type cancel inside one field.** `fnv1a(name) ^ type_hash` with
+nothing between them, so a brute force finds pairs: `{volume_level: f64}` and
+`{span_max_len: bool}` - two structs with no field in common - share a
+`SCHEMA_HASH`. Likewise adding two fields can be free.
+
+**A nested struct's swap defeats the multiply.** A nested field contributes
+`0xDEADBEEF ^ Inner_Data::TYPE_HASH`, and `TYPE_HASH` does not move when the
+inner struct's field types are swapped. A nested struct has no prefix of its
+own, so the outer hash is the only gate its data has.
+
+**Two different numbers are both called the schema hash and both are written to
+the same stored field.** `SchemaEntry::schema_hash` is `_Data::TYPE_HASH`;
+`MigrationStepEntry::schema_hash` is `AmeStateFields::SCHEMA_HASH`; they are
+never equal. A migrating run writes the second into `SchemaSnapshot`, and
+`ensure_snapshots` immediately overwrites it with the first. Whatever ends up
+stored is not the number the gate compares against, so the field cannot be
+trusted or reused.
+
+**Also missing, found in passing.** No `AmeType` for `char`, `()`, `Box<T>`,
+`Arc<T>`, `BTreeMap`, `HashSet`, arrays or tuples - `Box` in particular is how a
+recursive type is written and is simply unusable. Generics are unsupported: the
+derive emits `impl AmeType for #name` without `split_for_impl()`. A type
+recursive through `Vec` fails const evaluation with E0391 and needs a way to
+opt a field out of expansion.
+
+Checked and clean: `cfg!(feature = "tauri")` reads the right crate's features,
+since the facade forwards the feature to the macro crate.
+
+**Direction.** Widening the hash does not fix any of this - every collision
+above is structural, not a birthday collision. Two shapes are worth considering:
+fold properly (seed, then per field absorb ordinal, name and type, with mixing
+between) and reserve zero; or stop hashing at the gate and compare the stored
+schema against the declared one, which `SchemaSnapshot` and `calculate_drift`
+already have most of the machinery for. The second inverts the residual failure
+from a missed migration to a spurious diff, which is the right direction when a
+missed migration silently misreads saved settings and a spurious diff costs one
+nag. It is also the option that wants the format version above.
+
 ## The last write of a store's life can fail without a trace
 
 Every backend family flushes its buffer from `Drop` - [`redb`](crates/main/amethystate/src/store/backend/redb/mod.rs),
