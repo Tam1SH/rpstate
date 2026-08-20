@@ -2,7 +2,7 @@ use crate::AmeBackendSync;
 use crate::path::StorePath;
 use crate::primitives::error::WriteError;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
-use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
+use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore};
 use error_stack::{Report, ResultExt};
 use std::borrow::Borrow;
@@ -12,20 +12,13 @@ use std::fmt::Display;
 use std::str::FromStr;
 use uuid::Uuid;
 
-fn entry_path<K: Display>(path: &StorePath, key: &K) -> ReactiveMapResult<StorePath> {
-    path.try_push(key.to_string())
-        .change_context(WriteError::Path)
-        .attach_with(|| format!("map: {path}"))
-        .attach_with(|| format!("key: {key}"))
-}
-
 pub fn map_get<B, K, V>(backend: &B, path: &StorePath, key: &K) -> ReactiveMapResult<Option<V>>
 where
     B: AmeBackendSync,
     K: Display,
     V: DeserializeOwned,
 {
-    let entry = entry_path(path, key)?;
+    let entry = path.entry(key)?;
 
     backend
         .get(&entry)
@@ -104,7 +97,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let full_path = entry_path(&path, &key)?;
+    let full_path = path.entry(&key)?;
     let old_value = match read_entry::<B, V>(backend, &full_path)? {
         Some(old_value) => old_value,
         None => {
@@ -138,7 +131,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let full_path = entry_path(&path, &key)?;
+    let full_path = path.entry(&key)?;
     let old_value = read_entry::<B, V>(backend, &full_path)?;
     let change = if let Some(old_value) = old_value {
         MapChange::Update {
@@ -175,7 +168,7 @@ where
         return Ok(None);
     }
 
-    let full_path = entry_path(&path, &key)?;
+    let full_path = path.entry(&key)?;
     let old_value = read_entry::<B, V>(backend, &full_path)?;
     if let Some(old_value) = old_value {
         let change = MapChange::Remove {
@@ -227,15 +220,20 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let context_path = match change.key() {
-        Some(key) => entry_path(&path, key)?,
-        None => path.clone(),
+    let subject = match change.key() {
+        Some(key) => Some(path.entry(key)?),
+        None => None,
     };
+    let context_path = subject.clone().unwrap_or_else(|| path.clone());
 
     let processed = core
         .run_interceptors(context_path, change)
-        .map_err(|_| Report::new(ReactiveMapError::Intercepted))
-        .attach_with(|| format!("map: {path}"))?;
+        .map_err(|why| Report::new(ReactiveMapError::Intercepted).attach(why))
+        .attach_with(|| format!("map: {path}"))
+        .attach_with(|| match &subject {
+            Some(entry) => format!("affects: {entry}"),
+            None => format!("affects: all of {path}"),
+        })?;
 
     match &processed {
         MapChange::Insert { key, value, .. }
@@ -244,14 +242,14 @@ where
             new_value: value,
             ..
         } => {
-            let entry = entry_path(&path, key)?;
+            let entry = path.entry(key)?;
             backend
                 .set_with_source(&entry, value, processed.source())
                 .change_context(WriteError::Storage)
                 .attach_with(|| format!("writing map entry: {entry}"))?;
         }
         MapChange::Remove { key, .. } => {
-            let entry = entry_path(&path, key)?;
+            let entry = path.entry(key)?;
             backend
                 .delete_with_source(&entry, processed.source())
                 .change_context(WriteError::Storage)

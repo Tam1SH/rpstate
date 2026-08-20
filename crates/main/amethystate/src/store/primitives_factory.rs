@@ -8,7 +8,7 @@ use crate::{
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::{IntoStorePath, StorePath};
 use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
-use error_stack::ResultExt;
+use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -124,8 +124,13 @@ where
 
 /// Every entry stored under `path`, keyed by the level below it.
 ///
-/// A stored key that does not read back as a path, or whose level does not
-/// parse into `K`, is not an entry of this map and is left alone.
+/// A key under this path that cannot be read back is an error rather than an
+/// absence: the scan was asked what is here, and answering short means the
+/// caller acts on a map that is missing an entry the store holds.
+///
+/// The path itself is not one of them. The text engines leave an empty node
+/// behind where a map was cleared and a scan reports it, but a map's entries
+/// are the level below its path and nothing is stored at the path.
 pub fn load_map<K, V>(store: &Store, path: &StorePath) -> StorageResult<HashMap<K, V>>
 where
     K: ReactiveMapKey,
@@ -138,18 +143,28 @@ where
         .attach_with(|| format!("map: {path}"))?;
 
     for (stored, bytes) in scanned {
-        let Some(name) = path.entry_name(&stored) else {
-            continue;
+        let name = match path.entry_name(&stored) {
+            Some(name) => name,
+            None if StorePath::parse_joined(&stored).is_ok_and(|key| &key == path) => continue,
+            None => {
+                return Err(Report::new(StorageError::Path)
+                    .attach(format!("map: {path}"))
+                    .attach(format!("stored key: {stored}"))
+                    .attach("the key is not a path this library could have written"));
+            }
         };
-        let Ok(key) = K::from_str(&name) else {
-            continue;
-        };
+
+        let key = K::from_str(&name).map_err(|_| {
+            Report::new(StorageError::Codec)
+                .attach(format!("map: {path}"))
+                .attach(format!("entry: {name}"))
+                .attach(format!("key type: {}", std::any::type_name::<K>()))
+        })?;
 
         let value = store
             .decode::<V>(&bytes)
             .attach_with(|| format!("map: {path}"))
-            .attach_with(|| format!("entry: {name}"))
-            .attach_with(|| format!("as: {}", std::any::type_name::<V>()))?;
+            .attach_with(|| format!("entry: {name}"))?;
 
         entries.insert(key, value);
     }
@@ -217,8 +232,25 @@ where
                 return;
             }
 
-            if let Some(key_str) = path_for_keys.entry_name(&event.path)
-                && let Ok(k) = K::from_str(&key_str)
+            let Some(key_str) = path_for_keys.entry_name(&event.path) else {
+                tracing::error!(
+                    path = %event.path,
+                    map = %path_for_keys,
+                    "a key under this map is not a path this library could have written, so the change was not applied"
+                );
+                return;
+            };
+
+            let Ok(k) = K::from_str(&key_str) else {
+                tracing::error!(
+                    path = %event.path,
+                    map = %path_for_keys,
+                    key_type = std::any::type_name::<K>(),
+                    "a key under this map does not parse as its key type, so the change was not applied"
+                );
+                return;
+            };
+
             {
                 let source = event.source;
 
@@ -234,11 +266,20 @@ where
                     None => None,
                 };
 
-                let old_val = event
-                    .old
-                    .as_ref()
-                    .and_then(|b| store_clone.decode::<V>(b).ok())
-                    .or_else(|| core_clone.cache.get(&k).map(|v| v.clone()));
+                let decoded_old = match event.old.as_ref().map(|b| store_clone.decode::<V>(b)) {
+                    Some(Ok(value)) => Some(value),
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            path = %event.path,
+                            "the value being replaced could not be read, so subscribers are told what this map had: {e:?}"
+                        );
+                        None
+                    }
+                    None => None,
+                };
+
+                let old_val =
+                    decoded_old.or_else(|| core_clone.cache.get(&k).map(|v| v.clone()));
 
                 let change = {
                     let keys = &core_clone.cache;

@@ -3,6 +3,9 @@ use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+use common::shape;
+
 #[amethystate(as_root)]
 pub struct RootConfig {
     #[amestate(default = 1280u32)]
@@ -22,14 +25,14 @@ fn kv_refuses_a_path_owned_by_a_prefixed_struct() {
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let _cfg = GuardedConfig::new_with(&store).unwrap();
 
-    assert!(
-        store
-            .kv()
-            .namespace("guarded")
-            .unwrap()
-            .set("width", &"oops".to_string())
-            .is_err()
-    );
+    let err = store
+        .kv()
+        .namespace("guarded")
+        .unwrap()
+        .set("width", &"oops".to_string())
+        .unwrap_err();
+
+    insta::assert_snapshot!("kv_write_under_a_declared_prefix", shape(&err));
 }
 
 /// A root struct's fields sit at bare paths, and the guard only compares
@@ -42,10 +45,9 @@ fn kv_refuses_a_path_owned_by_a_root_struct() {
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let cfg = RootConfig::new_with(&store).unwrap();
 
-    assert!(
-        store.kv().set("width", &"oops".to_string()).is_err(),
-        "the root struct owns `width`"
-    );
+    let err = store.kv().set("width", &"oops".to_string()).unwrap_err();
+
+    insta::assert_snapshot!("kv_write_over_a_root_struct_field", shape(&err));
 
     assert_eq!(cfg.width().get(), 1280);
 }

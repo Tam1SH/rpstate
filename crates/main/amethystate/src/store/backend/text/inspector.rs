@@ -2,7 +2,7 @@ use crate::StorageResult;
 use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
 use crate::store::StorageError;
-use crate::store::backend::text::store::{normalize_path, scan_prefix_recursive};
+use crate::store::backend::text::store::scan_prefix_recursive;
 use crate::store::backend::text::{TextDocument, TextStore};
 use crate::store::meta::SchemaSnapshot;
 use amethystate_core::path::StorePath;
@@ -51,7 +51,7 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
 
     fn set_raw(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
         self.inner.check_debouncer()?;
-        let path = StorePath::parse_joined(&normalize_path(key)?)
+        let path = StorePath::parse_joined(key)
             .change_context(StorageError::Path)
             .attach_with(|| format!("key: {key}"))?;
 

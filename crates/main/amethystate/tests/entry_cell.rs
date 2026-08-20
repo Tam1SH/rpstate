@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{ReactiveMap, amethystate};
+
+mod common;
 use amethystate_core::test_utils::{TempPath, unique_path};
+use common::shape;
 
 #[amethystate(prefix = "app")]
 pub struct TableConfig {
@@ -39,7 +42,10 @@ fn entry_cell_on_a_missing_key_is_empty_and_refuses_writes() {
     let entry = config.widths().entry_cell("disk".to_string());
 
     assert_eq!(entry.get(), None);
-    assert!(entry.set(110).is_err());
+
+    let err = entry.set(110).unwrap_err();
+    insta::assert_snapshot!("write_to_an_absent_key", shape(&err));
+
     assert_eq!(config.widths().get(&"disk".to_string()).unwrap(), None);
 }
 
@@ -82,7 +88,10 @@ fn removed_key_empties_the_cell() {
     config.widths().remove("cpu".to_string()).unwrap();
 
     assert_eq!(entry.get(), None);
-    assert!(entry.set(110).is_err());
+
+    let err = entry.set(110).unwrap_err();
+    insta::assert_snapshot!("write_to_a_removed_key", shape(&err));
+
     assert_eq!(config.widths().get(&"cpu".to_string()).unwrap(), None);
 }
 
@@ -143,7 +152,8 @@ fn rejected_write_reports_and_leaves_the_cell_alone() {
 
     let result = entry.set(999);
 
-    assert!(result.is_err(), "a refused write must not report success");
+    let err = result.unwrap_err();
+    insta::assert_snapshot!("write_an_interceptor_refused", shape(&err));
     assert_eq!(
         entry.get(),
         Some(80),
@@ -184,7 +194,9 @@ fn a_cell_dies_with_the_map_it_views() {
     };
 
     assert_eq!(entry.get(), None);
-    assert!(entry.set(1).is_err());
+
+    let err = entry.set(1).unwrap_err();
+    insta::assert_snapshot!("write_through_a_cell_whose_map_is_gone", shape(&err));
 }
 
 /// Integration: a write through the entry cell survives a store rebuild.

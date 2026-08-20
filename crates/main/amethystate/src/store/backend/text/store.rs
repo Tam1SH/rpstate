@@ -7,6 +7,7 @@ use crate::migration::set::MigrationSet;
 use crate::store::StorageResult;
 use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
+use crate::store::backend::utils::Attempted;
 use crate::store::config::StoreConfig;
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
@@ -15,7 +16,7 @@ use crate::store::{
     SubscriptionId, SubscriptionKind,
 };
 use amethystate_core::path::StorePath;
-use error_stack::{Report, ResultExt};
+use error_stack::ResultExt;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::fmt::Debug;
@@ -25,6 +26,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::NamedTempFile;
 use tracing::{info, warn};
+
+trait InMetaFile: ResultExt {
+    fn in_meta(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok>;
+}
+
+impl<R: ResultExt> InMetaFile for R {
+    fn in_meta(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok> {
+        self.change_context(what)
+            .attach_with(|| format!("meta file: {}", file.display()))
+    }
+}
 
 pub struct StoreFile<D> {
     pub path: PathBuf,
@@ -396,8 +408,7 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
         let engine = MigrationEngine::new(&provider);
         engine
             .run(mset)
-            .change_context(StorageError::Migrate)
-            .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
+            .doing(StorageError::Migrate, &self.inner.files.data.path)
             .attach_with(|| format!("meta file: {}", self.inner.files.meta.path.display()))
     }
 }
@@ -409,8 +420,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         match guard.get(&parts) {
             Some(node) => Ok(Some(
                 D::node_to_bytes(node)
-                    .change_context(StorageError::Read)
-                    .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                    .doing(StorageError::Read, &self.files.data.path)
                     .attach_with(|| format!("node: {path}"))?,
             )),
             None => Ok(None),
@@ -425,8 +435,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     ) -> StorageResult<()> {
         self.check_debouncer()?;
         let node = D::serialize_node(value)
-            .change_context(StorageError::Write)
-            .attach_with(|| format!("file: {}", self.files.data.path.display()))
+            .doing(StorageError::Write, &self.files.data.path)
             .attach_with(|| format!("node: {path}"))?;
         self.set_node(path.clone(), node, source)
     }
@@ -474,13 +483,11 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .get(&parts)
                 .map(|n| D::node_to_bytes(n))
                 .transpose()
-                .change_context(StorageError::Delete)
-                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .doing(StorageError::Delete, &self.files.data.path)
                 .attach_with(|| format!("node: {path}"))?;
             guard
                 .delete(&parts)
-                .change_context(StorageError::Delete)
-                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .doing(StorageError::Delete, &self.files.data.path)
                 .attach_with(|| format!("node: {path}"))?;
             old
         };
@@ -510,19 +517,21 @@ impl<D: TextDocument> TextStoreInner<D> {
         {
             let mut guard = self.files.data.doc.write();
             let keys: Vec<String> = scan_prefix_impl(&*guard, prefix)
-                .change_context(StorageError::Delete)
-                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .doing(StorageError::Delete, &self.files.data.path)
                 .attach_with(|| format!("prefix: {prefix}"))?
                 .into_iter()
                 .map(|(path, _)| path)
                 .collect();
 
             for key in keys {
-                let parts = split_path(&key);
+                let path = StorePath::parse_joined(&key)
+                    .change_context(StorageError::Delete)
+                    .attach_with(|| format!("prefix: {prefix}"))
+                    .attach_with(|| format!("stored key: {key}"))?;
+                let parts: Vec<&str> = path.segments().collect();
                 guard
                     .delete(&parts)
-                    .change_context(StorageError::Delete)
-                    .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                    .doing(StorageError::Delete, &self.files.data.path)
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| format!("node: {key}"))?;
             }
@@ -568,13 +577,11 @@ impl<D: TextDocument> TextStoreInner<D> {
             let mut guard = self.files.meta.doc.write();
             let parts = vec!["__init", namespace];
             let node = D::serialize_node(&true)
-                .change_context(StorageError::Meta)
-                .attach_with(|| format!("meta file: {}", self.files.meta.path.display()))
+                .in_meta(StorageError::Meta, &self.files.meta.path)
                 .attach_with(|| format!("namespace: {namespace}"))?;
             guard
                 .set(&parts, node)
-                .change_context(StorageError::Meta)
-                .attach_with(|| format!("meta file: {}", self.files.meta.path.display()))
+                .in_meta(StorageError::Meta, &self.files.meta.path)
                 .attach_with(|| format!("namespace: {namespace}"))?;
         }
 
@@ -601,19 +608,16 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .get(&parts)
                 .map(|n| D::node_to_bytes(n))
                 .transpose()
-                .change_context(StorageError::Write)
-                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .doing(StorageError::Write, &self.files.data.path)
                 .attach_with(|| format!("node: {path_str}"))
                 .attach("while reading the value being replaced")?;
             guard
                 .set(&parts, node)
-                .change_context(StorageError::Write)
-                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .doing(StorageError::Write, &self.files.data.path)
                 .attach_with(|| format!("node: {path_str}"))?;
             let new_node = guard.get(&parts).unwrap();
             let new_bytes = D::node_to_bytes(new_node)
-                .change_context(StorageError::Write)
-                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .doing(StorageError::Write, &self.files.data.path)
                 .attach_with(|| format!("node: {path_str}"))?;
             (old, new_bytes)
         };
@@ -649,8 +653,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         match self.inner.get_node_bytes(path)? {
             Some(bytes) => {
                 D::with_bytes_de(&bytes, f)
-                    .change_context(StorageError::Read)
-                    .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
+                    .doing(StorageError::Read, &self.inner.files.data.path)
                     .attach_with(|| format!("node: {path}"))?;
                 Ok(true)
             }
@@ -664,7 +667,6 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
         D::with_bytes_de(bytes, f)
-            .change_context(StorageError::Codec)
             .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
     }
 
@@ -743,37 +745,6 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
     fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
         self.inner.mark_initialized(namespace)
     }
-}
-
-pub fn normalize_path(path: &str) -> StorageResult<String> {
-    let trimmed = path.trim();
-
-    if trimmed == "." {
-        return Ok(".".to_string());
-    }
-
-    let normalized = path
-        .split('.')
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(".");
-
-    if normalized.is_empty() {
-        return Err(Report::new(StorageError::Path)
-            .attach("a path must name at least one level")
-            .attach(format!("path: {path:?}")));
-    }
-    Ok(normalized)
-}
-
-pub fn split_path(path: &str) -> Vec<&str> {
-    if path == "." {
-        return vec!["."];
-    }
-    if path.is_empty() {
-        return vec![];
-    }
-    path.split('.').filter(|s| !s.is_empty()).collect()
 }
 
 fn persist_atomic(path: &Path, content: &str) -> std::io::Result<()> {
@@ -1072,34 +1043,4 @@ fn scan_keys_recursive<D: TextDocument>(
     }
 
     Ok(())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-    use proptest::string::string_regex;
-
-    fn dirty_path_strategy() -> impl Strategy<Value = String> {
-        string_regex("[a-zA-Z0-9_.-]{0,20}").unwrap()
-    }
-
-    proptest! {
-        #[test]
-        fn prop_normalize_path_is_clean(dirty_path in dirty_path_strategy()) {
-            match normalize_path(&dirty_path) {
-                Ok(norm) => {
-                    assert!(!norm.is_empty(), "Normalized path cannot be empty");
-                    if norm != "." {
-                        assert!(!norm.starts_with('.'), "Should not start with a dot: {}", norm);
-                        assert!(!norm.ends_with('.'), "Should not end with a dot: {}", norm);
-                    }
-                    assert!(!norm.contains(".."), "Should not contain double dots: {}", norm);
-                }
-                Err(_) => {
-                    let only_dots = dirty_path.chars().all(|c| c == '.');
-                    assert!(only_dots || dirty_path.trim().is_empty());
-                }
-            }
-        }
-    }
 }

@@ -1,0 +1,15 @@
+---
+source: crates/main/amethystate/tests/error_reports.rs
+expression: shape(&err)
+---
+the store could not read
+├╴store: <store>
+├╴key: cfg.name (unflushed)
+│
+├─▶ the value could not be encoded or decoded
+│   ├╴path: cfg.name
+│   ╰╴decoding 13 bytes of messagepack
+│
+├─▶ Erased codec error: wrong msgpack marker FixStr(12)
+│
+╰─▶ wrong msgpack marker FixStr(12)

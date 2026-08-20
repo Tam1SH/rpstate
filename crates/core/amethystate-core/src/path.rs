@@ -116,10 +116,10 @@ impl StorePath {
     {
         let mut collected: Vec<Arc<str>> = Vec::new();
 
-        for segment in segments {
+        for (at, segment) in segments.into_iter().enumerate() {
             let segment = segment.as_ref();
             if segment.is_empty() {
-                return Err(StorePathError::EmptySegment);
+                return Err(StorePathError::EmptySegment { at });
             }
             collected.push(Arc::from(segment));
         }
@@ -150,7 +150,9 @@ impl StorePath {
     pub fn try_push(&self, name: impl AsRef<str>) -> Result<Self, StorePathError> {
         let name = name.as_ref();
         if name.is_empty() {
-            return Err(StorePathError::EmptySegment);
+            return Err(StorePathError::EmptySegment {
+                at: self.segments.len(),
+            });
         }
 
         let mut segments = self.segments.to_owned_vec();
@@ -276,8 +278,8 @@ impl StorePath {
             segments.push(Arc::from(current.as_str()));
         }
 
-        if segments.iter().any(|s| s.is_empty()) {
-            return Err(StorePathError::EmptySegment);
+        if let Some(at) = segments.iter().position(|s| s.is_empty()) {
+            return Err(StorePathError::EmptySegment { at });
         }
 
         Ok(Self::from_checked(segments))
@@ -287,9 +289,9 @@ impl StorePath {
 /// Why a set of segments is not a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorePathError {
-    /// A level with no name. It would be indistinguishable from the root once
-    /// joined, and there is nothing a store could address by it.
-    EmptySegment,
+    /// A level with no name, and which one. It would be indistinguishable from
+    /// the root once joined, and there is nothing a store could address by it.
+    EmptySegment { at: usize },
 
     /// An escape that escapes nothing. No key this type wrote holds one, and
     /// reading it leniently would let two different keys name one path.
@@ -299,7 +301,9 @@ pub enum StorePathError {
 impl std::fmt::Display for StorePathError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StorePathError::EmptySegment => f.write_str("a path segment cannot be empty"),
+            StorePathError::EmptySegment { at } => {
+                write!(f, "level {at} of the path has no name")
+            }
             StorePathError::DanglingEscape => {
                 f.write_str("an escape must be followed by a separator or another escape")
             }
@@ -573,11 +577,12 @@ mod tests {
 
             prop_assert_eq!(
                 StorePath::try_from_segments(&with_a_hole),
-                Err(StorePathError::EmptySegment)
+                Err(StorePathError::EmptySegment { at }),
+                "the refusal names the level that has no name"
             );
             prop_assert_eq!(
                 StorePath::from_segments(&segments).try_push(""),
-                Err(StorePathError::EmptySegment)
+                Err(StorePathError::EmptySegment { at: segments.len() })
             );
         }
 
@@ -651,6 +656,38 @@ mod tests {
             if let Ok(path) = StorePath::parse_joined(&key) {
                 prop_assert_eq!(path.as_str(), key.as_str());
             }
+        }
+
+        /// A key holding a level with no name is refused, wherever the gap
+        /// falls and whatever surrounds it.
+        ///
+        /// Such keys are already in stores - `.` was the sentinel for the whole
+        /// document, and a trailing separator is what joining an empty key used
+        /// to write. Reading one leniently would give the root a second name,
+        /// or two keys one path.
+        #[test]
+        fn a_key_with_a_nameless_level_is_refused(
+            head in path_strategy(),
+            tail in path_strategy(),
+            at in 0usize..3
+        ) {
+            let head = StorePath::from_segments(&head);
+            let tail = StorePath::from_segments(&tail);
+
+            let (key, hole) = match at % 3 {
+                0 => (format!("{SEPARATOR}{tail}"), 0),
+                1 => (format!("{head}{SEPARATOR}"), head.len()),
+                _ => (
+                    format!("{head}{SEPARATOR}{SEPARATOR}{tail}"),
+                    head.len(),
+                ),
+            };
+
+            prop_assert_eq!(
+                StorePath::parse_joined(&key),
+                Err(StorePathError::EmptySegment { at: hole }),
+                "key: {:?}", key
+            );
         }
 
 
@@ -814,26 +851,6 @@ mod tests {
         let path = StorePath::segment("a*b[c]?\u{0}d");
 
         assert_eq!(path.as_str(), "a*b[c]?\u{0}d");
-    }
-
-    /// Keys a looser reader accepts and this one refuses. `.` is the sentinel
-    /// the text engines' `split_path` still maps to the whole document, and a
-    /// trailing separator is what joining an empty key used to write: both are
-    /// already in stores, and neither is a path.
-    #[test]
-    fn keys_already_written_that_are_not_paths() {
-        assert_eq!(
-            StorePath::parse_joined("."),
-            Err(StorePathError::EmptySegment)
-        );
-        assert_eq!(
-            StorePath::parse_joined("ui."),
-            Err(StorePathError::EmptySegment)
-        );
-        assert_eq!(
-            StorePath::parse_joined("ui..width"),
-            Err(StorePathError::EmptySegment)
-        );
     }
 
     /// The hash is taken over the levels, not over the key, so the two do not

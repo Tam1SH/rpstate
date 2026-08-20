@@ -101,12 +101,16 @@ where
         ReactiveCell::from_parts(
             cache,
             Arc::new(move |value: V| {
-                let inner = weak.upgrade().ok_or(WriteError::SourceGone)?;
+                let inner = weak.upgrade().ok_or_else(|| {
+                    Report::new(WriteError::SourceGone)
+                        .attach(format!("entry: {write_key}"))
+                        .attach("writing through a cell whose map has been dropped")
+                })?;
                 let map = ReactiveMap::<K, V, WritableMode> {
                     inner,
                     _mode: std::marker::PhantomData,
                 };
-                Ok(map.update(write_key.clone(), &value)?)
+                map.update(write_key.clone(), &value)
             }),
             Some(Arc::new(move || alive.strong_count() > 0)),
             origin,

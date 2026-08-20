@@ -9,6 +9,12 @@ use crate::store::traits::MigrationBackendAdapter;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 
+fn migration_path(key: &str) -> StorageResult<StorePath> {
+    StorePath::parse_joined(key)
+        .change_context(StorageError::Path)
+        .attach_with(|| format!("migration key: {key}"))
+}
+
 pub struct TextMigrationBackend<'a, D: TextDocument> {
     pub(crate) data_doc: &'a mut D,
     pub(crate) meta_doc: &'a mut D,
@@ -20,7 +26,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn get(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
-        let parts = store::split_path(key);
+        let path = migration_path(key)?;
+        let parts: Vec<&str> = path.segments().collect();
         if let Some(node) = self.data_doc.get(&parts) {
             Ok(Some(
                 D::node_to_bytes(node)
@@ -34,7 +41,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn set(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
-        let parts = store::split_path(key);
+        let path = migration_path(key)?;
+        let parts: Vec<&str> = path.segments().collect();
         let node = D::bytes_to_node(value)
             .change_context(StorageError::Migrate)
             .attach_with(|| format!("node: {key}"))
@@ -48,7 +56,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn delete(&mut self, key: &str) -> StorageResult<()> {
-        let parts = store::split_path(key);
+        let path = migration_path(key)?;
+        let parts: Vec<&str> = path.segments().collect();
         self.data_doc
             .delete(&parts)
             .change_context(StorageError::Migrate)

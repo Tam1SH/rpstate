@@ -1,0 +1,5 @@
+---
+source: crates/main/amethystate/tests/kv.rs
+expression: shape(&err)
+---
+path `ui.width` is already `u32`, asked for `String`

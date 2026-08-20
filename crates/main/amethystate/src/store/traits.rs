@@ -186,7 +186,7 @@ pub trait StoreExt: StoreBackend {
                 erased_serde::deserialize::<T>(d)
                     .map_err(crate::codec::CodecError::from)
                     .change_context(StorageError::Codec)
-                    .attach_with(|| format!("decoding {} bytes", bytes.len()))?,
+                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
             );
             Ok(())
         })?;

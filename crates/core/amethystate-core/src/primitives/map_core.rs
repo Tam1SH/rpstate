@@ -1,8 +1,11 @@
 use crate::SignalSubscription;
 use crate::change::MapChange;
 use crate::path::StorePath;
+use crate::primitives::error::{ReactiveMapResult, WriteError};
 use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::SubscriptionMeta;
+use dashmap::DashMap;
+use error_stack::ResultExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -11,6 +14,23 @@ use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Where a map's entries live, relative to the map itself.
+pub trait MapEntryPath {
+    /// The path of the entry `key` names, or why that key cannot name one.
+    fn entry(&self, key: &impl Display) -> ReactiveMapResult<StorePath>;
+}
+
+impl MapEntryPath for StorePath {
+    fn entry(&self, key: &impl Display) -> ReactiveMapResult<StorePath> {
+        let key = key.to_string();
+
+        self.try_push(&key)
+            .change_context(WriteError::Path)
+            .attach_with(|| format!("map: {self}"))
+            .attach_with(|| format!("key: {key}"))
+    }
+}
 
 pub type InterceptorAny<K, V> =
     Arc<dyn Fn(MapChange<K, V>) -> Option<MapChange<K, V>> + Send + Sync + 'static>;
@@ -33,9 +53,9 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static + Default> 
 
 pub struct ReactiveMapCore<K, V> {
     pub interceptors_any: Arc<Mutex<Vec<(u64, InterceptorAny<K, V>)>>>,
-    pub interceptors_key: Arc<Mutex<HashMap<K, Vec<(u64, InterceptorKey<K, V>)>>>>,
+    pub interceptors_key: Arc<DashMap<K, Vec<(u64, InterceptorKey<K, V>)>>>,
     pub subscribers_any: Arc<Mutex<Vec<(u64, SubscriberAny<K, V>, SubscriptionMeta)>>>,
-    pub subscribers_key: Arc<Mutex<HashMap<K, Vec<(u64, SubscriberKey<K, V>, SubscriptionMeta)>>>>,
+    pub subscribers_key: Arc<DashMap<K, Vec<(u64, SubscriberKey<K, V>, SubscriptionMeta)>>>,
     pub next_id: Arc<AtomicU64>,
     pub intercept_depth: Arc<AtomicUsize>,
     pub cache: Arc<dashmap::DashMap<K, V>>,
@@ -94,9 +114,9 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
     pub fn new() -> Self {
         Self {
             interceptors_any: Arc::new(Mutex::new(Vec::new())),
-            interceptors_key: Arc::new(Mutex::new(HashMap::new())),
+            interceptors_key: Arc::new(DashMap::new()),
             subscribers_any: Arc::new(Mutex::new(Vec::new())),
-            subscribers_key: Arc::new(Mutex::new(HashMap::new())),
+            subscribers_key: Arc::new(DashMap::new()),
             next_id: Arc::new(AtomicU64::new(0)),
             intercept_depth: Arc::new(AtomicUsize::new(0)),
             cache: Arc::new(dashmap::DashMap::new()),
@@ -155,8 +175,6 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             name: None,
         };
         self.subscribers_key
-            .lock()
-            .unwrap()
             .entry(key.clone())
             .or_default()
             .push((id, Arc::new(callback), meta));
@@ -164,8 +182,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
         let subs_for_name = self.subscribers_key.clone();
         let key_for_name = key.clone();
         let set_name = Arc::new(move |name: &'static str| {
-            if let Ok(mut lock) = subs_for_name.lock()
-                && let Some(list) = lock.get_mut(&key_for_name)
+            if let Some(mut list) = subs_for_name.get_mut(&key_for_name)
                 && let Some(entry) = list.iter_mut().find(|(i, _, _)| *i == id)
             {
                 entry.2.name = Some(name);
@@ -178,9 +195,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             name: None,
             set_name,
             cleanup: Arc::new(move |id| {
-                if let Ok(mut lock) = subs_for_cleanup.lock()
-                    && let Some(list) = lock.get_mut(&key)
-                {
+                if let Some(mut list) = subs_for_cleanup.get_mut(&key) {
                     list.retain(|(i, _, _)| *i != id);
                 }
             }),
@@ -214,8 +229,6 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
     {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.interceptors_key
-            .lock()
-            .unwrap()
             .entry(key.clone())
             .or_default()
             .push((id, Arc::new(callback)));
@@ -224,9 +237,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             id,
             path: StorePath::root(),
             cleanup: Arc::new(move |id| {
-                if let Ok(mut lock) = subs.lock()
-                    && let Some(list) = lock.get_mut(&key)
-                {
+                if let Some(mut list) = subs.get_mut(&key) {
                     list.retain(|(i, _)| *i != id);
                 }
             }),
@@ -242,22 +253,23 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             // Letting the change through unchecked would turn a validating
             // interceptor off exactly where recursion is deepest, and the value
             // it exists to reject would reach the backend.
-            return Err("Maximum intercept depth reached".to_string());
+            return Err("interceptors nested too deep".to_string());
         };
 
         // A change with no key is not about any one key, so key interceptors do
         // not apply. Running all of them used to hand each the same `Clear`,
         // accumulating their rewrites, in `HashMap` order.
         if let Some(key) = change.key().cloned() {
-            let interceptors = {
-                let lock = self.interceptors_key.lock().unwrap();
-                lock.get(&key).cloned().unwrap_or_default()
-            };
+            let interceptors = self
+                .interceptors_key
+                .get(&key)
+                .map(|entry| entry.clone())
+                .unwrap_or_default();
             for (_, interceptor) in interceptors {
                 if let Some(new_change) = interceptor(change.clone()) {
                     change = new_change;
                 } else {
-                    return Err("Map change intercepted by key filter".to_string());
+                    return Err("refused by an interceptor on that key".to_string());
                 }
             }
         }
@@ -267,7 +279,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             if let Some(new_change) = interceptor(change.clone()) {
                 change = new_change;
             } else {
-                return Err("Map change intercepted by global filter".to_string());
+                return Err("refused by an interceptor on the map".to_string());
             }
         }
 
@@ -276,24 +288,20 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
 
     /// Fires every subscriber interested in `change`.
     ///
-    /// The callbacks are collected before any of them runs, and the locks are
+    /// The callbacks are collected before any of them runs, and every guard is
     /// released first. A subscriber reacting to a change by writing to the same
-    /// map is ordinary, and `std::sync::Mutex` is not reentrant, so holding the
-    /// lock across the calls deadlocks the thread. It also means a panicking
-    /// callback cannot poison the subscriber lists.
+    /// map is ordinary, and neither a `Mutex` nor a `DashMap` shard is
+    /// reentrant, so holding either across the calls deadlocks the thread.
     pub fn notify(&self, change: &MapChange<K, V>) {
         let keyed: Vec<_> = match change.key() {
             Some(k) => self
                 .subscribers_key
-                .lock()
-                .ok()
-                .and_then(|lock| {
-                    lock.get(k).map(|entries| {
-                        entries
-                            .iter()
-                            .map(|(_, cb, meta)| (cb.clone(), *meta))
-                            .collect()
-                    })
+                .get(k)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .map(|(_, cb, meta)| (cb.clone(), *meta))
+                        .collect()
                 })
                 .unwrap_or_default(),
             None => Vec::new(),

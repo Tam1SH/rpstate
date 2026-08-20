@@ -239,12 +239,6 @@ where
     /// The subscription lives as long as the returned handle: dropping it
     /// unsubscribes. Callbacks run on whichever thread made the change, which
     /// may be the file watcher's when the store was edited outside the
-    /// process.
-    /// Calls `callback` on every change to any key.
-    ///
-    /// The subscription lives as long as the returned handle: dropping it
-    /// unsubscribes. Callbacks run on whichever thread made the change, which
-    /// may be the file watcher's when the store was edited outside the
     /// process - hence the `Send + Sync` bound.
     ///
     /// ```
@@ -1172,8 +1166,16 @@ mod tests {
         map.update("other".into(), &150).unwrap();
     }
 
+    /// Reopening a map's path under a different key type is a refusal, not a
+    /// filter.
+    ///
+    /// Both entries here are the map's - they are under its own path - and
+    /// neither can be read as `<i32, i32>`. Dropping them would leave a map
+    /// short of what the store holds, and the next write of it whole would
+    /// delete them. Changing the type of a stored map is what migrations are
+    /// for.
     #[test]
-    fn test_entries_parsing_failures() {
+    fn a_map_reopened_at_another_type_refuses_rather_than_filtering() {
         let store = unique_store("parsing");
         let path = StorePath::from_segments(["test", "parse"]);
 
@@ -1193,20 +1195,19 @@ mod tests {
                 .unwrap();
         }
 
-        let map_int: ReactiveMap<i32, i32, WritableMode> =
-            crate::store::reactive_map_with_path::<TestScope, _, _, _>(
-                &store,
-                path,
-                HashMap::new(),
-                Uuid::new_v4(),
-            )
-            .unwrap();
+        let err = crate::store::reactive_map_with_path::<TestScope, i32, i32, WritableMode>(
+            &store,
+            path,
+            HashMap::new(),
+            Uuid::new_v4(),
+        )
+        .unwrap_err();
 
-        let entries: Vec<_> = map_int.entries().unwrap().collect();
-
-        // i32::from_str("123") succeed, but decoder falls back to Default (0) for invalid bytes
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0], (123, 0));
+        let report = format!("{err:?}");
+        assert!(
+            report.contains("not_int_key") || report.contains("123"),
+            "the report names the entry it could not read: {report}"
+        );
     }
 
     #[test]

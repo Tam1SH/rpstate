@@ -1,11 +1,25 @@
 use crate::SubscriptionKind;
+use crate::store::error::{StorageError, StorageResult};
 use crate::store::{StoreEvent, SubscriptionEntry};
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 use amethystate_core::path::StorePath;
+use error_stack::ResultExt;
 use parking_lot::RwLock;
+use std::path::Path;
 
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 pub use buffered::*;
+
+pub trait Attempted: ResultExt {
+    fn doing(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok>;
+}
+
+impl<R: ResultExt> Attempted for R {
+    fn doing(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok> {
+        self.change_context(what)
+            .attach_with(|| format!("file: {}", file.display()))
+    }
+}
 
 /// Where a subtree stops, for engines that store a key whole.
 ///

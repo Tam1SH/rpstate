@@ -1145,12 +1145,17 @@ engines.
 
 `tests/backend_conformance.rs` states twenty-one properties about what a store
 is and runs each against every engine compiled in. redb and sqlite pass all
-twenty-one. json, toml and ron fail the same eight - which is itself the
-finding: the three formats share one implementation and diverge from the flat
-engines in exactly one place, the document walk.
+twenty-one. json, toml and ron fail the same six - which is itself the finding:
+the three formats share one implementation and diverge from the flat engines in
+exactly one place, the document walk.
 
-Four of the eight are written up above (a level named `.`, a leaf and a branch
-at one name, `delete_prefix` re-splitting a scanned key). The rest are new.
+The six: `a_level_named_dot_is_an_ordinary_level`,
+`a_leaf_and_a_branch_coexist_at_one_name`,
+`a_scan_lists_exactly_what_is_under_the_prefix`,
+`a_write_leaves_every_other_path_alone`,
+`deleting_what_is_not_there_changes_nothing`,
+`writing_then_deleting_leaves_the_store_as_it_was`. The first two are written up
+above. The rest are new.
 
 **A scan on a text engine goes one level deep.** `scan_prefix_impl` and
 `scan_keys_impl` set `target_depth = parts.len() + 1` (`text/store.rs:825`,
@@ -1193,6 +1198,42 @@ removal that did not happen, so that suite would find things. Also uncovered:
 concurrency between two handles, the async surface, `is_initialized`, and value
 shapes past `u32`/`String` - nested structs, enums and sequences are where the
 three text formats differ most from each other and from msgpack.
+
+## A cleared map leaves a node behind, and only on the text engines
+
+`clear()` deletes the prefix. On redb and sqlite the keys go and nothing is
+left. On the text engines the container stays: after clearing `probe.items` the
+json document holds `{"probe": {"items": {}}}`, and the next scan of the prefix
+reports the prefix itself as a stored key with an empty object for its value.
+
+Two consequences, one of them already load-bearing. `load_map` reads a scan
+strictly, so an empty node at the map's own path was a hard failure on reopen -
+`clear_survives_a_store_rebuild` went red on all three text engines. It now
+skips a scanned key equal to the map's path, on the grounds that a map's entries
+are the level below it and nothing is stored at the path itself; that is right
+whatever the engine leaves behind, and it does not soften the strictness about
+keys that really are under the path. `map_len` still counts the node, though
+`ReactiveMap::len` reads its own projection and so does not.
+
+The root cause is `delete_prefix` not pruning a branch it emptied, which is also
+why `writing_then_deleting_leaves_the_store_as_it_was` fails on the text
+engines. Fixing the prune fixes both, and would let the skip go.
+
+## An interceptor says why it refused, and the field drops it
+
+`FieldCore::run_interceptors` returns `Err(String)` naming what happened -
+`"Maximum intercept depth reached"` is a bug in the caller's code, a refusal by
+a filter is not - and both call sites throw it away with `map_err(|_| ...)`
+(`field_ops.rs:22`, `reactive/field.rs:452`). The report that reaches the caller
+says only "an interceptor rejected the change", so a validating interceptor
+turning a value down and interceptors recursing past the depth guard are the
+same message.
+
+The map side is fixed: `map_apply_change` attaches the sentence and names what
+the change reached, so a refused `insert` and a refused `clear` no longer render
+identically. The field wants the same, and the ephemeral branch in
+`field.rs:452` wants a `Report` rather than a bare `FieldError`, which is
+separately why that one carries no path at all.
 
 ## The text engines take a path apart and put it back on every call
 

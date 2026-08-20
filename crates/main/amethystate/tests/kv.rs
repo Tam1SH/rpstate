@@ -1,9 +1,11 @@
-use amethystate::errors::WriteError;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{LocalScope, amethystate};
 use amethystate_core::test_utils::unique_path;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+mod common;
+use common::shape;
 
 #[amethystate(prefix = "typed")]
 pub struct Typed {
@@ -92,14 +94,21 @@ fn writing_into_a_declared_prefix_is_refused() {
         .unwrap()
         .set("port", &"not a number".to_string())
         .unwrap_err();
-    assert!(
-        matches!(err.current_context(), WriteError::SchemaOwned { .. }),
-        "got {err:?}"
-    );
+    insta::assert_snapshot!("kv_write_over_a_declared_field", shape(&err));
 
-    assert!(kv.namespace("typed").unwrap().cell("port", 1u16).is_err());
-    assert!(kv.namespace("typed").unwrap().remove("port").is_err());
-    assert!(kv.map::<String, u8>("typed").is_err());
+    let refused = [
+        kv.namespace("typed")
+            .unwrap()
+            .cell("port", 1u16)
+            .map(|_| ())
+            .unwrap_err(),
+        kv.namespace("typed").unwrap().remove("port").unwrap_err(),
+        kv.map::<String, u8>("typed").map(|_| ()).unwrap_err(),
+    ];
+
+    for (way, err) in ["cell", "remove", "map"].into_iter().zip(refused) {
+        insta::assert_snapshot!(format!("kv_{way}_over_a_declared_field"), shape(&err));
+    }
 }
 
 #[test]
@@ -134,10 +143,7 @@ fn the_same_path_cannot_be_two_types() {
         .cell("width", String::new())
         .unwrap_err();
 
-    assert!(
-        matches!(err.current_context(), WriteError::TypeMismatch { .. }),
-        "got {err:?}"
-    );
+    insta::assert_snapshot!("kv_asked_for_a_second_type", shape(&err));
 }
 
 #[test]

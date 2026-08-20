@@ -1,0 +1,6 @@
+---
+source: crates/main/amethystate/tests/kv_guard_root.rs
+expression: shape(&err)
+---
+path `guarded.width` belongs to the schema at `guarded`
+╰╴declared by: GuardedConfig

@@ -84,9 +84,10 @@
 use amethystate::Store;
 use amethystate::errors::WriteError;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{StorageError, StorePath, StorePathError};
+use amethystate::store::{StorageError, StorePath, StorePathError, SubscriptionKind};
 use amethystate_core::test_utils::TempPath;
 use proptest::prelude::*;
+use std::sync::{Arc, Mutex};
 
 const SEPARATOR: char = '.';
 const ESCAPE: char = '\\';
@@ -725,9 +726,11 @@ fn a_level_with_no_name_is_refused_and_changes_nothing(backend: Backend) {
             );
             let report = refusal.unwrap();
             prop_assert_eq!(report.current_context(), &StorageError::Path, "{}", call);
-            prop_assert_eq!(
-                report.downcast_ref::<StorePathError>(),
-                Some(&StorePathError::EmptySegment),
+            prop_assert!(
+                matches!(
+                    report.downcast_ref::<StorePathError>(),
+                    Some(StorePathError::EmptySegment { .. })
+                ),
                 "{} lost the reason underneath", call
             );
         }
@@ -763,7 +766,15 @@ fn bytes_that_will_not_decode_are_a_codec_failure(backend: Backend) {
         refusal.unwrap()
     );
     let report = refusal.unwrap_err();
-    assert_eq!(report.current_context(), &StorageError::Codec, "{report:?}");
+    assert_eq!(
+        report.current_context(),
+        &StorageError::Read,
+        "the outermost context names what the caller asked for: {report:?}"
+    );
+    assert!(
+        report.contains::<amethystate::errors::CodecError>(),
+        "the codec's refusal is the cause underneath: {report:?}"
+    );
 }
 
 /// 17. A path that holds nothing reads as `Ok(None)`: absence is not a failure.
@@ -802,9 +813,11 @@ fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Ba
         matches!(refusal.current_context(), WriteError::Path),
         "{refusal:?}"
     );
-    assert_eq!(
-        refusal.downcast_ref::<StorePathError>(),
-        Some(&StorePathError::EmptySegment),
+    assert!(
+        matches!(
+            refusal.downcast_ref::<StorePathError>(),
+            Some(StorePathError::EmptySegment { .. })
+        ),
         "{refusal:?}"
     );
     assert_eq!(map.len().unwrap(), 1, "the refused key was not added");
@@ -900,6 +913,106 @@ fn a_level_named_dot_is_an_ordinary_level(backend: Backend) {
         "the level named `.` is still there after deleting it"
     );
     assert_eq!(store.get::<u32>(["cfg", "width"]).ok(), Some(Some(1280)));
+}
+
+/// A namespace is uninitialized until it is marked, and marking one says
+/// nothing about any other.
+///
+/// This is what stops a map re-seeding its defaults over entries the user has
+/// since removed, so it is a statement about a store rather than about the
+/// engine that happens to keep the marker in a table or in a second file.
+fn a_namespace_is_uninitialized_until_it_is_marked(backend: Backend) {
+    let file = TempPath::new("conf_initialized");
+    let store = open(backend, &file);
+
+    assert!(!store.is_initialized("settings").unwrap());
+    assert!(!store.is_initialized("ui").unwrap());
+
+    store.mark_initialized("settings").unwrap();
+
+    assert!(store.is_initialized("settings").unwrap());
+    assert!(
+        !store.is_initialized("ui").unwrap(),
+        "marking one namespace marked another"
+    );
+}
+
+/// Each kind of subscription hears exactly what it asked for.
+///
+/// `Any` hears every write, `ExactPath` only its own, and `Prefix` only what is
+/// under it - and a prefix is matched by level, so `ui.theme` does not hear
+/// `ui.themes.dark`.
+fn a_subscription_hears_what_its_kind_asked_for(backend: Backend) {
+    let file = TempPath::new("conf_subscribe");
+    let store = open(backend, &file);
+
+    let heard = |kind: SubscriptionKind| {
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        store.subscribe(
+            kind,
+            Arc::new(move |event| sink.lock().unwrap().push(event.path.to_string())),
+        );
+        seen
+    };
+
+    let any = heard(SubscriptionKind::Any);
+    let exact = heard(SubscriptionKind::ExactPath(Arc::from("ui.theme.dark")));
+    let prefix = heard(SubscriptionKind::Prefix(Arc::from("ui.theme")));
+
+    store.set(["ui", "theme", "dark"], &true).unwrap();
+    store.set(["ui", "layout", "width"], &260u64).unwrap();
+    store.set(["ui", "themes", "dark"], &true).unwrap();
+
+    assert_eq!(any.lock().unwrap().len(), 3, "Any hears every write");
+    assert_eq!(
+        exact.lock().unwrap().as_slice(),
+        ["ui.theme.dark"],
+        "ExactPath hears only its own path"
+    );
+    assert_eq!(
+        prefix.lock().unwrap().as_slice(),
+        ["ui.theme.dark"],
+        "Prefix is matched by level, so `ui.theme` does not hear `ui.themes.dark`"
+    );
+}
+
+/// A dropped subscription stops hearing.
+fn a_dropped_subscription_stops_hearing(backend: Backend) {
+    let file = TempPath::new("conf_unsubscribe");
+    let store = open(backend, &file);
+
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let id = store.subscribe(
+        SubscriptionKind::Any,
+        Arc::new(move |event| sink.lock().unwrap().push(event.path.to_string())),
+    );
+
+    store.set(["ui", "theme"], &"dark".to_string()).unwrap();
+    store.unsubscribe(id);
+    store.set(["ui", "theme"], &"light".to_string()).unwrap();
+
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+/// The store's own bookkeeping is not data.
+///
+/// Marking a namespace initialized must not put anything a scan of that
+/// namespace will return, whether the engine keeps the marker in a table, a
+/// second file, or beside the data.
+fn the_initialization_marker_is_not_listed_as_data(backend: Backend) {
+    let file = TempPath::new("conf_init_marker");
+    let store = open(backend, &file);
+
+    store.mark_initialized("settings").unwrap();
+    store
+        .set(["settings", "host"], &"localhost".to_string())
+        .unwrap();
+
+    let keys = store.scan_keys(["settings"]).unwrap();
+
+    assert_eq!(keys, ["settings.host"], "a scan returned bookkeeping");
 }
 
 /// The statements, once. Each one names the engine the module it lands in was
@@ -1009,6 +1122,26 @@ macro_rules! conformance_suite {
         #[test]
         fn a_level_named_dot_is_an_ordinary_level() {
             super::a_level_named_dot_is_an_ordinary_level(BACKEND);
+        }
+
+        #[test]
+        fn a_namespace_is_uninitialized_until_it_is_marked() {
+            super::a_namespace_is_uninitialized_until_it_is_marked(BACKEND);
+        }
+
+        #[test]
+        fn a_subscription_hears_what_its_kind_asked_for() {
+            super::a_subscription_hears_what_its_kind_asked_for(BACKEND);
+        }
+
+        #[test]
+        fn a_dropped_subscription_stops_hearing() {
+            super::a_dropped_subscription_stops_hearing(BACKEND);
+        }
+
+        #[test]
+        fn the_initialization_marker_is_not_listed_as_data() {
+            super::the_initialization_marker_is_not_listed_as_data(BACKEND);
         }
     };
 }
