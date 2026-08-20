@@ -15,6 +15,17 @@ use crate::store::{StorageError, StorageResult, meta};
 pub use context::MigrationContext;
 pub use error::MigrationError;
 
+fn one_line(report: &error_stack::Report<StorageError>) -> String {
+    report
+        .frames()
+        .filter_map(|frame| match frame.kind() {
+            error_stack::FrameKind::Context(context) => Some(context.to_string()),
+            error_stack::FrameKind::Attachment(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" <- ")
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaDiff {
     pub added: Vec<meta::StoredFieldEntry>,
@@ -59,9 +70,13 @@ pub struct ComponentResult {
 
 #[derive(Debug)]
 pub enum ComponentOutcome {
-    Committed { steps: Vec<AppliedStep> },
+    Committed {
+        steps: Vec<AppliedStep>,
+    },
     Skipped,
-    Failed { error: StorageError },
+    Failed {
+        error: error_stack::Report<StorageError>,
+    },
 }
 
 impl MigrationReport {
@@ -115,7 +130,11 @@ impl MigrationReport {
                     }
                 }
                 ComponentOutcome::Failed { error } => {
-                    tracing::error!("❌ Component {:?} failed: {}", comp.prefixes, error);
+                    tracing::error!(
+                        "❌ Component {:?} failed: {}",
+                        comp.prefixes,
+                        one_line(error)
+                    );
                     tracing::error!(
                         "   Transaction rolled back. Data for these prefixes remains unchanged."
                     );

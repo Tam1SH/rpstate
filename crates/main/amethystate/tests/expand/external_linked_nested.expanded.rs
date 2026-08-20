@@ -53,16 +53,17 @@ impl ::std::fmt::Debug for ConnectionPool {
 impl ConnectionPool {
     pub fn new(
         store: &::amethystate::Store,
-        namespace: &str,
+        namespace: impl ::amethystate::store::IntoStorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
         store: &::amethystate::Store,
-        namespace: &str,
+        namespace: impl ::amethystate::store::IntoStorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::{StoreBackend, StoreExt};
+        let namespace = ::amethystate::store::to_path(namespace)?;
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -71,18 +72,30 @@ impl ConnectionPool {
             __amethystate_instance_id: __amethystate_guard,
             max_connections: ::amethystate::store::field_with_path(
                 store,
-                ::amethystate::join_path(namespace, "max_connections"),
+                namespace
+                    .join(
+                        &::amethystate::store::StorePath::from_static(
+                            &["max_connections"],
+                            "max_connections",
+                        ),
+                    ),
                 10,
                 instance_id,
             )?,
             timeout_secs: ::amethystate::store::field_with_path(
                 store,
-                ::amethystate::join_path(namespace, "timeout_secs"),
+                namespace
+                    .join(
+                        &::amethystate::store::StorePath::from_static(
+                            &["timeout_secs"],
+                            "timeout_secs",
+                        ),
+                    ),
                 30,
                 instance_id,
             )?,
         };
-        store.mark_initialized(namespace)?;
+        store.mark_initialized(namespace.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -167,13 +180,13 @@ impl ConnectionPool {
 impl ::amethystate::AmeStateNode for ConnectionPool {
     fn new_node(
         store: &::amethystate::Store,
-        path: &str,
+        path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new(store, path)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        path: &str,
+        path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, path, instance_id)
@@ -475,16 +488,34 @@ impl ConnectionPool_Data {
     #[doc(hidden)]
     pub fn __amethystate_load_from(
         store: &::amethystate::Store,
-        prefix: &str,
+        prefix: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
             max_connections: <::amethystate::Store as ::amethystate::StoreExt>::get::<
                 u32,
-            >(store, &::amethystate::join_path(prefix, "max_connections"))?
+            >(
+                    store,
+                    &prefix
+                        .join(
+                            &::amethystate::store::StorePath::from_static(
+                                &["max_connections"],
+                                "max_connections",
+                            ),
+                        ),
+                )?
                 .unwrap_or_else(|| 10),
             timeout_secs: <::amethystate::Store as ::amethystate::StoreExt>::get::<
                 u32,
-            >(store, &::amethystate::join_path(prefix, "timeout_secs"))?
+            >(
+                    store,
+                    &prefix
+                        .join(
+                            &::amethystate::store::StorePath::from_static(
+                                &["timeout_secs"],
+                                "timeout_secs",
+                            ),
+                        ),
+                )?
                 .unwrap_or_else(|| 30),
         })
     }
@@ -492,16 +523,28 @@ impl ConnectionPool_Data {
     pub fn __amethystate_save_to(
         &self,
         store: &::amethystate::Store,
-        prefix: &str,
+        prefix: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<()> {
         <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
-            &::amethystate::join_path(prefix, "max_connections"),
+            &prefix
+                .join(
+                    &::amethystate::store::StorePath::from_static(
+                        &["max_connections"],
+                        "max_connections",
+                    ),
+                ),
             &self.max_connections,
         )?;
         <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
-            &::amethystate::join_path(prefix, "timeout_secs"),
+            &prefix
+                .join(
+                    &::amethystate::store::StorePath::from_static(
+                        &["timeout_secs"],
+                        "timeout_secs",
+                    ),
+                ),
             &self.timeout_secs,
         )?;
         Ok(())
@@ -624,7 +667,11 @@ impl ::std::fmt::Debug for DatabaseState {
     }
 }
 impl ::amethystate::StateScope for DatabaseState {
-    const PREFIX: &'static str = "sys.database";
+    const PATH: ::amethystate::store::StorePath = ::amethystate::store::StorePath::from_static(
+        &["sys", "database"],
+        "sys.database",
+    );
+    const KEY: &'static str = "sys.database";
 }
 impl DatabaseState {
     pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
@@ -641,15 +688,21 @@ impl DatabaseState {
         );
         let result = Self {
             __amethystate_instance_id: __amethystate_guard,
-            pool: {
-                let prefix = <Self as ::amethystate::StateScope>::PREFIX;
-                let path = ::amethystate::join_path(prefix, "pool");
-                ::std::sync::Arc::new(
-                    ConnectionPool::new_with_id(store, path.as_str(), instance_id)?,
-                )
-            },
+            pool: ::std::sync::Arc::new(
+                ConnectionPool::new_with_id(
+                    store,
+                    <Self as ::amethystate::StateScope>::PATH
+                        .join(
+                            &::amethystate::store::StorePath::from_static(
+                                &["pool"],
+                                "pool",
+                            ),
+                        ),
+                    instance_id,
+                )?,
+            ),
         };
-        store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
+        store.mark_initialized(<Self as ::amethystate::StateScope>::PATH.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -706,13 +759,13 @@ impl DatabaseState {
 impl ::amethystate::AmeStateNode for DatabaseState {
     fn new_node(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
@@ -1017,7 +1070,12 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some("sys.database"),
+                prefix: Some(
+                    ::amethystate::store::StorePath::from_static(
+                        &["sys", "database"],
+                        "sys.database",
+                    ),
+                ),
                 struct_name: "DatabaseState",
                 version: 0u32,
                 schema_hash: <DatabaseState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
@@ -1101,7 +1159,11 @@ impl ::std::fmt::Debug for InspectorState {
     }
 }
 impl ::amethystate::StateScope for InspectorState {
-    const PREFIX: &'static str = "ui.inspector";
+    const PATH: ::amethystate::store::StorePath = ::amethystate::store::StorePath::from_static(
+        &["ui", "inspector"],
+        "ui.inspector",
+    );
+    const KEY: &'static str = "ui.inspector";
 }
 impl InspectorState {
     pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
@@ -1128,18 +1190,20 @@ impl InspectorState {
                     let _ = unsafe { (&*::core::ptr::null::<DatabaseState>()) }
                         .__schema_field_pool();
                 };
-                let parent_prefix = <DatabaseState as ::amethystate::StateScope>::PREFIX;
-                let path = ::amethystate::join_path(parent_prefix, "pool");
+                let path = <DatabaseState as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["pool"], "pool"),
+                    );
                 ::std::sync::Arc::new(
                     <ConnectionPool as ::amethystate::AmeStateNode>::new_node_with_id(
                         store,
-                        path.as_str(),
+                        &path,
                         instance_id,
                     )?,
                 )
             },
         };
-        store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
+        store.mark_initialized(<Self as ::amethystate::StateScope>::PATH.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -1201,13 +1265,13 @@ impl InspectorState {
 impl ::amethystate::AmeStateNode for InspectorState {
     fn new_node(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
@@ -1419,7 +1483,7 @@ impl ::amethystate::migration::fields::AmeStateFields for InspectorState_Data {
     const SCHEMA_HASH: u32 = ::amethystate::migration::types::schema_hash(Self::FIELDS);
     const PARENT_PREFIX: &'static str = "ui.inspector";
     const MIGRATION_DEPS: &'static [&'static str] = &[
-        <DatabaseState as ::amethystate::StateScope>::PREFIX,
+        <DatabaseState as ::amethystate::StateScope>::KEY,
     ];
     fn load_struct(
         ctx: &mut ::amethystate::MigrationContext,
@@ -1441,7 +1505,12 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some("ui.inspector"),
+                prefix: Some(
+                    ::amethystate::store::StorePath::from_static(
+                        &["ui", "inspector"],
+                        "ui.inspector",
+                    ),
+                ),
                 struct_name: "InspectorState",
                 version: 0u32,
                 schema_hash: <InspectorState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

@@ -816,10 +816,10 @@ mod tests {
         assert_eq!(path.as_str(), "a*b[c]?\u{0}d");
     }
 
-    /// Keys the reader in use today accepts and this one refuses. `.` is the
-    /// sentinel `split_path` maps to the whole document, and a trailing
-    /// separator is what `join_path` writes for an empty key: both are already
-    /// in stores, and neither is a path.
+    /// Keys a looser reader accepts and this one refuses. `.` is the sentinel
+    /// the text engines' `split_path` still maps to the whole document, and a
+    /// trailing separator is what joining an empty key used to write: both are
+    /// already in stores, and neither is a path.
     #[test]
     fn keys_already_written_that_are_not_paths() {
         assert_eq!(

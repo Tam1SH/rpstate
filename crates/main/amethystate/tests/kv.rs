@@ -92,7 +92,10 @@ fn writing_into_a_declared_prefix_is_refused() {
         .unwrap()
         .set("port", &"not a number".to_string())
         .unwrap_err();
-    assert!(matches!(err, WriteError::SchemaOwned { .. }), "got {err:?}");
+    assert!(
+        matches!(err.current_context(), WriteError::SchemaOwned { .. }),
+        "got {err:?}"
+    );
 
     assert!(kv.namespace("typed").unwrap().cell("port", 1u16).is_err());
     assert!(kv.namespace("typed").unwrap().remove("port").is_err());
@@ -132,7 +135,7 @@ fn the_same_path_cannot_be_two_types() {
         .unwrap_err();
 
     assert!(
-        matches!(err, WriteError::TypeMismatch { .. }),
+        matches!(err.current_context(), WriteError::TypeMismatch { .. }),
         "got {err:?}"
     );
 }

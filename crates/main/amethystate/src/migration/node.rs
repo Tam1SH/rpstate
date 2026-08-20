@@ -1,12 +1,13 @@
 use crate::Store;
 use crate::migration::fields::AmeStateFields;
 use crate::store::StorageResult;
+use amethystate_core::path::StorePath;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub trait AmeStateNode: Sized {
-    fn new_node(store: &Store, path: &str) -> StorageResult<Self>;
-    fn new_node_with_id(store: &Store, path: &str, instance_id: Uuid) -> StorageResult<Self>;
+    fn new_node(store: &Store, path: &StorePath) -> StorageResult<Self>;
+    fn new_node_with_id(store: &Store, path: &StorePath, instance_id: Uuid) -> StorageResult<Self>;
 }
 
 pub trait AmeState {

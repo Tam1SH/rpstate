@@ -1,4 +1,5 @@
 use amethystate::migration::ComponentOutcome;
+use amethystate::store::IntoStorageReport;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{AmeData, MigrationError, migrate};
 use amethystate_core::test_utils::unique_path;
@@ -382,7 +383,7 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback() {
             m.for_node::<BrokenChild>().depends_on::<BrokenRoot>().step(
                 2,
                 "fail broken branch",
-                |_| Err(MigrationError::Custom("intentional failure".into()).into()),
+                |_| Err(MigrationError::Custom("intentional failure".into()).into_report()),
             );
         })
         .build_with_report()
@@ -408,8 +409,12 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback() {
     ));
     assert!(logs_contain("✅ Applied: complex_telemetry v2"));
     assert!(logs_contain(
-        "❌ Component [\"complex_broken_child\", \"complex_broken_root\"] failed: Migration error: intentional failure"
+        "❌ Component [\"complex_broken_child\", \"complex_broken_root\"] failed"
     ));
+    assert!(
+        logs_contain("intentional failure"),
+        "the report carries the step's own refusal, not only the context above it"
+    );
     assert!(logs_contain(
         "Transaction rolled back. Data for these prefixes remains unchanged."
     ));

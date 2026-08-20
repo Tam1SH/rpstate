@@ -112,7 +112,10 @@ impl MigrationSet {
                     .map(|idx| sub_graph[idx].clone())
                     .collect()
             })
-            .map_err(|cycle| MigrationError::Cycle(sub_graph[cycle.node_id()].clone()).into())
+            .map_err(|cycle| {
+                error_stack::Report::new(MigrationError::Cycle(sub_graph[cycle.node_id()].clone()))
+                    .change_context(crate::store::StorageError::Migrate)
+            })
     }
 
     pub(crate) fn get_migration_plan(&self, prefix: &str) -> Option<&MigrationPlan> {
@@ -125,7 +128,6 @@ mod tests {
     use super::*;
 
     use crate::migration::fields::FieldDescriptor;
-    use crate::store::StorageError;
 
     const EMPTY_FIELDS: &[FieldDescriptor] = &[];
 
@@ -190,8 +192,8 @@ mod tests {
         let comp = &set.find_components()[0];
         let result = set.topo_sort_component(comp).unwrap_err();
 
-        match result {
-            StorageError::Migration(MigrationError::Cycle(prefix)) => {
+        match result.downcast_ref::<MigrationError>() {
+            Some(MigrationError::Cycle(prefix)) => {
                 assert!(["a", "b", "c"].contains(&prefix.as_str()));
             }
             _ => panic!("Expected MigrationCycle error, got {:?}", result),

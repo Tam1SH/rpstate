@@ -41,11 +41,12 @@ mod ts_mapping;
 /// | nested struct at field `db` inside prefix `sys`, its field `host` | `sys.db.host` |
 /// | `#[amethystate(as_root)]`, field `port` | `port` |
 ///
-/// `as_root` sets the prefix to `.`, which trims away to nothing, so the
-/// field's key becomes the whole path. An empty prefix behaves the same way.
+/// `as_root` gives the struct no levels of its own, so a field's key is the
+/// whole path. An empty prefix behaves the same way.
 ///
-/// The same joining is available at runtime as `amethystate::join_path`, and a
-/// field reports where it ended up through `Field::path`.
+/// The levels are taken apart here, at expansion, and the struct carries them
+/// as `StateScope::PATH`; nothing splits a string at startup. A field reports
+/// where it ended up through `Field::path`.
 ///
 /// # Field Attributes (`#[amestate(...)]`)
 ///

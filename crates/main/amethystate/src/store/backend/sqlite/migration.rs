@@ -1,10 +1,12 @@
 use super::error::SqliteStoreError;
 use crate::codec::CodecError;
 use crate::migration::AppliedStep;
+use crate::store::error::StorageError;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageResult};
 use amethystate_core::path::StorePath;
+use error_stack::ResultExt;
 use rusqlite::{OptionalExtension, Transaction};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -23,17 +25,26 @@ impl<'a> SqliteMigrationBackend<'a> {
         let mut stmt = self
             .txn
             .prepare_cached(&sql)
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Meta)
+            .attach_with(|| format!("table: {table}"))
+            .attach_with(|| format!("key: {key}"))?;
         let res: Option<Vec<u8>> = stmt
             .query_row([key], |row| row.get(0))
             .optional()
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Meta)
+            .attach_with(|| format!("table: {table}"))
+            .attach_with(|| format!("key: {key}"))?;
 
         match res {
             Some(bytes) => Ok(Some(
                 sonic_rs::from_slice(&bytes)
                     .map_err(CodecError::from)
-                    .map_err(SqliteStoreError::from)?,
+                    .change_context(StorageError::Codec)
+                    .attach_with(|| format!("table: {table}"))
+                    .attach_with(|| format!("key: {key}"))
+                    .attach_with(|| format!("value bytes: {}", bytes.len()))?,
             )),
             None => Ok(None),
         }
@@ -42,15 +53,23 @@ impl<'a> SqliteMigrationBackend<'a> {
     fn set_typed<T: Serialize>(&self, table: &str, key: &str, value: &T) -> StorageResult<()> {
         let bytes = sonic_rs::to_vec(value)
             .map_err(CodecError::from)
-            .map_err(SqliteStoreError::from)?;
+            .change_context(StorageError::Codec)
+            .attach_with(|| format!("table: {table}"))
+            .attach_with(|| format!("key: {key}"))?;
 
         let sql = format!("REPLACE INTO {} (key, value) VALUES (?, ?)", table);
         let mut stmt = self
             .txn
             .prepare_cached(&sql)
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Meta)
+            .attach_with(|| format!("table: {table}"))
+            .attach_with(|| format!("key: {key}"))?;
         stmt.execute(rusqlite::params![key, bytes])
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Meta)
+            .attach_with(|| format!("table: {table}"))
+            .attach_with(|| format!("key: {key}"))?;
         Ok(())
     }
 }
@@ -64,20 +83,28 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         let mut stmt = self
             .txn
             .prepare_cached("SELECT value FROM data WHERE key = ?")
-            .map_err(SqliteStoreError::from)?;
-        Ok(stmt
-            .query_row([key], |row| row.get(0))
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Read)
+            .attach_with(|| format!("key: {key}"))?;
+        stmt.query_row([key], |row| row.get(0))
             .optional()
-            .map_err(SqliteStoreError::from)?)
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Read)
+            .attach_with(|| format!("key: {key}"))
     }
 
     fn set(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
         let mut stmt = self
             .txn
             .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Write)
+            .attach_with(|| format!("key: {key}"))?;
         stmt.execute(rusqlite::params![key, value])
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Write)
+            .attach_with(|| format!("key: {key}"))
+            .attach_with(|| format!("value bytes: {}", value.len()))?;
         Ok(())
     }
 
@@ -85,8 +112,13 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         let mut stmt = self
             .txn
             .prepare_cached("DELETE FROM data WHERE key = ?")
-            .map_err(SqliteStoreError::from)?;
-        stmt.execute([key]).map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Delete)
+            .attach_with(|| format!("key: {key}"))?;
+        stmt.execute([key])
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Delete)
+            .attach_with(|| format!("key: {key}"))?;
         Ok(())
     }
 
@@ -94,15 +126,24 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         let mut stmt = self
             .txn
             .prepare_cached("SELECT key, value FROM data WHERE key GLOB ?")
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Scan)
+            .attach_with(|| format!("prefix: {prefix}"))?;
         let pattern = format!("{}*", prefix);
         let rows = stmt
-            .query_map([pattern], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(SqliteStoreError::from)?;
+            .query_map([&pattern], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Scan)
+            .attach_with(|| format!("glob: {pattern}"))?;
 
         let mut res = Vec::new();
         for row in rows {
-            res.push(row.map_err(SqliteStoreError::from)?);
+            let entry = row
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Scan)
+                .attach_with(|| format!("glob: {pattern}"))
+                .attach_with(|| format!("rows read: {}", res.len()))?;
+            res.push(entry);
         }
         Ok(res)
     }

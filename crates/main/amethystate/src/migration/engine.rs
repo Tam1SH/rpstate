@@ -6,9 +6,17 @@ use crate::migration::{
 };
 use crate::observability::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
-use crate::store::StorageResult;
+use crate::store::{StorageError, StorageResult};
 use crate::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
+use amethystate_core::path::StorePath;
+use error_stack::{Report, ResultExt};
 use std::collections::HashMap;
+
+fn group_path(prefix: &str) -> StorageResult<StorePath> {
+    StorePath::parse_joined(prefix)
+        .change_context(StorageError::Path)
+        .attach_with(|| format!("migration group: {prefix}"))
+}
 
 pub trait StorageProvider {
     fn atomic<F, T>(&self, f: F) -> StorageResult<T>
@@ -35,16 +43,21 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
     pub fn ensure_snapshots(&self, failed: &[String]) -> StorageResult<()> {
         self.provider.atomic(|storage| {
             for entry in inventory::iter::<SchemaEntry> {
-                let prefix = match entry.prefix {
+                let prefix = match &entry.prefix {
                     Some(p) => p,
                     None => continue,
                 };
 
-                if failed.iter().any(|p| p == prefix) {
+                if failed.iter().any(|p| p == prefix.as_str()) {
                     continue;
                 }
 
-                let stored = storage.get_schema_snapshot(&crate::store::join_path("", prefix))?;
+                let stored = storage.get_schema_snapshot(prefix).attach_with(|| {
+                    format!(
+                        "recording the schema of {} v{} at {prefix}",
+                        entry.struct_name, entry.version
+                    )
+                })?;
 
                 let needs_update = match &stored {
                     None => true,
@@ -56,23 +69,30 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                 };
 
                 if needs_update {
-                    storage.set_schema_snapshot(
-                        &crate::store::join_path("", prefix),
-                        &SchemaSnapshot {
-                            version: entry.version,
-                            struct_name: Some(entry.struct_name.to_string()),
-                            schema_hash: entry.schema_hash,
-                            fields: entry
-                                .fields
-                                .iter()
-                                .map(|f| StoredFieldEntry {
-                                    name: f.name.to_string(),
-                                    type_name: f.type_name.to_string(),
-                                    type_hash: f.type_hash,
-                                })
-                                .collect(),
-                        },
-                    )?;
+                    storage
+                        .set_schema_snapshot(
+                            prefix,
+                            &SchemaSnapshot {
+                                version: entry.version,
+                                struct_name: Some(entry.struct_name.to_string()),
+                                schema_hash: entry.schema_hash,
+                                fields: entry
+                                    .fields
+                                    .iter()
+                                    .map(|f| StoredFieldEntry {
+                                        name: f.name.to_string(),
+                                        type_name: f.type_name.to_string(),
+                                        type_hash: f.type_hash,
+                                    })
+                                    .collect(),
+                            },
+                        )
+                        .attach_with(|| {
+                            format!(
+                                "recording the schema of {} v{} at {prefix}",
+                                entry.struct_name, entry.version
+                            )
+                        })?;
                 }
             }
             Ok(())
@@ -134,7 +154,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         mset: &MigrationSet,
     ) -> StorageResult<bool> {
         for prefix in prefixes {
-            let meta = storage.get_meta(&crate::store::join_path("", prefix))?;
+            let meta = storage.get_meta(&group_path(prefix)?)?;
             let current_v = meta.as_ref().map(|m| m.version).unwrap_or(0);
             let current_h = meta.as_ref().map(|m| m.hash).unwrap_or(0);
             let (target_v, target_h, _) = mset.get_target(prefix);
@@ -170,7 +190,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         prefix: &str,
         current_fields: &[FieldDescriptor],
     ) -> StorageResult<Option<SchemaDiff>> {
-        let snapshot = storage.get_schema_snapshot(&crate::store::join_path("", prefix))?;
+        let snapshot = storage.get_schema_snapshot(&group_path(prefix)?)?;
         let Some(old) = snapshot else {
             return Ok(None);
         };
@@ -221,8 +241,9 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         mset: &MigrationSet,
     ) -> StorageResult<(Vec<AppliedStep>, Vec<NaggingRecord>)> {
         let (target_v, target_hash, target_fields) = mset.get_target(prefix);
+        let prefix_path = group_path(prefix)?;
 
-        let meta_opt = storage.get_meta(&crate::store::join_path("", prefix))?;
+        let meta_opt = storage.get_meta(&prefix_path)?;
 
         let mut meta = match meta_opt {
             Some(m) => m,
@@ -235,7 +256,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
                 if start_v == target_v {
                     storage.set_meta(
-                        &crate::store::join_path("", prefix),
+                        &prefix_path,
                         &PrefixMeta {
                             version: target_v,
                             hash: target_hash,
@@ -254,12 +275,12 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         let mut nagging = Vec::new();
 
         if target_v < meta.version {
-            return Err(MigrationError::Downgrade {
+            return Err(Report::new(MigrationError::Downgrade {
                 prefix: prefix.to_string(),
                 db_version: meta.version,
                 code_version: target_v,
-            }
-            .into());
+            })
+            .change_context(StorageError::Migrate));
         }
 
         if target_hash != 0 && target_v == meta.version && target_hash != meta.hash {
@@ -275,24 +296,22 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
         let mut applied_steps = Vec::new();
         if let Some(plan) = mset.get_migration_plan(prefix) {
-            let mut history = storage
-                .get_migration_log(&crate::store::join_path("", prefix))?
-                .unwrap_or_default();
+            let mut history = storage.get_migration_log(&prefix_path)?.unwrap_or_default();
 
             applied_steps =
                 self.run_migrator_steps(storage, prefix, plan, &mut meta, target_v, &mut history)?;
 
             if !applied_steps.is_empty() {
                 meta.hash = target_hash;
-                storage.set_meta(&crate::store::join_path("", prefix), &meta)?;
-                storage.set_migration_log(&crate::store::join_path("", prefix), &history)?;
+                storage.set_meta(&prefix_path, &meta)?;
+                storage.set_migration_log(&prefix_path, &history)?;
             }
         }
 
         if meta.version == target_v && !target_fields.is_empty() {
             let struct_name = inventory::iter::<SchemaEntry>
                 .into_iter()
-                .find(|e| e.prefix == Some(prefix))
+                .find(|e| e.prefix.as_ref() == Some(&prefix_path))
                 .map(|e| e.struct_name.to_string());
 
             let new_snapshot = SchemaSnapshot {
@@ -309,7 +328,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                     .collect(),
             };
 
-            storage.set_schema_snapshot(&crate::store::join_path("", prefix), &new_snapshot)?;
+            storage.set_schema_snapshot(&prefix_path, &new_snapshot)?;
         }
 
         Ok((applied_steps, nagging))
@@ -337,12 +356,12 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             }
 
             if sv != meta.version + 1 {
-                return Err(MigrationError::Gap {
+                return Err(Report::new(MigrationError::Gap {
                     prefix: prefix.to_string(),
                     reached_version: meta.version,
                     expected_version: meta.version + 1,
-                }
-                .into());
+                })
+                .change_context(StorageError::Migrate));
             }
 
             step.run(&mut ctx)?;
@@ -379,7 +398,7 @@ mod tests {
 
     use crate::migration::context::{decode, encode};
     use crate::migration::fields::FieldDescriptor;
-    use crate::store::{CodecFormat, StorageError};
+    use crate::store::{CodecFormat, IntoStorageReport, StorageError};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::ops::Deref;
@@ -530,13 +549,14 @@ mod tests {
             panic!("Expected failed migration component");
         };
 
-        let StorageError::Migration(MigrationError::Gap {
+        assert_eq!(error.current_context(), &StorageError::Migrate);
+        let Some(MigrationError::Gap {
             prefix,
             reached_version,
             expected_version,
-        }) = error
+        }) = error.downcast_ref::<MigrationError>()
         else {
-            panic!("Expected migration gap");
+            panic!("Expected migration gap, got {error:?}");
         };
 
         assert_eq!(prefix, "app");
@@ -616,16 +636,16 @@ mod tests {
             panic!("Expected failed migration component");
         };
 
-        if let StorageError::Migration(MigrationError::Downgrade {
+        if let Some(MigrationError::Downgrade {
             db_version,
             code_version,
             ..
-        }) = error
+        }) = error.downcast_ref::<MigrationError>()
         {
             assert_eq!(*db_version, 5);
             assert_eq!(*code_version, 4);
         } else {
-            panic!("Expected Downgrade error");
+            panic!("Expected Downgrade error, got {error:?}");
         }
     }
 
@@ -643,7 +663,7 @@ mod tests {
             .add(
                 "b",
                 MigrationPlan::new().step(1, "fail", |_| {
-                    Err(MigrationError::Custom("err".into()).into())
+                    Err(MigrationError::Custom("err".into()).into_report())
                 }),
                 0,
                 EMPTY_FIELDS,

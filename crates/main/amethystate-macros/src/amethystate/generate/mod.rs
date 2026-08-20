@@ -12,6 +12,19 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, Ident, Token, Visibility};
 
+pub(crate) fn path_literal(crate_name: &TokenStream2, dotted: &str) -> TokenStream2 {
+    let (segments, joined) = path_parts(dotted);
+
+    quote! { #crate_name::store::StorePath::from_static(&[#(#segments),*], #joined) }
+}
+
+pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
+    let segments: Vec<&str> = dotted.split('.').filter(|s| !s.is_empty()).collect();
+    let joined = segments.join(".");
+
+    (segments, joined)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RpMode {
     Reactive,
@@ -317,7 +330,10 @@ fn generate_schema_export(
 ) -> TokenStream2 {
     let struct_name_str = name.to_string();
     let prefix_tokens = match prefix {
-        Some(p) => quote! { Some(#p) },
+        Some(p) => {
+            let path = path_literal(crate_name, p);
+            quote! { Some(#path) }
+        }
         None => quote! { None },
     };
 

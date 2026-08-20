@@ -1,7 +1,6 @@
 use super::document::TextDocument;
 use super::error::TextStoreError;
 use crate::MigrationReport;
-use crate::codec::CodecError;
 use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
@@ -16,6 +15,7 @@ use crate::store::{
     SubscriptionId, SubscriptionKind,
 };
 use amethystate_core::path::StorePath;
+use error_stack::{Report, ResultExt};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::fmt::Debug;
@@ -54,23 +54,37 @@ impl<D: TextDocument> StoreFile<D> {
 
     pub fn create_backup(&self) -> StorageResult<()> {
         if self.path.exists() {
-            std::fs::copy(&self.path, &self.backup_path).map_err(TextStoreError::from)?;
+            std::fs::copy(&self.path, &self.backup_path)
+                .map_err(TextStoreError::from)
+                .change_context(StorageError::Open)
+                .attach_with(|| format!("file: {}", self.path.display()))
+                .attach_with(|| format!("backup: {}", self.backup_path.display()))?;
         }
         Ok(())
     }
 
     pub fn load_or_empty(&self) -> StorageResult<D> {
         if self.path.exists() {
-            let content = std::fs::read_to_string(&self.path).map_err(TextStoreError::from)?;
-            D::parse(&content)
+            let content = std::fs::read_to_string(&self.path)
+                .map_err(TextStoreError::from)
+                .change_context(StorageError::Open)
+                .attach_with(|| format!("file: {}", self.path.display()))?;
+            D::parse(&content).attach_with(|| format!("file: {}", self.path.display()))
         } else {
             Ok(D::empty())
         }
     }
 
     pub fn persist(&self) -> StorageResult<()> {
-        let content = self.doc.read().serialize()?;
-        persist_atomic(&self.path, &content).map_err(TextStoreError::from)?;
+        let content = self
+            .doc
+            .read()
+            .serialize()
+            .attach_with(|| format!("file: {}", self.path.display()))?;
+        persist_atomic(&self.path, &content)
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Flush)
+            .attach_with(|| format!("file: {}", self.path.display()))?;
         Ok(())
     }
 
@@ -108,14 +122,18 @@ impl<D: TextDocument> Clone for StoreFiles<D> {
 
 impl<D: TextDocument> StoreFiles<D> {
     pub fn create_backups(&self) -> StorageResult<()> {
-        self.data.create_backup()?;
-        self.meta.create_backup()?;
+        self.data.create_backup().attach("role: the store's data")?;
+        self.meta
+            .create_backup()
+            .attach("role: the store's schema bookkeeping")?;
         Ok(())
     }
 
     pub fn persist(&self) -> StorageResult<()> {
-        self.data.persist()?;
-        self.meta.persist()?;
+        self.data.persist().attach("role: the store's data")?;
+        self.meta
+            .persist()
+            .attach("role: the store's schema bookkeeping")?;
         Ok(())
     }
 
@@ -197,8 +215,14 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
 
         files.create_backups()?;
 
-        let initial_data = files.data.load_or_empty()?;
-        let initial_meta = files.meta.load_or_empty()?;
+        let initial_data = files
+            .data
+            .load_or_empty()
+            .attach("role: the store's data")?;
+        let initial_meta = files
+            .meta
+            .load_or_empty()
+            .attach("role: the store's schema bookkeeping")?;
 
         *files.data.doc.write() = initial_data.clone();
         *files.meta.doc.write() = initial_meta.clone();
@@ -216,7 +240,9 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                     .inner
                     .files
                     .restore_from_backups(&initial_data, &initial_meta);
-                Err(e)
+                Err(e
+                    .attach(format!("store: {}", store.inner.files.data.path.display()))
+                    .attach("the files were restored from their backups"))
             }
         }
     }
@@ -300,13 +326,18 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
 
             watch_debouncer_trigger.schedule();
         })
-        .map_err(|e| TextStoreError::Watch(e.to_string()))?;
+        .map_err(|e| TextStoreError::Watch(e.to_string()))
+        .change_context(StorageError::Open)
+        .attach_with(|| format!("file: {}", config.path.display()))?;
 
         let watch_dir = config.path.parent().unwrap_or(Path::new("."));
         let mut watcher = watcher;
         watcher
             .watch(watch_dir, RecursiveMode::NonRecursive)
-            .map_err(|e| TextStoreError::Watch(e.to_string()))?;
+            .map_err(|e| TextStoreError::Watch(e.to_string()))
+            .change_context(StorageError::Open)
+            .attach_with(|| format!("watching: {}", watch_dir.display()))
+            .attach_with(|| format!("file: {}", config.path.display()))?;
 
         let inner = Arc::new(TextStoreInner {
             files,
@@ -363,7 +394,11 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
             meta_doc: self.inner.files.meta.doc.clone(),
         };
         let engine = MigrationEngine::new(&provider);
-        engine.run(mset)
+        engine
+            .run(mset)
+            .change_context(StorageError::Migrate)
+            .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
+            .attach_with(|| format!("meta file: {}", self.inner.files.meta.path.display()))
     }
 }
 
@@ -372,7 +407,12 @@ impl<D: TextDocument> TextStoreInner<D> {
         let guard = self.files.data.doc.read();
         let parts: Vec<&str> = path.segments().collect();
         match guard.get(&parts) {
-            Some(node) => Ok(Some(D::node_to_bytes(node)?)),
+            Some(node) => Ok(Some(
+                D::node_to_bytes(node)
+                    .change_context(StorageError::Read)
+                    .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                    .attach_with(|| format!("node: {path}"))?,
+            )),
             None => Ok(None),
         }
     }
@@ -384,7 +424,10 @@ impl<D: TextDocument> TextStoreInner<D> {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer()?;
-        let node = D::serialize_node(value)?;
+        let node = D::serialize_node(value)
+            .change_context(StorageError::Write)
+            .attach_with(|| format!("file: {}", self.files.data.path.display()))
+            .attach_with(|| format!("node: {path}"))?;
         self.set_node(path.clone(), node, source)
     }
 
@@ -409,11 +452,13 @@ impl<D: TextDocument> TextStoreInner<D> {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let guard = self.files.data.doc.read();
         scan_prefix_impl(&*guard, prefix)
+            .attach_with(|| format!("file: {}", self.files.data.path.display()))
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> Vec<String> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
         let guard = self.files.data.doc.read();
         scan_keys_impl(&*guard, prefix)
+            .attach_with(|| format!("file: {}", self.files.data.path.display()))
     }
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
@@ -425,8 +470,18 @@ impl<D: TextDocument> TextStoreInner<D> {
 
         let old_bytes = {
             let mut guard = self.files.data.doc.write();
-            let old = guard.get(&parts).map(|n| D::node_to_bytes(n)).transpose()?;
-            guard.delete(&parts)?;
+            let old = guard
+                .get(&parts)
+                .map(|n| D::node_to_bytes(n))
+                .transpose()
+                .change_context(StorageError::Delete)
+                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .attach_with(|| format!("node: {path}"))?;
+            guard
+                .delete(&parts)
+                .change_context(StorageError::Delete)
+                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .attach_with(|| format!("node: {path}"))?;
             old
         };
 
@@ -454,14 +509,22 @@ impl<D: TextDocument> TextStoreInner<D> {
 
         {
             let mut guard = self.files.data.doc.write();
-            let keys: Vec<String> = scan_prefix_impl(&*guard, prefix)?
+            let keys: Vec<String> = scan_prefix_impl(&*guard, prefix)
+                .change_context(StorageError::Delete)
+                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .attach_with(|| format!("prefix: {prefix}"))?
                 .into_iter()
                 .map(|(path, _)| path)
                 .collect();
 
             for key in keys {
                 let parts = split_path(&key);
-                guard.delete(&parts)?;
+                guard
+                    .delete(&parts)
+                    .change_context(StorageError::Delete)
+                    .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                    .attach_with(|| format!("prefix: {prefix}"))
+                    .attach_with(|| format!("node: {key}"))?;
             }
         }
 
@@ -504,11 +567,22 @@ impl<D: TextDocument> TextStoreInner<D> {
         {
             let mut guard = self.files.meta.doc.write();
             let parts = vec!["__init", namespace];
-            let node = D::serialize_node(&true)?;
-            guard.set(&parts, node)?;
+            let node = D::serialize_node(&true)
+                .change_context(StorageError::Meta)
+                .attach_with(|| format!("meta file: {}", self.files.meta.path.display()))
+                .attach_with(|| format!("namespace: {namespace}"))?;
+            guard
+                .set(&parts, node)
+                .change_context(StorageError::Meta)
+                .attach_with(|| format!("meta file: {}", self.files.meta.path.display()))
+                .attach_with(|| format!("namespace: {namespace}"))?;
         }
 
-        self.files.meta.persist()?;
+        self.files
+            .meta
+            .persist()
+            .change_context(StorageError::Meta)
+            .attach_with(|| format!("namespace: {namespace}"))?;
         Ok(())
     }
 
@@ -523,10 +597,24 @@ impl<D: TextDocument> TextStoreInner<D> {
         let parts: Vec<&str> = path_str.segments().collect();
         let (old_bytes, new_bytes) = {
             let mut guard = self.files.data.doc.write();
-            let old = guard.get(&parts).map(|n| D::node_to_bytes(n)).transpose()?;
-            guard.set(&parts, node)?;
+            let old = guard
+                .get(&parts)
+                .map(|n| D::node_to_bytes(n))
+                .transpose()
+                .change_context(StorageError::Write)
+                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .attach_with(|| format!("node: {path_str}"))
+                .attach("while reading the value being replaced")?;
+            guard
+                .set(&parts, node)
+                .change_context(StorageError::Write)
+                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .attach_with(|| format!("node: {path_str}"))?;
             let new_node = guard.get(&parts).unwrap();
-            let new_bytes = D::node_to_bytes(new_node)?;
+            let new_bytes = D::node_to_bytes(new_node)
+                .change_context(StorageError::Write)
+                .attach_with(|| format!("file: {}", self.files.data.path.display()))
+                .attach_with(|| format!("node: {path_str}"))?;
             (old, new_bytes)
         };
 
@@ -560,7 +648,10 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
     ) -> StorageResult<bool> {
         match self.inner.get_node_bytes(path)? {
             Some(bytes) => {
-                D::with_bytes_de(&bytes, f)?;
+                D::with_bytes_de(&bytes, f)
+                    .change_context(StorageError::Read)
+                    .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
+                    .attach_with(|| format!("node: {path}"))?;
                 Ok(true)
             }
             None => Ok(false),
@@ -573,6 +664,8 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
         D::with_bytes_de(bytes, f)
+            .change_context(StorageError::Codec)
+            .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
     }
 
     fn set_erased(
@@ -602,7 +695,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
-        Ok(self.inner.scan_keys(prefix))
+        self.inner.scan_keys(prefix)
     }
 
     fn delete(&self, path: &StorePath) -> StorageResult<()> {
@@ -639,8 +732,8 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         commit
     }
 
-    fn flush_prefix(&self, _prefix: &StorePath) -> StorageResult<()> {
-        self.save_now()
+    fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
+        self.save_now().attach_with(|| format!("prefix: {prefix}"))
     }
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
@@ -666,9 +759,9 @@ pub fn normalize_path(path: &str) -> StorageResult<String> {
         .join(".");
 
     if normalized.is_empty() {
-        return Err(StorageError::TextStore(TextStoreError::Codec(
-            CodecError::Custom("path cannot be empty".into()),
-        )));
+        return Err(Report::new(StorageError::Path)
+            .attach("a path must name at least one level")
+            .attach(format!("path: {path:?}")));
     }
     Ok(normalized)
 }
@@ -738,12 +831,15 @@ pub(super) fn scan_prefix_impl<D: TextDocument>(
         prefix.as_str(),
         &mut raw_nodes,
         Some(target_depth),
-    );
+    )?;
 
     let mut results = Vec::new();
     for (k, node) in raw_nodes {
         if k.starts_with(prefix.as_str()) {
-            let bytes = D::node_to_bytes(&node)?;
+            let bytes = D::node_to_bytes(&node)
+                .change_context(StorageError::Scan)
+                .attach_with(|| format!("prefix: {prefix}"))
+                .attach_with(|| format!("node: {k}"))?;
             results.push((k, bytes));
         }
     }
@@ -758,7 +854,7 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
     prefix_str: &str,
     results: &mut Vec<(String, D::Node)>,
     target_depth: Option<usize>,
-) {
+) -> StorageResult<()> {
     let current_depth = parts.len();
 
     if let Some(target_depth) = target_depth
@@ -770,10 +866,10 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
         {
             results.push((prefix_str.to_string(), node.clone()));
         }
-        return;
+        return Ok(());
     }
 
-    let children = doc.scan(parts);
+    let children = doc.scan(parts)?;
     if children.is_empty() {
         if !prefix_str.is_empty()
             && !prefix_str.ends_with('.')
@@ -783,11 +879,12 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
         }
     } else {
         for (full_key, _node) in children {
-            let Ok(child_path) = StorePath::parse_joined(&full_key) else {
-                continue;
-            };
+            let child_path = StorePath::parse_joined(&full_key)
+                .change_context(StorageError::Scan)
+                .attach_with(|| format!("stored key: {full_key}"))
+                .attach("the document holds a key this library could not have written")?;
             let child_parts: Vec<&str> = child_path.segments().collect();
-            let grand_children = doc.scan(&child_parts);
+            let grand_children = doc.scan(&child_parts)?;
 
             let should_stop = grand_children.is_empty()
                 || target_depth.is_some_and(|depth| child_parts.len() >= depth);
@@ -797,10 +894,12 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
                     results.push((full_key, child_node.clone()));
                 }
             } else {
-                scan_prefix_recursive(doc, &child_parts, prefix_str, results, target_depth);
+                scan_prefix_recursive(doc, &child_parts, prefix_str, results, target_depth)?;
             }
         }
     }
+
+    Ok(())
 }
 
 fn sync_external_changes<D: TextDocument>(
@@ -835,7 +934,15 @@ fn sync_external_changes<D: TextDocument>(
             let old = guard.clone();
             *guard = on_disk;
             info!("external store change detected");
-            diff_documents::<D>(&old, &*guard)
+            match diff_documents::<D>(&old, &*guard) {
+                Ok(events) => events,
+                Err(e) => {
+                    tracing::error!(
+                        "an external edit could not be read, so nobody was told about it: {e:?}"
+                    );
+                    return;
+                }
+            }
         }
     };
     for event in events {
@@ -843,13 +950,15 @@ fn sync_external_changes<D: TextDocument>(
     }
 }
 
-fn diff_documents<D: TextDocument>(old: &D, new: &D) -> Vec<StoreEvent> {
+fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreEvent>> {
     let mut old_nodes = Vec::new();
-    scan_prefix_recursive(old, &[], "", &mut old_nodes, None);
+    scan_prefix_recursive(old, &[], "", &mut old_nodes, None)
+        .attach("reading the document as it was before the edit")?;
     let old_map: std::collections::HashMap<String, D::Node> = old_nodes.into_iter().collect();
 
     let mut new_nodes = Vec::new();
-    scan_prefix_recursive(new, &[], "", &mut new_nodes, None);
+    scan_prefix_recursive(new, &[], "", &mut new_nodes, None)
+        .attach("reading the document as it is on disk")?;
     let new_map: std::collections::HashMap<String, D::Node> = new_nodes.into_iter().collect();
 
     let mut events = Vec::new();
@@ -898,18 +1007,23 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> Vec<StoreEvent> {
             (None, None) => {}
         }
     }
-    events
+
+    Ok(events)
 }
 
-pub(super) fn scan_keys_impl<D: TextDocument>(doc: &D, prefix: &StorePath) -> Vec<String> {
+pub(super) fn scan_keys_impl<D: TextDocument>(
+    doc: &D,
+    prefix: &StorePath,
+) -> StorageResult<Vec<String>> {
     let parts: Vec<&str> = prefix.segments().collect();
     let target_depth = parts.len() + 1;
     let mut keys = Vec::new();
-    scan_keys_recursive(doc, &parts, prefix.as_str(), &mut keys, Some(target_depth));
+    scan_keys_recursive(doc, &parts, prefix.as_str(), &mut keys, Some(target_depth))?;
 
     keys.retain(|k| k.starts_with(prefix.as_str()));
     keys.sort();
-    keys
+
+    Ok(keys)
 }
 
 fn scan_keys_recursive<D: TextDocument>(
@@ -918,7 +1032,7 @@ fn scan_keys_recursive<D: TextDocument>(
     prefix_str: &str,
     keys: &mut Vec<String>,
     target_depth: Option<usize>,
-) {
+) -> StorageResult<()> {
     let current_depth = parts.len();
 
     if let Some(target_depth) = target_depth
@@ -927,21 +1041,22 @@ fn scan_keys_recursive<D: TextDocument>(
         if !prefix_str.is_empty() && !prefix_str.ends_with('.') && doc.get(parts).is_some() {
             keys.push(prefix_str.to_string());
         }
-        return;
+        return Ok(());
     }
 
-    let children = doc.scan(parts);
+    let children = doc.scan(parts)?;
     if children.is_empty() {
         if !prefix_str.is_empty() && !prefix_str.ends_with('.') && doc.get(parts).is_some() {
             keys.push(prefix_str.to_string());
         }
     } else {
         for (full_key, _node) in children {
-            let Ok(child_path) = StorePath::parse_joined(&full_key) else {
-                continue;
-            };
+            let child_path = StorePath::parse_joined(&full_key)
+                .change_context(StorageError::Scan)
+                .attach_with(|| format!("stored key: {full_key}"))
+                .attach("the document holds a key this library could not have written")?;
             let child_parts: Vec<&str> = child_path.segments().collect();
-            let grand_children = doc.scan(&child_parts);
+            let grand_children = doc.scan(&child_parts)?;
 
             let should_stop = grand_children.is_empty()
                 || target_depth.is_some_and(|depth| child_parts.len() >= depth);
@@ -951,10 +1066,12 @@ fn scan_keys_recursive<D: TextDocument>(
                     keys.push(full_key);
                 }
             } else {
-                scan_keys_recursive(doc, &child_parts, prefix_str, keys, target_depth);
+                scan_keys_recursive(doc, &child_parts, prefix_str, keys, target_depth)?;
             }
         }
     }
+
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

@@ -3,6 +3,7 @@ use crate::FieldCore;
 use crate::path::StorePath;
 use crate::primitives::error::{FieldError, ReactiveFieldResult};
 use crate::primitives::field_core::FieldValue;
+use error_stack::{Report, ResultExt};
 use uuid::Uuid;
 
 pub fn field_set<B, T>(
@@ -11,16 +12,20 @@ pub fn field_set<B, T>(
     path: StorePath,
     value: T,
     source: Option<Uuid>,
-) -> ReactiveFieldResult<(), B::Error>
+) -> ReactiveFieldResult<()>
 where
     B: AmeBackendSync,
     T: FieldValue,
 {
     let change = core
         .run_interceptors(path.clone(), value, source)
-        .map_err(|_| FieldError::Intercepted)?;
+        .map_err(|_| Report::new(FieldError::Intercepted))
+        .attach_with(|| format!("field: {path}"))?;
 
-    backend.set_owned_with_source(path, &change.new_value, change.source)?;
+    backend
+        .set_owned_with_source(path.clone(), &change.new_value, change.source)
+        .change_context(FieldError::Storage)
+        .attach_with(|| format!("field: {path}"))?;
 
     Ok(())
 }

@@ -1,13 +1,34 @@
 use crate::migration::AppliedStep;
 use crate::migration::set::MigrationSet;
-use crate::store::error::StorageResult;
+use crate::store::error::{StorageError, StorageResult};
 use amethystate_core::path::{IntoStorePath, StorePath};
 
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::{CodecFormat, StoreCallback, SubscriptionId};
 use crate::{MigrationReport, Store, SubscriptionKind};
+use error_stack::{Report, ResultExt};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
+
+/// The path a caller named, or why what they gave is not one.
+///
+/// Every typed entry point takes `impl IntoStorePath` and has to make the same
+/// conversion; doing it here means the failure gets named once rather than at
+/// each of them.
+pub fn to_path(path: impl IntoStorePath) -> StorageResult<StorePath> {
+    path.into_store_path().change_context(StorageError::Path)
+}
+
+/// One more level under `path`, named by a map key.
+///
+/// A key comes from the caller's data, so it can turn out not to be a name at
+/// all; where that happens the report says which map and which key.
+pub fn entry_path(path: &StorePath, key: impl AsRef<str>) -> StorageResult<StorePath> {
+    let key = key.as_ref();
+    path.try_push(key)
+        .change_context(StorageError::Path)
+        .attach_with(|| format!("map: {path}, key: {key}"))
+}
 
 pub trait MigrationBackendAdapter {
     fn format(&self) -> CodecFormat;
@@ -117,17 +138,22 @@ pub trait StoreBackend: Send + Sync + 'static {
 /// `dyn StoreBackend`, so a call site never has to know which it holds.
 pub trait StoreExt: StoreBackend {
     fn get<T: DeserializeOwned>(&self, path: impl IntoStorePath) -> StorageResult<Option<T>> {
-        let path = path.into_store_path()?;
+        let path = to_path(path)?;
         let mut out = None;
         let found = self.get_erased(&path, &mut |d| {
-            out = Some(erased_serde::deserialize::<T>(d).map_err(crate::codec::CodecError::from)?);
+            out = Some(
+                erased_serde::deserialize::<T>(d)
+                    .map_err(crate::codec::CodecError::from)
+                    .change_context(StorageError::Codec)
+                    .attach_with(|| format!("path: {path}"))?,
+            );
             Ok(())
         })?;
         Ok(if found { out } else { None })
     }
 
     fn set<T: Serialize>(&self, path: impl IntoStorePath, value: &T) -> StorageResult<()> {
-        self.set_erased(&path.into_store_path()?, &value, None)
+        self.set_erased(&to_path(path)?, &value, None)
     }
 
     fn set_owned<T: Serialize>(&self, path: StorePath, value: &T) -> StorageResult<()> {
@@ -140,7 +166,7 @@ pub trait StoreExt: StoreBackend {
         value: &T,
         source: Option<Uuid>,
     ) -> StorageResult<()> {
-        self.set_erased(&path.into_store_path()?, &value, source)
+        self.set_erased(&to_path(path)?, &value, source)
     }
 
     fn set_owned_with_source<T: Serialize>(
@@ -152,25 +178,24 @@ pub trait StoreExt: StoreBackend {
         self.set_owned_erased(path, &value, source)
     }
 
-    /// Decode failures are not errors here: corrupted bytes or a changed type
-    /// yield `T::default()` with a warning, which is what the field would read
-    /// on the next startup anyway.
-    fn decode<T: DeserializeOwned + Default>(&self, bytes: &[u8]) -> StorageResult<T> {
+    /// Reads bytes that arrived in a [`StoreEvent`](crate::StoreEvent) as `T`.
+    fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> StorageResult<T> {
         let mut out = None;
-        let res = self.decode_erased(bytes, &mut |d| {
-            out = Some(erased_serde::deserialize::<T>(d).map_err(crate::codec::CodecError::from)?);
+        self.decode_erased(bytes, &mut |d| {
+            out = Some(
+                erased_serde::deserialize::<T>(d)
+                    .map_err(crate::codec::CodecError::from)
+                    .change_context(StorageError::Codec)
+                    .attach_with(|| format!("decoding {} bytes", bytes.len()))?,
+            );
             Ok(())
-        });
-        match res {
-            Ok(()) => Ok(out.unwrap_or_default()),
-            Err(e) => {
-                tracing::warn!(
-                    target: "amethystate",
-                    "Failed to decode field. Data is corrupted or type changed.                     Using Default value. Error: {e}"
-                );
-                Ok(T::default())
-            }
-        }
+        })?;
+
+        out.ok_or_else(|| {
+            Report::new(StorageError::Codec)
+                .attach("the backend accepted the bytes without producing a value")
+                .attach(format!("decoding {} bytes", bytes.len()))
+        })
     }
 }
 

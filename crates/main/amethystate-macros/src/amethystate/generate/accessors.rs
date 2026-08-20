@@ -1,3 +1,4 @@
+use crate::amethystate::generate::path_parts;
 use amethystate_macros_core::StoreFieldEntry;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
@@ -83,11 +84,11 @@ pub(crate) fn node_impl(crate_name: &TokenStream2, name: &Ident, is_root: bool) 
     if is_root {
         quote! {
             impl #crate_name::AmeStateNode for #name {
-                fn new_node(store: &#crate_name::Store, _path: &str) -> #crate_name::StorageResult<Self> {
+                fn new_node(store: &#crate_name::Store, _path: &#crate_name::store::StorePath) -> #crate_name::StorageResult<Self> {
                     Self::new_with(store)
                 }
 
-                fn new_node_with_id(store: &#crate_name::Store, _path: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                fn new_node_with_id(store: &#crate_name::Store, _path: &#crate_name::store::StorePath, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
                     Self::new_with_id(store, instance_id)
                 }
             }
@@ -95,11 +96,11 @@ pub(crate) fn node_impl(crate_name: &TokenStream2, name: &Ident, is_root: bool) 
     } else {
         quote! {
             impl #crate_name::AmeStateNode for #name {
-                fn new_node(store: &#crate_name::Store, path: &str) -> #crate_name::StorageResult<Self> {
+                fn new_node(store: &#crate_name::Store, path: &#crate_name::store::StorePath) -> #crate_name::StorageResult<Self> {
                     Self::new(store, path)
                 }
 
-                fn new_node_with_id(store: &#crate_name::Store, path: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                fn new_node_with_id(store: &#crate_name::Store, path: &#crate_name::store::StorePath, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
                     Self::new_with_id(store, path, instance_id)
                 }
             }
@@ -112,9 +113,16 @@ pub(crate) fn scope(
     name: &Ident,
     prefix: Option<String>,
 ) -> Option<TokenStream2> {
-    prefix.map(
-        |p| quote! { impl #crate_name::StateScope for #name { const PREFIX: &'static str = #p; } },
-    )
+    prefix.map(|p| {
+        let (segments, joined) = path_parts(&p);
+        quote! {
+            impl #crate_name::StateScope for #name {
+                const PATH: #crate_name::store::StorePath =
+                    #crate_name::store::StorePath::from_static(&[#(#segments),*], #joined);
+                const KEY: &'static str = #joined;
+            }
+        }
+    })
 }
 
 pub(crate) fn constructor(
@@ -135,24 +143,32 @@ pub(crate) fn constructor(
                     ::std::any::type_name::<Self>(),
                 );
                 let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
-                store.mark_initialized(<Self as #crate_name::StateScope>::PREFIX)?;
+                store.mark_initialized(<Self as #crate_name::StateScope>::PATH.as_str())?;
                 Ok(result)
             }
         }
     } else {
         quote! {
-            pub fn new(store: &#crate_name::Store, namespace: &str) -> #crate_name::StorageResult<Self> {
+            pub fn new(
+                store: &#crate_name::Store,
+                namespace: impl #crate_name::store::IntoStorePath,
+            ) -> #crate_name::StorageResult<Self> {
                 Self::new_with_id(store, namespace, #crate_name::uuid::Uuid::new_v4())
             }
 
-            pub fn new_with_id(store: &#crate_name::Store, namespace: &str, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+            pub fn new_with_id(
+                store: &#crate_name::Store,
+                namespace: impl #crate_name::store::IntoStorePath,
+                instance_id: #crate_name::uuid::Uuid,
+            ) -> #crate_name::StorageResult<Self> {
                 use #crate_name::{StoreBackend, StoreExt};
+                let namespace = #crate_name::store::to_path(namespace)?;
                 let __amethystate_guard = #crate_name::observability::InstanceGuard::new(
                     instance_id,
                     ::std::any::type_name::<Self>(),
                 );
                 let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
-                store.mark_initialized(namespace)?;
+                store.mark_initialized(namespace.as_str())?;
                 Ok(result)
             }
         }

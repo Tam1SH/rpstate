@@ -5,6 +5,7 @@ use crate::store::backend::text::document::{
     Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
 };
 use crate::store::{CodecFormat, StorageError};
+use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -61,7 +62,9 @@ impl TextDocument for TomlDocument {
             let table = match node.into_table() {
                 Ok(t) => t,
                 Err(_) => {
-                    return Err(StorageError::TextStore(TextStoreError::RootMustBeObject));
+                    return Err(Report::new(TextStoreError::RootMustBeObject)
+                        .change_context(StorageError::Write)
+                        .attach("node: the document root"));
                 }
             };
             *self.0.as_item_mut() = toml_edit::Item::Table(table);
@@ -77,7 +80,7 @@ impl TextDocument for TomlDocument {
         generic_delete(self.0.as_item_mut(), parts)
     }
 
-    fn scan(&self, parts: &[&str]) -> Vec<(String, Self::Node)> {
+    fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>> {
         generic_scan(self.0.as_item(), parts)
     }
 
@@ -85,7 +88,8 @@ impl TextDocument for TomlDocument {
         let doc = src
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)?;
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Open)?;
 
         Ok(TomlDocument(doc))
     }
@@ -109,7 +113,9 @@ impl TextDocument for TomlDocument {
         }
         let unwrapped: Unwrap<T> = toml_edit::de::from_str(&s)
             .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)?;
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Codec)
+            .attach_with(|| format!("into: {}", std::any::type_name::<T>()))?;
 
         Ok(unwrapped.val)
     }
@@ -122,12 +128,16 @@ impl TextDocument for TomlDocument {
 
         let s = toml_edit::ser::to_string(&Wrap { val: value })
             .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)?;
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Codec)
+            .attach_with(|| format!("from: {}", std::any::type_name::<T>()))?;
 
         let doc = s
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)?;
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Codec)
+            .attach_with(|| format!("from: {}", std::any::type_name::<T>()))?;
         Ok(doc
             .as_table()
             .get("val")
@@ -154,10 +164,13 @@ impl TextDocument for TomlDocument {
                     .unwrap_or(inner)
             }
         };
-        let de: toml_edit::de::ValueDeserializer =
-            rendered.trim().parse().map_err(|e: toml_edit::de::Error| {
+        let de: toml_edit::de::ValueDeserializer = rendered
+            .trim()
+            .parse()
+            .map_err(|e: toml_edit::de::Error| {
                 TextStoreError::Codec(CodecError::Toml(e.to_string()))
-            })?;
+            })
+            .change_context(StorageError::Codec)?;
         let mut erased = <dyn erased_serde::Deserializer>::erase(de);
         f(&mut erased)
     }
@@ -171,12 +184,14 @@ impl TextDocument for TomlDocument {
     fn bytes_to_node(bytes: &[u8]) -> StorageResult<Self::Node> {
         let s = std::str::from_utf8(bytes)
             .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)?;
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Codec)?;
 
         let doc = s
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)?;
+            .map_err(TextStoreError::from)
+            .change_context(StorageError::Codec)?;
 
         Ok(doc
             .as_table()

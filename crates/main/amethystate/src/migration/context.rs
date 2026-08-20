@@ -1,10 +1,10 @@
-use crate::MigrationError;
 use crate::codec::CodecError;
 use crate::migration::fields::AmeStateFields;
 use crate::migration::migrate_from::MigrateFrom;
 use crate::store::MigrationBackendAdapter;
-use crate::store::{CodecFormat, StorageResult};
+use crate::store::{CodecFormat, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
+use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -53,7 +53,11 @@ impl<'a> MigrationContext<'a> {
     /// Deleting a key that was never there is not an error - a migration has
     /// to survive running against data that skipped a version.
     pub fn delete(&mut self, key: &str) -> StorageResult<()> {
-        self.storage.delete(&self.scoped_path(key))
+        let scoped = self.scoped_path(key);
+        self.storage
+            .delete(&scoped)
+            .attach_with(|| format!("migrating {}: dropping {key}", self.prefix))
+            .attach_with(|| format!("stored key: {scoped}"))
     }
 
     /// Moves a value to another key, bytes untouched.
@@ -139,14 +143,21 @@ impl<'a> MigrationContext<'a> {
     /// The escape hatch for a migration the shaped helpers do not cover.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> StorageResult<Option<T>> {
         match self.get_raw(key)? {
-            Some(bytes) => Ok(Some(decode(self.storage, &bytes)?)),
+            Some(bytes) => Ok(Some(
+                decode(self.storage, &bytes)
+                    .attach_with(|| format!("migrating {}: reading {key}", self.prefix))
+                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
+            )),
             None => Ok(None),
         }
     }
 
     /// Writes a value relative to this context's prefix.
     pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> StorageResult<()> {
-        self.set_raw(key, &encode(self.storage, value)?)
+        let bytes = encode(self.storage, value)
+            .attach_with(|| format!("migrating {}: writing {key}", self.prefix))
+            .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?;
+        self.set_raw(key, &bytes)
     }
 
     /// Reads a value by its whole path, ignoring this context's prefix.
@@ -156,16 +167,26 @@ impl<'a> MigrationContext<'a> {
     /// with [`PrefixMigrationBuilder::depends_on`](crate::migration::builder::PrefixMigrationBuilder::depends_on)
     /// rather than hoping.
     pub fn global_get<T: DeserializeOwned>(&self, full_key: &str) -> StorageResult<Option<T>> {
-        match self.storage.get(full_key)? {
-            Some(bytes) => Ok(Some(decode(self.storage, &bytes)?)),
+        let read = self
+            .storage
+            .get(full_key)
+            .attach_with(|| format!("migrating {}: reading {full_key} elsewhere", self.prefix))?;
+
+        match read {
+            Some(bytes) => Ok(Some(decode(self.storage, &bytes).attach_with(|| {
+                format!("migrating {}: reading {full_key} elsewhere", self.prefix)
+            })?)),
             None => Ok(None),
         }
     }
 
     /// Writes a value by its whole path, ignoring this context's prefix.
     pub fn global_set<T: Serialize>(&mut self, full_key: &str, value: &T) -> StorageResult<()> {
-        let bytes = encode(self.storage, value)?;
-        self.storage.set(full_key, &bytes)
+        let bytes = encode(self.storage, value)
+            .attach_with(|| format!("migrating {}: writing {full_key} elsewhere", self.prefix))?;
+        self.storage
+            .set(full_key, &bytes)
+            .attach_with(|| format!("migrating {}: writing {full_key} elsewhere", self.prefix))
     }
 
     /// The stored bytes at `key`, undecoded.
@@ -173,14 +194,22 @@ impl<'a> MigrationContext<'a> {
     /// For moving a value whose type this step cannot name, or reading one
     /// written in a shape that no longer deserialises.
     pub fn get_raw(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
-        self.storage.get(&self.scoped_path(key))
+        let scoped = self.scoped_path(key);
+        self.storage
+            .get(&scoped)
+            .attach_with(|| format!("migrating {}: reading {key}", self.prefix))
+            .attach_with(|| format!("stored key: {scoped}"))
     }
 
     /// Writes bytes at `key` as they are.
     ///
     /// They must be in the backend's own encoding - [`encode`] produces it.
     pub fn set_raw(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
-        self.storage.set(&self.scoped_path(key), value)
+        let scoped = self.scoped_path(key);
+        self.storage
+            .set(&scoped, value)
+            .attach_with(|| format!("migrating {}: writing {key}", self.prefix))
+            .attach_with(|| format!("stored key: {scoped}, {} bytes", value.len()))
     }
 
     /// A context narrowed to a sub-prefix, so a nested part can be migrated
@@ -194,22 +223,50 @@ impl<'a> MigrationContext<'a> {
 
     /// Reads a whole [`ReactiveMap`](crate::ReactiveMap) at `key` as a plain
     /// map, so a step can rewrite its entries.
+    ///
+    /// Every entry under the prefix has to come back. A step reads the map,
+    /// changes it and writes it whole, so an entry dropped here is an entry the
+    /// migration deletes - and a migration runs once, against data that has no
+    /// other copy. An entry that cannot be read is an error, and the
+    /// transaction it is in rolls back.
     pub fn scan_map<K, V>(&self, key: &str) -> StorageResult<HashMap<K, V>>
     where
         K: FromStr + Eq + Hash,
         V: DeserializeOwned,
     {
-        let full_prefix = StorePath::parse_joined(&self.scoped_path(key))?;
-        let raw = self.storage.scan_prefix(&full_prefix)?;
+        let scoped = self.scoped_path(key);
+        let full_prefix = StorePath::parse_joined(&scoped)
+            .change_context(StorageError::Path)
+            .attach_with(|| format!("migration key: {scoped}"))?;
+        let raw = self
+            .storage
+            .scan_prefix(&full_prefix)
+            .attach_with(|| format!("migrating {}: reading the map at {key}", self.prefix))?;
         let mut map = HashMap::new();
+
         for (path, bytes) in raw {
-            if let Some(k_str) = full_prefix.entry_name(&path)
-                && let Ok(kv) = K::from_str(&k_str)
-                && let Ok(vv) = decode::<V>(self.storage, &bytes)
-            {
-                map.insert(kv, vv);
-            }
+            let name = full_prefix.entry_name(&path).ok_or_else(|| {
+                Report::new(StorageError::Path)
+                    .attach(format!("map: {full_prefix}"))
+                    .attach(format!("stored key: {path}"))
+                    .attach("the key is not a path this library could have written")
+            })?;
+
+            let parsed = K::from_str(&name).map_err(|_| {
+                Report::new(StorageError::Codec)
+                    .attach(format!("map: {full_prefix}"))
+                    .attach(format!("entry: {name}"))
+                    .attach(format!("key type: {}", std::any::type_name::<K>()))
+            })?;
+
+            let value = decode::<V>(self.storage, &bytes)
+                .attach_with(|| format!("map: {full_prefix}"))
+                .attach_with(|| format!("entry: {name}"))
+                .attach_with(|| format!("value type: {}", std::any::type_name::<V>()))?;
+
+            map.insert(parsed, value);
         }
+
         Ok(map)
     }
 
@@ -232,14 +289,12 @@ pub fn encode<T: Serialize>(
         #[cfg(feature = "redb")]
         CodecFormat::MessagePack => rmp_serde::to_vec(value)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(feature = "json")]
         CodecFormat::Json => serde_json::to_vec(value)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(feature = "toml")]
         CodecFormat::Toml => {
@@ -250,27 +305,23 @@ pub fn encode<T: Serialize>(
             toml_edit::ser::to_string(&Wrap { val: value })
                 .map(|s| s.into_bytes())
                 .map_err(|e| CodecError::Toml(e.to_string()))
-                .map_err(MigrationError::from)
-                .map_err(Into::into)
+                .change_context(StorageError::Codec)
         }
         #[cfg(feature = "sqlite")]
         CodecFormat::SonicJson => sonic_rs::to_vec(value)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(feature = "ron")]
         CodecFormat::Ron => ron::to_string(value)
             .map(|s| s.into_bytes())
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(test)]
         CodecFormat::Default => serde_json::to_vec(value)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
     }
 }
 
@@ -282,14 +333,12 @@ pub fn decode<T: DeserializeOwned>(
         #[cfg(feature = "redb")]
         CodecFormat::MessagePack => rmp_serde::from_slice(bytes)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(feature = "json")]
         CodecFormat::Json => serde_json::from_slice(bytes)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(feature = "toml")]
         CodecFormat::Toml => {
@@ -300,26 +349,22 @@ pub fn decode<T: DeserializeOwned>(
             toml_edit::de::from_slice::<Unwrap<T>>(bytes)
                 .map(|unwrapped| unwrapped.val)
                 .map_err(|e| CodecError::Toml(e.to_string()))
-                .map_err(MigrationError::from)
-                .map_err(Into::into)
+                .change_context(StorageError::Codec)
         }
         #[cfg(feature = "sqlite")]
         CodecFormat::SonicJson => sonic_rs::from_slice(bytes)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(feature = "ron")]
         CodecFormat::Ron => ron::de::from_bytes(bytes)
             .map_err(|e| CodecError::from(e.code))
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
 
         #[cfg(test)]
         CodecFormat::Default => serde_json::from_slice(bytes)
             .map_err(CodecError::from)
-            .map_err(MigrationError::from)
-            .map_err(Into::into),
+            .change_context(StorageError::Codec),
     }
 }
 

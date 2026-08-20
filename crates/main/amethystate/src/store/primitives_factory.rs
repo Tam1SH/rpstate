@@ -1,4 +1,5 @@
 use crate::observability::register_field;
+use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::{
     Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, StoreSubscription,
@@ -7,15 +8,17 @@ use crate::{
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::{IntoStorePath, StorePath};
 use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
+use error_stack::ResultExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// A field under `TScope`'s path, at the levels `key` names.
 pub fn field<TScope, TValue>(
     store: &Store,
-    key: &str,
+    key: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
 ) -> StorageResult<Field<TValue, WritableMode>>
@@ -23,7 +26,7 @@ where
     TScope: StateScope,
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
 {
-    let path = scoped_path::<TScope>(key);
+    let path = TScope::PATH.join(&crate::store::to_path(key)?);
     field_with_path(store, path, default, instance_id)
 }
 
@@ -37,7 +40,7 @@ where
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
     M: AccessMode,
 {
-    let path = path.into_store_path()?;
+    let path = crate::store::to_path(path)?;
 
     register_field(
         Arc::from(path.as_str()),
@@ -88,9 +91,10 @@ where
     })
 }
 
+/// A map under `TScope`'s path, at the levels `key` names.
 pub fn reactive_map<TScope, K, V>(
     store: &Store,
-    key: &str,
+    key: impl IntoStorePath,
     default: HashMap<K, V>,
     instance_id: Uuid,
 ) -> StorageResult<ReactiveMap<K, V, WritableMode>>
@@ -99,7 +103,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let path = scoped_path::<TScope>(key);
+    let path = TScope::PATH.join(&crate::store::to_path(key)?);
     reactive_map_with_path::<TScope, _, _, _>(store, path, default, instance_id)
 }
 
@@ -129,12 +133,25 @@ where
 {
     let mut entries = HashMap::new();
 
-    for (stored, bytes) in store.scan_prefix(path)? {
-        if let Some(key) = path.entry_name(&stored)
-            && let Ok(key) = K::from_str(&key)
-        {
-            entries.insert(key, store.decode::<V>(&bytes)?);
-        }
+    let scanned = store
+        .scan_prefix(path)
+        .attach_with(|| format!("map: {path}"))?;
+
+    for (stored, bytes) in scanned {
+        let Some(name) = path.entry_name(&stored) else {
+            continue;
+        };
+        let Ok(key) = K::from_str(&name) else {
+            continue;
+        };
+
+        let value = store
+            .decode::<V>(&bytes)
+            .attach_with(|| format!("map: {path}"))
+            .attach_with(|| format!("entry: {name}"))
+            .attach_with(|| format!("as: {}", std::any::type_name::<V>()))?;
+
+        entries.insert(key, value);
     }
 
     Ok(entries)
@@ -151,7 +168,7 @@ where
     V: ReactiveMapValue,
     M: AccessMode,
 {
-    let path = path.into_store_path()?;
+    let path = crate::store::to_path(path)?;
     let mut known_cache = load_map::<K, V>(store, &path)?;
 
     // Keyed on this map's own path, not on the scope. A scope is marked
@@ -165,7 +182,10 @@ where
 
     if !seeded_before {
         for (k, v) in defaults {
-            let full_path = path.try_push(k.to_string())?;
+            let full_path = path
+                .try_push(k.to_string())
+                .change_context(StorageError::Path)
+                .attach_with(|| format!("map: {path}, default key: {k}"))?;
             store.set(&full_path, &v)?;
             known_cache.insert(k, v);
         }
@@ -202,23 +222,39 @@ where
             {
                 let source = event.source;
 
-                let new_val = event
-                    .new
-                    .as_ref()
-                    .and_then(|b| store_clone.decode::<V>(b).ok());
+                let new_val = match event.new.as_ref().map(|b| store_clone.decode::<V>(b)) {
+                    Some(Ok(value)) => Some(value),
+                    Some(Err(e)) => {
+                        tracing::error!(
+                            path = %event.path,
+                            "a map entry cannot be read as this map's value type, so the map kept what it had: {e:?}"
+                        );
+                        return;
+                    }
+                    None => None,
+                };
+
                 let old_val = event
                     .old
                     .as_ref()
-                    .and_then(|b| store_clone.decode::<V>(b).ok());
+                    .and_then(|b| store_clone.decode::<V>(b).ok())
+                    .or_else(|| core_clone.cache.get(&k).map(|v| v.clone()));
 
                 let change = {
                     let keys = &core_clone.cache;
 
                     match event.op {
                         StoreOp::Set => {
+                            let Some(new_value) = new_val else {
+                                tracing::error!(
+                                    path = %event.path,
+                                    "a set carried no value, so the map kept what it had"
+                                );
+                                return;
+                            };
+
                             if keys.contains_key(&k) {
                                 let old_value = old_val.unwrap_or_default();
-                                let new_value = new_val.unwrap_or_default();
                                 keys.insert(k.clone(), new_value.clone());
                                 MapChange::Update {
                                     key: k.clone(),
@@ -227,11 +263,10 @@ where
                                     source,
                                 }
                             } else {
-                                let val = new_val.unwrap_or_default();
-                                keys.insert(k.clone(), val.clone());
+                                keys.insert(k.clone(), new_value.clone());
                                 MapChange::Insert {
                                     key: k.clone(),
-                                    value: val,
+                                    value: new_value,
                                     source,
                                 }
                             }
@@ -265,23 +300,4 @@ where
         }),
         _mode: std::marker::PhantomData,
     })
-}
-
-/// Composes a path out of a prefix and a key, both of which spell their levels
-/// with the separator.
-///
-/// The macro still writes both as one string, so this is where that spelling is
-/// read: empty levels are dropped, which is what the trimming here always did.
-pub fn join_path(prefix: &str, key: &str) -> StorePath {
-    let segments: Vec<&str> = prefix
-        .split('.')
-        .chain(key.split('.'))
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    StorePath::from_segments(segments)
-}
-
-pub fn scoped_path<T: StateScope>(key: &str) -> StorePath {
-    join_path(T::PREFIX, key)
 }

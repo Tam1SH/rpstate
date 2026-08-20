@@ -35,6 +35,7 @@ use crate::{Store, StoreBuilder};
 
 use crate::store::StoreBackend;
 use amethystate_core::path::StorePath;
+use error_stack::Report;
 #[cfg(feature = "toml")]
 use toml_edit::de::Error as TomlDeErr;
 #[cfg(feature = "toml")]
@@ -131,69 +132,62 @@ pub enum ConfyError {
     SetPermissionsFileError(#[source] std::io::Error),
 }
 
-impl From<RpError> for ConfyError {
-    fn from(err: RpError) -> Self {
-        match err {
-            RpError::Codec(e) => ConfyError::GeneralLoadError(std::io::Error::other(e.to_string())),
-            RpError::Path(e) => ConfyError::GeneralLoadError(std::io::Error::other(e.to_string())),
-            #[cfg(feature = "text")]
-            RpError::TextStore(text_err) => {
-                use crate::store::backend::text::error::TextStoreError;
-                match text_err {
-                    TextStoreError::Io(io_err) => ConfyError::GeneralLoadError(io_err),
-                    TextStoreError::Codec(codec_err) => match codec_err {
-                        #[cfg(feature = "json")]
-                        CodecError::Json(e) => ConfyError::BadJsonData(e),
-                        #[cfg(feature = "toml")]
-                        CodecError::Toml(s) => {
-                            #[cfg(feature = "toml")]
-                            {
-                                ConfyError::BadTomlData(serde::de::Error::custom(s))
-                            }
-                            #[cfg(not(feature = "toml"))]
-                            {
-                                panic!(
-                                    "TOML codec error encountered but feature `toml` is disabled: {}",
-                                    s
-                                );
-                            }
-                        }
-                        #[cfg(feature = "ron")]
-                        CodecError::Ron(e) => ConfyError::BadRonData(e),
-                        _ => panic!(
-                            "Unexpected codec error during confy emulation: {:?}",
-                            codec_err
-                        ),
-                    },
+/// Restates a store failure as the error confy's callers already handle.
+///
+/// A report names the operation and carries its causes as frames, so the
+/// translation is a search for the cause confy has a word for rather than a
+/// walk over variants. What it cannot name becomes a load failure carrying the
+/// whole report: a corrupt or foreign file is something `load_or_else` exists
+/// to fall back from, not a reason to abort the process.
+impl From<Report<RpError>> for ConfyError {
+    fn from(report: Report<RpError>) -> Self {
+        #[cfg(feature = "text")]
+        {
+            use crate::store::backend::text::error::TextStoreError;
+
+            if let Some(text) = report.downcast_ref::<TextStoreError>() {
+                match text {
+                    // The kind is what a caller branches on - `NotFound` is how
+                    // confy tells "no config yet" from "the disk said no" - so
+                    // it is carried over even though the value cannot be.
+                    TextStoreError::Io(io) => {
+                        return ConfyError::GeneralLoadError(std::io::Error::new(
+                            io.kind(),
+                            format!("{report:?}"),
+                        ));
+                    }
                     TextStoreError::RootMustBeObject => {
-                        ConfyError::BadConfigDirectory("Root must be an object/mapping".to_string())
+                        return ConfyError::BadConfigDirectory(
+                            "Root must be an object/mapping".to_string(),
+                        );
                     }
-                    TextStoreError::PathSegmentMissing(s) => ConfyError::BadConfigDirectory(s),
-                    TextStoreError::Watch(err) => {
-                        panic!("Unexpected watch error during confy emulation: {:?}", err);
+                    TextStoreError::PathSegmentMissing(s) => {
+                        return ConfyError::BadConfigDirectory(s.clone());
                     }
+                    TextStoreError::Codec(_) | TextStoreError::Watch(_) => {}
                 }
             }
-            RpError::CommitFailed => {
-                panic!("Unexpected commit failure during confy emulation");
-            }
-            // A corrupt or foreign file is a load failure, not a reason to
-            // abort the process: `load_or_else` exists to fall back.
-            #[cfg(feature = "redb")]
-            RpError::RedbStore(redb_err) => {
-                ConfyError::GeneralLoadError(std::io::Error::other(format!("{redb_err:?}")))
-            }
-            #[cfg(feature = "sqlite")]
-            RpError::Sqlite(sqlite) => {
-                ConfyError::GeneralLoadError(std::io::Error::other(format!("{sqlite:?}")))
-            }
-            RpError::Migration(mig_err) => {
-                panic!(
-                    "Unexpected migration error during confy emulation: {:?}",
-                    mig_err
-                );
+        }
+
+        if let Some(codec) = report.downcast_ref::<CodecError>() {
+            match codec {
+                #[cfg(feature = "json")]
+                CodecError::Json(e) => {
+                    return ConfyError::BadJsonData(serde::de::Error::custom(e.to_string()));
+                }
+                #[cfg(feature = "toml")]
+                CodecError::Toml(s) => {
+                    return ConfyError::BadTomlData(serde::de::Error::custom(s));
+                }
+                #[cfg(feature = "ron")]
+                CodecError::Ron(e) => {
+                    return ConfyError::BadRonData(ron::error::Error::Message(e.to_string()));
+                }
+                _ => {}
             }
         }
+
+        ConfyError::GeneralLoadError(std::io::Error::other(format!("{report:?}")))
     }
 }
 

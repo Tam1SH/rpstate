@@ -8,6 +8,7 @@ use crate::store::{StoreBackend, SubscriptionId};
 use crate::{AccessMode, ReadOnlyMode, Store, WritableMode};
 use amethystate_core::path::StorePath;
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
+use error_stack::{Report, ResultExt};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -336,9 +337,17 @@ where
 
             CellCommit {
                 now: Arc::new(move || {
-                    let inner = flush.upgrade().ok_or(FieldError::SourceGone)?;
-                    let sub = inner.store_sub.as_ref().ok_or(FieldError::SourceGone)?;
-                    Ok(sub.store.flush_prefix(&inner.path)?)
+                    let inner = flush
+                        .upgrade()
+                        .ok_or_else(|| Report::new(FieldError::SourceGone))?;
+                    let sub = inner
+                        .store_sub
+                        .as_ref()
+                        .ok_or_else(|| Report::new(FieldError::SourceGone))?;
+                    sub.store
+                        .flush_prefix(&inner.path)
+                        .change_context(FieldError::Storage)
+                        .attach_with(|| format!("committing a field write: {}", inner.path))
                 }),
                 start: Arc::new(move || match start.upgrade() {
                     Some(inner) => match inner.store_sub.as_ref() {
@@ -741,14 +750,21 @@ where
 
     fn commit(&self) -> ReactiveFieldResult<()> {
         if let Some(sub) = &self.0.inner.store_sub {
-            sub.store.flush_prefix(&self.0.inner.path)?;
+            sub.store
+                .flush_prefix(&self.0.inner.path)
+                .change_context(FieldError::Storage)
+                .attach_with(|| format!("committing a field write: {}", self.0.inner.path))?;
         }
         Ok(())
     }
 
     async fn commit_async(&self) -> ReactiveFieldResult<()> {
         if let Some(sub) = &self.0.inner.store_sub {
-            sub.store.flush_async().await?;
+            sub.store
+                .flush_async()
+                .await
+                .change_context(FieldError::Storage)
+                .attach_with(|| format!("committing a field write: {}", self.0.inner.path))?;
         }
         Ok(())
     }
@@ -767,13 +783,14 @@ mod tests {
 
     struct UiScope;
     impl StateScope for UiScope {
-        const PREFIX: &'static str = "ui";
+        const PATH: StorePath = StorePath::from_static(&["ui"], "ui");
+        const KEY: &'static str = "ui";
     }
 
     #[test]
     fn field_get_set_and_subscribe() {
         let store = unique_store("field-int");
-        let field = crate::store::field::<UiScope, i32>(&store, "font_size", 14, Uuid::new_v4())
+        let field = crate::store::field::<UiScope, i32>(&store, ["font_size"], 14, Uuid::new_v4())
             .expect("field should be created");
 
         assert_eq!(field.get(), 14);
@@ -840,7 +857,7 @@ mod tests {
     #[test]
     fn field_cell_shares_the_field_cache() {
         let store = unique_store("cell-shares-cache");
-        let field = crate::store::field::<UiScope, i32>(&store, "shared", 1, Uuid::new_v4())
+        let field = crate::store::field::<UiScope, i32>(&store, ["shared"], 1, Uuid::new_v4())
             .expect("field should be created");
 
         let cell = field.cell();
@@ -1000,7 +1017,7 @@ mod tests {
         let store = unique_store("field_external_persistent");
 
         let field =
-            crate::store::field::<UiScope, i32>(&store, "persistent_val", 100, Uuid::new_v4())
+            crate::store::field::<UiScope, i32>(&store, ["persistent_val"], 100, Uuid::new_v4())
                 .expect("field should be created");
 
         let fork = field.fork();

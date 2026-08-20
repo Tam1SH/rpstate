@@ -1,6 +1,7 @@
 use crate::store::CodecFormat;
-use crate::store::StorageResult;
+use crate::store::{StorageError, StorageResult};
 use amethystate_core::path::StorePath;
+use error_stack::ResultExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -12,7 +13,7 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     fn get(&self, parts: &[&str]) -> Option<&Self::Node>;
     fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()>;
     fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>>;
-    fn scan(&self, parts: &[&str]) -> Vec<(String, Self::Node)>;
+    fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>>;
     fn parse(src: &str) -> StorageResult<Self>;
     fn serialize(&self) -> StorageResult<String>;
     fn empty() -> Self;
@@ -99,7 +100,7 @@ pub fn generic_delete<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResu
     Ok(current.remove_child(last))
 }
 
-pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> Vec<(String, N)> {
+pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> StorageResult<Vec<(String, N)>> {
     let parts = normalise_parts(parts);
 
     let mut results = Vec::new();
@@ -113,11 +114,15 @@ pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> Vec<(String, N)> 
 
     if let Some(node) = node {
         for (k, v) in node.scan_children() {
-            let Ok(full) = prefix.try_push(&k) else {
-                continue;
-            };
+            let full = prefix
+                .try_push(&k)
+                .change_context(StorageError::Scan)
+                .attach_with(|| format!("under: {prefix}"))
+                .attach_with(|| format!("child: {k:?}"))
+                .attach("the document holds a child whose name cannot be a level")?;
             results.push((full.as_str().to_string(), v));
         }
     }
-    results
+
+    Ok(results)
 }

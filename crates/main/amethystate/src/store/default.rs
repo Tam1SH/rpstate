@@ -147,27 +147,27 @@ impl Store {
     }
     /// Removes whatever is at `path`. Removing an absent path is not an error.
     pub fn delete(&self, path: impl IntoStorePath) -> StorageResult<()> {
-        crate::store::StoreBackend::delete(self, &path.into_store_path()?)
+        crate::store::StoreBackend::delete(self, &crate::store::to_path(path)?)
     }
 
     /// Removes every level under `prefix`, and the value at `prefix` itself.
     pub fn delete_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
-        crate::store::StoreBackend::delete_prefix(self, &prefix.into_store_path()?)
+        crate::store::StoreBackend::delete_prefix(self, &crate::store::to_path(prefix)?)
     }
 
     /// Commits what is buffered under `prefix`.
     pub fn flush_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
-        crate::store::StoreBackend::flush_prefix(self, &prefix.into_store_path()?)
+        crate::store::StoreBackend::flush_prefix(self, &crate::store::to_path(prefix)?)
     }
 
     /// The keys under `prefix`, sorted, without reading their values.
     pub fn scan_keys(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<String>> {
-        crate::store::StoreBackend::scan_keys(self, &prefix.into_store_path()?)
+        crate::store::StoreBackend::scan_keys(self, &crate::store::to_path(prefix)?)
     }
 
     /// Every key under `prefix` with its bytes, sorted by key.
     pub fn scan_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
-        crate::store::StoreBackend::scan_prefix(self, &prefix.into_store_path()?)
+        crate::store::StoreBackend::scan_prefix(self, &crate::store::to_path(prefix)?)
     }
 
     /// Decodes bytes that arrived in a [`StoreEvent`](crate::StoreEvent),

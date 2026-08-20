@@ -1,5 +1,5 @@
 use super::RpMode;
-use crate::amethystate::generate::parse_default;
+use crate::amethystate::generate::{parse_default, path_literal};
 use amethystate_macros_core::{MacroArgs, StoreFieldEntry};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -142,21 +142,16 @@ pub(crate) fn data_impl(
     let store_load_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
         let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+        let key_path = path_literal(crate_name, &key);
         let ty = &e.ty;
         if e.nested {
             let data_ty = get_data_type(ty);
             quote! {
-                #fname: <#data_ty>::__amethystate_load_from(
-                    store,
-                    #crate_name::join_path(prefix, #key).as_str(),
-                )?
+                #fname: <#data_ty>::__amethystate_load_from(store, &prefix.join(&#key_path))?
             }
         } else if let Some((k, v)) = e.get_map_types() {
             quote! {
-                #fname: #crate_name::store::load_map::<#k, #v>(
-                    store,
-                    &#crate_name::join_path(prefix, #key),
-                )?
+                #fname: #crate_name::store::load_map::<#k, #v>(store, &prefix.join(&#key_path))?
             }
         } else {
             let fallback = e
@@ -165,7 +160,7 @@ pub(crate) fn data_impl(
                 .map(parse_default)
                 .unwrap_or_else(|| quote! { <#ty as ::std::default::Default>::default() });
             quote! {
-                #fname: <#crate_name::Store as #crate_name::StoreExt>::get::<#ty>(store, &#crate_name::join_path(prefix, #key))?.unwrap_or_else(|| #fallback)
+                #fname: <#crate_name::Store as #crate_name::StoreExt>::get::<#ty>(store, &prefix.join(&#key_path))?.unwrap_or_else(|| #fallback)
             }
         }
     });
@@ -173,24 +168,25 @@ pub(crate) fn data_impl(
     let store_save_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
         let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+        let key_path = path_literal(crate_name, &key);
 
         if e.nested {
             quote! {
-                self.#fname.__amethystate_save_to(store, #crate_name::join_path(prefix, #key).as_str())?;
+                self.#fname.__amethystate_save_to(store, &prefix.join(&#key_path))?;
             }
         } else if e.get_map_types().is_some() {
             quote! {
                 {
-                    let path = #crate_name::join_path(prefix, #key);
+                    let path = prefix.join(&#key_path);
                     for (k, v) in &self.#fname {
-                        let full_path = path.try_push(k.to_string())?;
+                        let full_path = #crate_name::store::entry_path(&path, k.to_string())?;
                         <#crate_name::Store as #crate_name::StoreExt>::set(store, &full_path, v)?;
                     }
                 }
             }
         } else {
             quote! {
-                <#crate_name::Store as #crate_name::StoreExt>::set(&store, &#crate_name::join_path(prefix, #key), &self.#fname)?;
+                <#crate_name::Store as #crate_name::StoreExt>::set(&store, &prefix.join(&#key_path), &self.#fname)?;
             }
         }
     });
@@ -214,6 +210,7 @@ pub(crate) fn data_impl(
     let recursive_hash_expr = crate::hash::gen_recursive_type_hash(crate_name, fields_for_hash);
 
     let prefix_expr = prefix.clone().unwrap_or_default();
+    let prefix_path = path_literal(crate_name, &prefix_expr);
     let deps = migration_deps(crate_name, entries);
     let is_root = prefix.is_some();
 
@@ -245,7 +242,7 @@ pub(crate) fn data_impl(
                 impl #name {
                     pub fn save_lazy(&self) -> #crate_name::StorageResult<()> {
                         self.inner
-                            .__amethystate_save_to(&self.store, self.prefix.as_str())
+                            .__amethystate_save_to(&self.store, &self.prefix)
                     }
 
                     pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
@@ -265,9 +262,9 @@ pub(crate) fn data_impl(
 
                     pub fn load_with(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
                         Ok(Self {
-                            inner: #data_struct_name::__amethystate_load_from(store, #prefix_expr)?,
+                            inner: #data_struct_name::__amethystate_load_from(store, &#prefix_path)?,
                             store: store.clone(),
-                            prefix: #crate_name::join_path("", #prefix_expr),
+                            prefix: #prefix_path,
                         })
                     }
                 }
@@ -309,7 +306,7 @@ pub(crate) fn data_impl(
                 impl #persisted_struct_name {
                     pub fn save_lazy(&self) -> #crate_name::StorageResult<()> {
                         self.inner
-                            .__amethystate_save_to(&self.store, self.prefix.as_str())
+                            .__amethystate_save_to(&self.store, &self.prefix)
                     }
 
                     pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
@@ -331,9 +328,9 @@ pub(crate) fn data_impl(
                 impl #name {
                     pub fn load_with(store: &#crate_name::Store) -> #crate_name::StorageResult<#persisted_struct_name> {
                         Ok(#persisted_struct_name {
-                            inner: #data_struct_name::__amethystate_load_from(store, #prefix_expr)?,
+                            inner: #data_struct_name::__amethystate_load_from(store, &#prefix_path)?,
                             store: store.clone(),
-                            prefix: #crate_name::join_path("", #prefix_expr),
+                            prefix: #prefix_path,
                         })
                     }
                 }
@@ -355,7 +352,7 @@ pub(crate) fn data_impl(
             #[doc(hidden)]
             pub fn __amethystate_load_from(
                 store: &#crate_name::Store,
-                prefix: &str,
+                prefix: &#crate_name::store::StorePath,
             ) -> #crate_name::StorageResult<Self> {
                 Ok(Self {
                     #(#store_load_fields,)*
@@ -366,7 +363,7 @@ pub(crate) fn data_impl(
             pub fn __amethystate_save_to(
                 &self,
                 store: &#crate_name::Store,
-                prefix: &str,
+                prefix: &#crate_name::store::StorePath,
             ) -> #crate_name::StorageResult<()> {
                 #(#store_save_fields)*
                 Ok(())
@@ -428,7 +425,7 @@ fn migration_deps(crate_name: &TokenStream2, entries: &[StoreFieldEntry]) -> Vec
     entries
         .iter()
         .filter_map(|e| e.parent.as_ref())
-        .map(|p| quote! { <#p as #crate_name::StateScope>::PREFIX })
+        .map(|p| quote! { <#p as #crate_name::StateScope>::KEY })
         .collect::<Vec<_>>()
 }
 

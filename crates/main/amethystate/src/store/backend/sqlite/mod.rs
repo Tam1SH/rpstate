@@ -6,6 +6,7 @@ use crate::store::StorageResult;
 use crate::store::backend::sqlite::migration::SqliteMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::config::StoreConfig;
+use crate::store::error::StorageError;
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
@@ -14,9 +15,11 @@ use crate::store::{
 };
 use amethystate_core::path::StorePath;
 use error::SqliteStoreError;
+use error_stack::ResultExt;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
@@ -25,8 +28,13 @@ pub mod error;
 mod inspector;
 mod migration;
 
+fn at(path: &Path) -> String {
+    format!("store: {}", path.display())
+}
+
 struct SqliteStoreInner {
     conn: Arc<Mutex<Connection>>,
+    path: PathBuf,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
     commits: Arc<crate::store::durable::CommitSignal>,
@@ -53,38 +61,65 @@ impl SqliteStoreInner {
 
         {
             let mut conn = self.conn.lock();
-            let txn = conn.transaction().map_err(SqliteStoreError::from)?;
+            let txn = conn
+                .transaction()
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Flush)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("prefix: {prefix}"))?;
             {
                 let mut ins = txn
                     .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
-                    .map_err(SqliteStoreError::from)?;
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Flush)
+                    .attach_with(|| at(&self.path))?;
                 let mut del = txn
                     .prepare_cached("DELETE FROM data WHERE key = ?")
-                    .map_err(SqliteStoreError::from)?;
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Flush)
+                    .attach_with(|| at(&self.path))?;
                 let mut mark = txn
                     .prepare_cached("REPLACE INTO metadata (key, value) VALUES (?, ?)")
-                    .map_err(SqliteStoreError::from)?;
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Flush)
+                    .attach_with(|| at(&self.path))?;
 
                 for (path, op) in &changes {
                     match op {
                         utils::PendingOp::Set(b) => {
                             ins.execute(rusqlite::params![&**path, &b[..]])
-                                .map_err(SqliteStoreError::from)?;
+                                .map_err(SqliteStoreError::from)
+                                .change_context(StorageError::Flush)
+                                .attach_with(|| at(&self.path))
+                                .attach_with(|| format!("writing key: {path}"))
+                                .attach_with(|| format!("value bytes: {}", b.len()))?;
                         }
                         utils::PendingOp::Delete => {
-                            del.execute([&**path]).map_err(SqliteStoreError::from)?;
+                            del.execute([&**path])
+                                .map_err(SqliteStoreError::from)
+                                .change_context(StorageError::Flush)
+                                .attach_with(|| at(&self.path))
+                                .attach_with(|| format!("deleting key: {path}"))?;
                         }
                         utils::PendingOp::MarkInit => {
                             mark.execute(rusqlite::params![
                                 format!("__init::{path}"),
                                 [] as [u8; 0]
                             ])
-                            .map_err(SqliteStoreError::from)?;
+                            .map_err(SqliteStoreError::from)
+                            .change_context(StorageError::Flush)
+                            .attach_with(|| at(&self.path))
+                            .attach_with(|| format!("marking namespace: {path}"))?;
                         }
                     }
                 }
             }
-            txn.commit().map_err(SqliteStoreError::from)?;
+            txn.commit()
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Flush)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("prefix: {prefix}"))
+                .attach_with(|| format!("buffered changes: {}", changes.len()))?;
         }
 
         utils::clear_committed(&mut self.pending.lock(), &changes);
@@ -116,12 +151,17 @@ impl SqliteStoreInner {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare_cached("SELECT value FROM data WHERE key = ?")
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Read)
+            .attach_with(|| at(&self.path))
+            .attach_with(|| format!("key: {path}"))?;
 
-        Ok(stmt
-            .query_row([path.as_str()], |row| row.get::<_, Vec<u8>>(0))
+        stmt.query_row([path.as_str()], |row| row.get::<_, Vec<u8>>(0))
             .optional()
-            .map_err(SqliteStoreError::from)?)
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Read)
+            .attach_with(|| at(&self.path))
+            .attach_with(|| format!("key: {path}"))
     }
 
     fn run_migrations(&self, mset: MigrationSet) -> StorageResult<MigrationReport> {
@@ -135,21 +175,28 @@ impl SqliteStoreInner {
                 F: FnOnce(&mut dyn MigrationBackendAdapter) -> StorageResult<T>,
             {
                 let mut conn = self.conn.lock();
-                let txn = conn.transaction().map_err(SqliteStoreError::from)?;
+                let txn = conn
+                    .transaction()
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Migrate)
+                    .attach("opening the migration transaction")?;
 
                 let res = {
                     let mut storage = SqliteMigrationBackend::new(&txn);
                     f(&mut storage)?
                 };
 
-                txn.commit().map_err(SqliteStoreError::from)?;
+                txn.commit()
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Migrate)
+                    .attach("committing the migration transaction")?;
                 Ok(res)
             }
         }
 
         let provider = SqliteProvider { conn: &self.conn };
         let engine = MigrationEngine::new(&provider);
-        engine.run(mset)
+        engine.run(mset).attach_with(|| at(&self.path))
     }
 
     fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
@@ -163,11 +210,17 @@ impl SqliteStoreInner {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare_cached("SELECT value FROM data WHERE key = ?")
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Read)
+            .attach_with(|| at(&self.path))
+            .attach_with(|| format!("key: {path}"))?;
         let res: Option<Vec<u8>> = stmt
             .query_row([path.as_str()], |row| row.get(0))
             .optional()
-            .map_err(SqliteStoreError::from)?;
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Read)
+            .attach_with(|| at(&self.path))
+            .attach_with(|| format!("key: {path}"))?;
         Ok(res)
     }
 
@@ -189,9 +242,14 @@ impl SqliteStoreInner {
         self.check_debouncer();
         let vec = sonic_rs::to_vec(&value)
             .map_err(CodecError::from)
-            .map_err(SqliteStoreError::from)?;
+            .change_context(StorageError::Codec)
+            .attach_with(|| at(&self.path))
+            .attach_with(|| format!("encoding key: {path}"))?;
 
-        let old_bytes = self.committed_or_buffered(&path)?;
+        let old_bytes = self
+            .committed_or_buffered(&path)
+            .change_context(StorageError::Write)
+            .attach_with(|| format!("reading the value being replaced: {path}"))?;
 
         {
             let mut lock = self.pending.lock();
@@ -225,16 +283,30 @@ impl SqliteStoreInner {
             let conn = self.conn.lock();
             let mut stmt = conn
                 .prepare_cached("SELECT key, value FROM data WHERE key >= ? AND key < ?")
-                .map_err(SqliteStoreError::from)?;
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Scan)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("prefix: {prefix}"))?;
             let (low, high) = utils::key_range(prefix);
+            let range = format!("range: [{low}, {high})");
             let rows = stmt
                 .query_map([low, high], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
                 })
-                .map_err(SqliteStoreError::from)?;
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Scan)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("prefix: {prefix}"))
+                .attach_with(|| range.clone())?;
 
             for row in rows {
-                let (k, v) = row.map_err(SqliteStoreError::from)?;
+                let (k, v) = row
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Scan)
+                    .attach_with(|| at(&self.path))
+                    .attach_with(|| format!("prefix: {prefix}"))
+                    .attach_with(|| range.clone())
+                    .attach_with(|| format!("rows read: {}", storage_results.len()))?;
                 storage_results.push((k, v));
             }
         }
@@ -273,14 +345,29 @@ impl SqliteStoreInner {
             let conn = self.conn.lock();
             let mut stmt = conn
                 .prepare_cached("SELECT key FROM data WHERE key >= ? AND key < ?")
-                .map_err(SqliteStoreError::from)?;
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Scan)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("prefix: {prefix}"))?;
             let (low, high) = utils::key_range(prefix);
+            let range = format!("range: [{low}, {high})");
             let rows = stmt
                 .query_map([low, high], |row| row.get::<_, String>(0))
-                .map_err(SqliteStoreError::from)?;
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Scan)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("prefix: {prefix}"))
+                .attach_with(|| range.clone())?;
 
             for row in rows {
-                keys.push(row.map_err(SqliteStoreError::from)?);
+                let key = row
+                    .map_err(SqliteStoreError::from)
+                    .change_context(StorageError::Scan)
+                    .attach_with(|| at(&self.path))
+                    .attach_with(|| format!("prefix: {prefix}"))
+                    .attach_with(|| range.clone())
+                    .attach_with(|| format!("keys read: {}", keys.len()))?;
+                keys.push(key);
             }
         }
 
@@ -308,7 +395,10 @@ impl SqliteStoreInner {
         self.check_debouncer();
         let path_arc: Arc<str> = Arc::from(path.as_str());
 
-        let old_bytes = self.committed_or_buffered(path)?;
+        let old_bytes = self
+            .committed_or_buffered(path)
+            .change_context(StorageError::Delete)
+            .attach_with(|| format!("reading the value being deleted: {path}"))?;
 
         {
             let mut lock = self.pending.lock();
@@ -333,7 +423,10 @@ impl SqliteStoreInner {
     fn delete_prefix(&self, prefix: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer();
 
-        let keys = self.scan_prefix(prefix)?;
+        let keys = self
+            .scan_prefix(prefix)
+            .change_context(StorageError::Delete)
+            .attach_with(|| format!("listing the subtree being deleted: {prefix}"))?;
 
         {
             let mut lock = self.pending.lock();
@@ -385,8 +478,15 @@ impl SqliteStoreInner {
             let conn = self.conn.lock();
             let mut stmt = conn
                 .prepare_cached("SELECT 1 FROM metadata WHERE key = ?")
-                .map_err(SqliteStoreError::from)?;
-            stmt.exists([key]).map_err(SqliteStoreError::from)?
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Meta)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("namespace: {namespace}"))?;
+            stmt.exists([key])
+                .map_err(SqliteStoreError::from)
+                .change_context(StorageError::Meta)
+                .attach_with(|| at(&self.path))
+                .attach_with(|| format!("namespace: {namespace}"))?
         };
 
         if found {
@@ -441,7 +541,10 @@ impl SqliteStore {
         config: StoreConfig,
         migration_set: MigrationSet,
     ) -> StorageResult<(Self, MigrationReport)> {
-        let conn = Connection::open(&config.path).map_err(SqliteStoreError::from)?;
+        let conn = Connection::open(&config.path)
+            .map_err(SqliteStoreError::from)
+            .change_context(StorageError::Open)
+            .attach_with(|| at(&config.path))?;
 
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -451,7 +554,10 @@ impl SqliteStore {
              CREATE TABLE IF NOT EXISTS schema_snapshot (key TEXT PRIMARY KEY, value BLOB);
              CREATE TABLE IF NOT EXISTS migration_log (key TEXT PRIMARY KEY, value BLOB);",
         )
-        .map_err(SqliteStoreError::from)?;
+        .map_err(SqliteStoreError::from)
+        .change_context(StorageError::Open)
+        .attach_with(|| at(&config.path))
+        .attach("setting the pragmas and creating the tables")?;
 
         let conn_arc = Arc::new(Mutex::new(conn));
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
@@ -541,6 +647,7 @@ impl SqliteStore {
 
         let inner = Arc::new(SqliteStoreInner {
             conn: conn_arc,
+            path: config.path.clone(),
             pending,
             initialized,
             commits,
@@ -579,7 +686,9 @@ impl StoreBackend for SqliteStore {
     ) -> StorageResult<bool> {
         match self.inner.get_raw(path)? {
             Some(bytes) => {
-                self.decode_erased(&bytes, f)?;
+                self.decode_erased(&bytes, f)
+                    .attach_with(|| at(&self.inner.path))
+                    .attach_with(|| format!("key: {path}"))?;
                 Ok(true)
             }
             None => Ok(false),
@@ -594,6 +703,8 @@ impl StoreBackend for SqliteStore {
         let mut de = sonic_rs::Deserializer::from_slice(bytes);
         let mut erased = <dyn erased_serde::Deserializer>::erase(&mut de);
         f(&mut erased)
+            .change_context(StorageError::Codec)
+            .attach_with(|| format!("value bytes: {}", bytes.len()))
     }
 
     fn set_erased(

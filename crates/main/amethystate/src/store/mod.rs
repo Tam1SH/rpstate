@@ -13,9 +13,9 @@ mod traits;
 mod types;
 pub mod util;
 
-pub use amethystate_core::path::{StorePath, StorePathError};
+pub use amethystate_core::path::{IntoStorePath, StorePath, StorePathError};
 pub use durable::{Commit, Durable};
-pub use error::{StorageError, StorageResult};
+pub use error::{IntoStorageReport, StorageError, StorageResult};
 pub use kv::Kv;
 pub use primitives_factory::*;
 pub use state_slice::*;

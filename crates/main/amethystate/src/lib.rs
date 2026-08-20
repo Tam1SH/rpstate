@@ -34,7 +34,7 @@ pub mod stores {
 
 pub use store::{
     AmeStateSlice, StateScope, StorageResult, StoreEvent, StoreOp, SubscriptionKind,
-    builder::StoreBuilder, config::StoreConfig, default::Store, join_path,
+    builder::StoreBuilder, config::StoreConfig, default::Store,
 };
 
 pub use migration::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};

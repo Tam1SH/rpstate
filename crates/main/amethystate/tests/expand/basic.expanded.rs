@@ -51,7 +51,11 @@ impl ::std::fmt::Debug for AppConfig {
     }
 }
 impl ::amethystate::StateScope for AppConfig {
-    const PREFIX: &'static str = "app";
+    const PATH: ::amethystate::store::StorePath = ::amethystate::store::StorePath::from_static(
+        &["app"],
+        "app",
+    );
+    const KEY: &'static str = "app";
 }
 impl AppConfig {
     pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
@@ -68,20 +72,28 @@ impl AppConfig {
         );
         let result = Self {
             __amethystate_instance_id: __amethystate_guard,
-            port: ::amethystate::store::field::<
-                Self,
-                u16,
-            >(store, "port", 8080, instance_id)?,
+            port: ::amethystate::store::field_with_path(
+                store,
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["port"], "port"),
+                    ),
+                8080,
+                instance_id,
+            )?,
             session_id: ::amethystate::Field::new_volatile_with_id(
-                {
-                    let prefix = <Self as ::amethystate::StateScope>::PREFIX;
-                    ::amethystate::join_path(prefix, "session_id")
-                },
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(
+                            &["session_id"],
+                            "session_id",
+                        ),
+                    ),
                 "localhost".to_string(),
                 instance_id,
             ),
         };
-        store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
+        store.mark_initialized(<Self as ::amethystate::StateScope>::PATH.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -170,13 +182,13 @@ impl AppConfig {
 impl ::amethystate::AmeStateNode for AppConfig {
     fn new_node(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
@@ -464,7 +476,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some("app"),
+                prefix: Some(
+                    ::amethystate::store::StorePath::from_static(&["app"], "app"),
+                ),
                 struct_name: "AppConfig",
                 version: 0u32,
                 schema_hash: <AppConfig_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

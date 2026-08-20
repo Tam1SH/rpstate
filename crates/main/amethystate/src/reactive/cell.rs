@@ -2,6 +2,7 @@ use crate::reactive::error::{WriteError, WriteResult};
 use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::Durable;
 use amethystate_core::{Signal, SignalSubscription};
+use error_stack::ResultExt;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -344,7 +345,10 @@ where
     async fn commit_async(&self) -> WriteResult<()> {
         let pending = self.0.commit.as_ref().map(|commit| (commit.start)());
         match pending {
-            Some(commit) => Ok(commit.await?),
+            Some(commit) => commit
+                .await
+                .change_context(WriteError::Storage)
+                .attach("committing a cell write"),
             None => Ok(()),
         }
     }
@@ -355,18 +359,19 @@ mod tests {
     use super::*;
 
     use crate::Store;
-    use crate::store::StateScope;
+    use crate::store::{StateScope, StorePath};
     use crate::test_utils::unique_store;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct UiScope;
     impl StateScope for UiScope {
-        const PREFIX: &'static str = "ui";
+        const PATH: StorePath = StorePath::from_static(&["ui"], "ui");
+        const KEY: &'static str = "ui";
     }
 
     fn stored_field(store: &Store, name: &'static str, default: u64) -> crate::WritableField<u64> {
-        crate::store::field::<UiScope, u64>(store, name, default, Uuid::new_v4()).expect("field")
+        crate::store::field::<UiScope, u64>(store, [name], default, Uuid::new_v4()).expect("field")
     }
 
     #[test]

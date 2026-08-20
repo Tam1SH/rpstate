@@ -94,7 +94,7 @@ impl Future for Commit {
 
 fn outcome(signal: &CommitSignal) -> StorageResult<()> {
     if signal.failed() {
-        Err(StorageError::CommitFailed)
+        Err(error_stack::Report::new(StorageError::CommitFailed))
     } else {
         Ok(())
     }

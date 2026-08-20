@@ -1,5 +1,6 @@
 use crate::SubscriptionKind;
 use crate::store::{StoreEvent, SubscriptionEntry};
+#[cfg(any(feature = "redb", feature = "sqlite"))]
 use amethystate_core::path::StorePath;
 use parking_lot::RwLock;
 
@@ -12,6 +13,7 @@ pub use buffered::*;
 /// followed by a separator - comparing the strings alone puts `uix.width` under
 /// `ui`. At the root there is no bound to spell, since no key can begin with a
 /// separator, and everything is under it.
+#[cfg(any(feature = "redb", feature = "sqlite"))]
 pub fn subtree_bound(prefix: &StorePath) -> Option<String> {
     (!prefix.is_root()).then(|| format!("{}.", prefix.as_str()))
 }
@@ -35,6 +37,7 @@ pub fn key_range(prefix: &StorePath) -> (String, String) {
     (low, high)
 }
 
+#[cfg(any(feature = "redb", feature = "sqlite"))]
 pub fn is_under(key: &str, prefix: &str, bound: &Option<String>) -> bool {
     match bound {
         Some(bound) => key == prefix || key.starts_with(bound.as_str()),

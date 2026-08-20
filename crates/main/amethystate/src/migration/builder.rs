@@ -75,7 +75,7 @@ impl MigrationBuilder {
     /// Adds steps for a struct's own prefix, taken from its
     /// [`StateScope`] rather than written out.
     pub fn for_node<T: StateScope>(&mut self) -> PrefixMigrationBuilder<'_> {
-        self.for_prefix(T::PREFIX)
+        self.for_prefix(T::KEY)
     }
 
     /// Adds steps for a prefix named directly, rather than taken from a type.

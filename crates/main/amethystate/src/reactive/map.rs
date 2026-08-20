@@ -5,6 +5,7 @@ use crate::store::sync_backend::SyncBridge;
 use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
 use amethystate_core::path::StorePath;
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
+use error_stack::{Report, ResultExt};
 use std::marker::PhantomData;
 
 use std::sync::Arc;
@@ -415,7 +416,8 @@ where
             self.update(key, &new_val)?;
             Ok(Some(new_val))
         } else {
-            Err(ReactiveMapError::KeyNotFound(key.to_string()))
+            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(format!("map: {}", self.inner.path)))
         }
     }
 
@@ -429,7 +431,8 @@ where
             f(&mut val);
             self.update(key, &val)
         } else {
-            Err(ReactiveMapError::KeyNotFound(key.to_string()))
+            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(format!("map: {}", self.inner.path)))
         }
     }
 
@@ -748,12 +751,23 @@ where
     }
 
     fn commit(&self) -> ReactiveMapResult<()> {
-        self.0.inner.store.flush_prefix(&self.0.inner.path)?;
+        self.0
+            .inner
+            .store
+            .flush_prefix(&self.0.inner.path)
+            .change_context(ReactiveMapError::Storage)
+            .attach_with(|| format!("committing a map write: {}", self.0.inner.path))?;
         Ok(())
     }
 
     async fn commit_async(&self) -> ReactiveMapResult<()> {
-        self.0.inner.store.flush_async().await?;
+        self.0
+            .inner
+            .store
+            .flush_async()
+            .await
+            .change_context(ReactiveMapError::Storage)
+            .attach_with(|| format!("committing a map write: {}", self.0.inner.path))?;
         Ok(())
     }
 }
@@ -762,7 +776,8 @@ where
 mod tests {
     struct TestScope;
     impl crate::StateScope for TestScope {
-        const PREFIX: &'static str = "test";
+        const PATH: StorePath = StorePath::from_static(&["test"], "test");
+        const KEY: &'static str = "test";
     }
 
     use super::*;
@@ -900,7 +915,10 @@ mod tests {
         assert_eq!(map.get(&"a".into()).unwrap(), Some(20));
 
         let res = map.update("missing".into(), &30);
-        assert!(matches!(res, Err(ReactiveMapError::KeyNotFound(_))));
+        assert!(matches!(
+            res.unwrap_err().current_context(),
+            ReactiveMapError::KeyNotFound(_)
+        ));
 
         map.insert("b".into(), &100).unwrap();
         let entries: Vec<_> = map.entries().unwrap().collect();
@@ -935,7 +953,10 @@ mod tests {
         });
 
         let res = map.insert("val".into(), &-1);
-        assert!(matches!(res, Err(ReactiveMapError::Intercepted)));
+        assert!(matches!(
+            res.unwrap_err().current_context(),
+            ReactiveMapError::Intercepted
+        ));
 
         store.save_now().unwrap();
         assert_eq!(map.get(&"val".into()).unwrap(), None);
@@ -1143,7 +1164,10 @@ mod tests {
 
         map.update("target".into(), &50).unwrap();
         let res = map.update("target".into(), &150);
-        assert!(matches!(res, Err(ReactiveMapError::Intercepted)));
+        assert!(matches!(
+            res.unwrap_err().current_context(),
+            ReactiveMapError::Intercepted
+        ));
 
         map.update("other".into(), &150).unwrap();
     }

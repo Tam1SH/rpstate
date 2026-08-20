@@ -51,7 +51,11 @@ impl ::std::fmt::Debug for NetworkState {
     }
 }
 impl ::amethystate::StateScope for NetworkState {
-    const PREFIX: &'static str = "net";
+    const PATH: ::amethystate::store::StorePath = ::amethystate::store::StorePath::from_static(
+        &["net"],
+        "net",
+    );
+    const KEY: &'static str = "net";
 }
 impl NetworkState {
     pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
@@ -68,16 +72,26 @@ impl NetworkState {
         );
         let result = Self {
             __amethystate_instance_id: __amethystate_guard,
-            port: ::amethystate::store::field::<
-                Self,
-                u16,
-            >(store, "port", 8080, instance_id)?,
-            host: ::amethystate::store::field::<
-                Self,
-                String,
-            >(store, "host", "127.0.0.1".to_string(), instance_id)?,
+            port: ::amethystate::store::field_with_path(
+                store,
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["port"], "port"),
+                    ),
+                8080,
+                instance_id,
+            )?,
+            host: ::amethystate::store::field_with_path(
+                store,
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["host"], "host"),
+                    ),
+                "127.0.0.1".to_string(),
+                instance_id,
+            )?,
         };
-        store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
+        store.mark_initialized(<Self as ::amethystate::StateScope>::PATH.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -164,13 +178,13 @@ impl NetworkState {
 impl ::amethystate::AmeStateNode for NetworkState {
     fn new_node(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
@@ -515,7 +529,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some("net"),
+                prefix: Some(
+                    ::amethystate::store::StorePath::from_static(&["net"], "net"),
+                ),
                 struct_name: "NetworkState",
                 version: 0u32,
                 schema_hash: <NetworkState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
@@ -602,7 +618,11 @@ impl ::std::fmt::Debug for UiState {
     }
 }
 impl ::amethystate::StateScope for UiState {
-    const PREFIX: &'static str = "ui";
+    const PATH: ::amethystate::store::StorePath = ::amethystate::store::StorePath::from_static(
+        &["ui"],
+        "ui",
+    );
+    const KEY: &'static str = "ui";
 }
 impl UiState {
     pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
@@ -633,8 +653,10 @@ impl UiState {
                             .__schema_field_port(),
                     );
                 };
-                let parent_prefix = <NetworkState as ::amethystate::StateScope>::PREFIX;
-                let path = ::amethystate::join_path(parent_prefix, "port");
+                let path = <NetworkState as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["port"], "port"),
+                    );
                 ::amethystate::store::field_with_path::<
                     u16,
                     ::amethystate::ReadOnlyMode,
@@ -654,15 +676,17 @@ impl UiState {
                             .__schema_field_host(),
                     );
                 };
-                let parent_prefix = <NetworkState as ::amethystate::StateScope>::PREFIX;
-                let path = ::amethystate::join_path(parent_prefix, "host");
+                let path = <NetworkState as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["host"], "host"),
+                    );
                 ::amethystate::store::field_with_path::<
                     String,
                     ::amethystate::ReadOnlyMode,
                 >(store, path, ::std::default::Default::default(), instance_id)?
             },
         };
-        store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
+        store.mark_initialized(<Self as ::amethystate::StateScope>::PATH.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -751,13 +775,13 @@ impl UiState {
 impl ::amethystate::AmeStateNode for UiState {
     fn new_node(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
@@ -969,8 +993,8 @@ impl ::amethystate::migration::fields::AmeStateFields for UiState_Data {
     const SCHEMA_HASH: u32 = ::amethystate::migration::types::schema_hash(Self::FIELDS);
     const PARENT_PREFIX: &'static str = "ui";
     const MIGRATION_DEPS: &'static [&'static str] = &[
-        <NetworkState as ::amethystate::StateScope>::PREFIX,
-        <NetworkState as ::amethystate::StateScope>::PREFIX,
+        <NetworkState as ::amethystate::StateScope>::KEY,
+        <NetworkState as ::amethystate::StateScope>::KEY,
     ];
     fn load_struct(
         ctx: &mut ::amethystate::MigrationContext,
@@ -992,7 +1016,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some("ui"),
+                prefix: Some(
+                    ::amethystate::store::StorePath::from_static(&["ui"], "ui"),
+                ),
                 struct_name: "UiState",
                 version: 0u32,
                 schema_hash: <UiState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

@@ -37,6 +37,7 @@ amethystate-tauri = { workspace = true, optional = true }
 petgraph = { workspace = true }
 amethystate-macros = { workspace = true }
 serde = { workspace = true }
+error-stack = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 redb = { workspace = true, optional = true }

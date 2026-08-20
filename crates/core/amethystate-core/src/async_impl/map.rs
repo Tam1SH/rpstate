@@ -3,6 +3,7 @@ use crate::path::StorePath;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use crate::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
+use error_stack::Report;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -110,15 +111,15 @@ where
         }
     }
 
-    pub fn get_sync(&self, key: &K) -> ReactiveMapResult<Option<V>, B::Error> {
+    pub fn get_sync(&self, key: &K) -> ReactiveMapResult<Option<V>> {
         Ok(self.core.cache.get(key).map(|v| v.clone()))
     }
 
-    pub async fn get(&self, key: &K) -> ReactiveMapResult<Option<V>, B::Error> {
+    pub async fn get(&self, key: &K) -> ReactiveMapResult<Option<V>> {
         crate::map_get_async(&self.backend, &self.prefix, key).await
     }
 
-    pub async fn remove(&self, key: K) -> ReactiveMapResult<Option<V>, B::Error> {
+    pub async fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
         crate::map_remove_async(
             &self.backend,
             &self.core,
@@ -130,7 +131,7 @@ where
     }
 
     /// The cached entries, sorted by key.
-    pub fn values(&self) -> ReactiveMapResult<Vec<(K, V)>, B::Error> {
+    pub fn values(&self) -> ReactiveMapResult<Vec<(K, V)>> {
         let mut entries: Vec<(K, V)> = self
             .core
             .cache
@@ -143,14 +144,14 @@ where
     }
 
     /// Every entry, sorted by key.
-    pub async fn entries(&self) -> ReactiveMapResult<Vec<(K, V)>, B::Error> {
+    pub async fn entries(&self) -> ReactiveMapResult<Vec<(K, V)>> {
         let mut entries: Vec<(K, V)> =
             crate::map_entries_async(&self.backend, &self.prefix).await?;
         entries.sort_by_key(|(k, _)| k.to_string());
         Ok(entries)
     }
 
-    pub async fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>, B::Error>
+    pub async fn update<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
     where
         F: FnOnce(V) -> V,
     {
@@ -159,11 +160,12 @@ where
             self.set(key, &new_val).await?;
             Ok(Some(new_val))
         } else {
-            Err(ReactiveMapError::KeyNotFound(key.to_string()))
+            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(format!("map: {}", self.prefix)))
         }
     }
 
-    pub async fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<(), B::Error>
+    pub async fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
     where
         F: FnOnce(&mut V),
     {
@@ -171,11 +173,12 @@ where
             f(&mut val);
             self.set(key, &val).await
         } else {
-            Err(ReactiveMapError::KeyNotFound(key.to_string()))
+            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(format!("map: {}", self.prefix)))
         }
     }
 
-    pub async fn insert(&self, key: K, value: &V) -> ReactiveMapResult<(), B::Error> {
+    pub async fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         crate::map_insert_async(
             &self.backend,
             &self.core,
@@ -187,7 +190,7 @@ where
         .await
     }
 
-    pub async fn set(&self, key: K, value: &V) -> ReactiveMapResult<(), B::Error> {
+    pub async fn set(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         crate::map_update_async(
             &self.backend,
             &self.core,
@@ -243,7 +246,7 @@ where
         })
     }
 
-    pub async fn clear(&self) -> ReactiveMapResult<(), B::Error> {
+    pub async fn clear(&self) -> ReactiveMapResult<()> {
         crate::map_clear_async(
             &self.backend,
             &self.core,

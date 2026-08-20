@@ -5,7 +5,6 @@ use crate::store::config::StoreConfig;
 use crate::store::{StoreBackend, StoreCallback, SubscriptionId, SubscriptionKind};
 use crate::{MigrationReport, StorageResult};
 use amethystate_core::path::StorePath;
-use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(PartialEq, Eq, Clone, Debug)]

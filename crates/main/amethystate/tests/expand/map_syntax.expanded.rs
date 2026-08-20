@@ -676,16 +676,17 @@ impl ::std::fmt::Debug for DatabaseConfig {
 impl DatabaseConfig {
     pub fn new(
         store: &::amethystate::Store,
-        namespace: &str,
+        namespace: impl ::amethystate::store::IntoStorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, namespace, ::amethystate::uuid::Uuid::new_v4())
     }
     pub fn new_with_id(
         store: &::amethystate::Store,
-        namespace: &str,
+        namespace: impl ::amethystate::store::IntoStorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         use ::amethystate::{StoreBackend, StoreExt};
+        let namespace = ::amethystate::store::to_path(namespace)?;
         let __amethystate_guard = ::amethystate::observability::InstanceGuard::new(
             instance_id,
             ::std::any::type_name::<Self>(),
@@ -694,12 +695,15 @@ impl DatabaseConfig {
             __amethystate_instance_id: __amethystate_guard,
             host: ::amethystate::store::field_with_path(
                 store,
-                ::amethystate::join_path(namespace, "host"),
+                namespace
+                    .join(
+                        &::amethystate::store::StorePath::from_static(&["host"], "host"),
+                    ),
                 "localhost".to_string(),
                 instance_id,
             )?,
         };
-        store.mark_initialized(namespace)?;
+        store.mark_initialized(namespace.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -757,13 +761,13 @@ impl DatabaseConfig {
 impl ::amethystate::AmeStateNode for DatabaseConfig {
     fn new_node(
         store: &::amethystate::Store,
-        path: &str,
+        path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new(store, path)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        path: &str,
+        path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, path, instance_id)
@@ -1017,12 +1021,21 @@ impl DatabaseConfig_Data {
     #[doc(hidden)]
     pub fn __amethystate_load_from(
         store: &::amethystate::Store,
-        prefix: &str,
+        prefix: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Ok(Self {
             host: <::amethystate::Store as ::amethystate::StoreExt>::get::<
                 String,
-            >(store, &::amethystate::join_path(prefix, "host"))?
+            >(
+                    store,
+                    &prefix
+                        .join(
+                            &::amethystate::store::StorePath::from_static(
+                                &["host"],
+                                "host",
+                            ),
+                        ),
+                )?
                 .unwrap_or_else(|| "localhost".to_string()),
         })
     }
@@ -1030,11 +1043,12 @@ impl DatabaseConfig_Data {
     pub fn __amethystate_save_to(
         &self,
         store: &::amethystate::Store,
-        prefix: &str,
+        prefix: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<()> {
         <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
-            &::amethystate::join_path(prefix, "host"),
+            &prefix
+                .join(&::amethystate::store::StorePath::from_static(&["host"], "host")),
             &self.host,
         )?;
         Ok(())
@@ -1161,7 +1175,11 @@ impl ::std::fmt::Debug for SystemSettings {
     }
 }
 impl ::amethystate::StateScope for SystemSettings {
-    const PREFIX: &'static str = "sys";
+    const PATH: ::amethystate::store::StorePath = ::amethystate::store::StorePath::from_static(
+        &["sys"],
+        "sys",
+    );
+    const KEY: &'static str = "sys";
 }
 impl SystemSettings {
     pub fn new_with(store: &::amethystate::Store) -> ::amethystate::StorageResult<Self> {
@@ -1178,19 +1196,25 @@ impl SystemSettings {
         );
         let result = Self {
             __amethystate_instance_id: __amethystate_guard,
-            db: {
-                let prefix = <Self as ::amethystate::StateScope>::PREFIX;
-                let path = ::amethystate::join_path(prefix, "db");
-                ::std::sync::Arc::new(
-                    DatabaseConfig::new_with_id(store, path.as_str(), instance_id)?,
-                )
-            },
-            monitoring: ::amethystate::store::field::<
-                Self,
-                MonitoringConfig,
-            >(
+            db: ::std::sync::Arc::new(
+                DatabaseConfig::new_with_id(
+                    store,
+                    <Self as ::amethystate::StateScope>::PATH
+                        .join(
+                            &::amethystate::store::StorePath::from_static(&["db"], "db"),
+                        ),
+                    instance_id,
+                )?,
+            ),
+            monitoring: ::amethystate::store::field_with_path(
                 store,
-                "monitoring",
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(
+                            &["monitoring"],
+                            "monitoring",
+                        ),
+                    ),
                 MonitoringConfig {
                     enabled: true,
                     thresholds: AlertThresholds {
@@ -1200,13 +1224,19 @@ impl SystemSettings {
                 },
                 instance_id,
             )?,
-            limits: ::amethystate::store::reactive_map::<
-                Self,
+            limits: ::amethystate::store::reactive_map_with_path_only::<
                 String,
                 AlertThresholds,
+                _,
             >(
                 store,
-                "limits",
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(
+                            &["limits"],
+                            "limits",
+                        ),
+                    ),
                 {
                     let mut __map = ::std::collections::HashMap::default();
                     __map
@@ -1229,12 +1259,15 @@ impl SystemSettings {
                 },
                 instance_id,
             )?,
-            presets: ::amethystate::store::field::<
-                Self,
-                Vec<AlertThresholds>,
-            >(
+            presets: ::amethystate::store::field_with_path(
                 store,
-                "presets",
+                <Self as ::amethystate::StateScope>::PATH
+                    .join(
+                        &::amethystate::store::StorePath::from_static(
+                            &["presets"],
+                            "presets",
+                        ),
+                    ),
                 <[_]>::into_vec(
                     ::alloc::boxed::box_new([
                         AlertThresholds {
@@ -1250,7 +1283,7 @@ impl SystemSettings {
                 instance_id,
             )?,
         };
-        store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;
+        store.mark_initialized(<Self as ::amethystate::StateScope>::PATH.as_str())?;
         Ok(result)
     }
     #[doc(hidden)]
@@ -1392,13 +1425,13 @@ impl SystemSettings {
 impl ::amethystate::AmeStateNode for SystemSettings {
     fn new_node(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with(store)
     }
     fn new_node_with_id(
         store: &::amethystate::Store,
-        _path: &str,
+        _path: &::amethystate::store::StorePath,
         instance_id: ::amethystate::uuid::Uuid,
     ) -> ::amethystate::StorageResult<Self> {
         Self::new_with_id(store, instance_id)
@@ -1914,7 +1947,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some("sys"),
+                prefix: Some(
+                    ::amethystate::store::StorePath::from_static(&["sys"], "sys"),
+                ),
                 struct_name: "SystemSettings",
                 version: 0u32,
                 schema_hash: <SystemSettings_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

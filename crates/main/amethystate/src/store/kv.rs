@@ -7,6 +7,7 @@ use crate::store::{StorageResult, StoreBackend, field_with_path, reactive_map_wi
 use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::StorePath;
+use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -82,9 +83,14 @@ impl Kv {
     }
 
     fn resolve(&self, name: &str) -> WriteResult<StorePath> {
-        Ok(match &self.prefix {
-            Some(prefix) => prefix.try_push(name)?,
-            None => StorePath::try_segment(name)?,
+        match &self.prefix {
+            Some(prefix) => prefix.try_push(name),
+            None => StorePath::try_segment(name),
+        }
+        .change_context(WriteError::Path)
+        .attach_with(|| match &self.prefix {
+            Some(prefix) => format!("namespace: {prefix}, name: {name}"),
+            None => format!("name: {name}"),
         })
     }
 
@@ -104,7 +110,11 @@ impl Kv {
     /// assert_eq!(kv.get::<u32>("width").unwrap(), Some(1280));
     /// ```
     pub fn get<T: AmeType + DeserializeOwned>(&self, name: &str) -> WriteResult<Option<T>> {
-        Ok(self.store.get(&self.resolve(name)?)?)
+        let path = self.resolve(name)?;
+        self.store
+            .get(&path)
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("kv read: {path}"))
     }
 
     /// The same writes, each returning only once the change is on disk.
@@ -139,7 +149,9 @@ impl Kv {
         let path = self.resolve(name)?;
         self.guard(&path)?;
         self.store
-            .set_with_source(&path, value, Some(self.instance_id))?;
+            .set_with_source(&path, value, Some(self.instance_id))
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("kv write: {path}"))?;
         Ok(())
     }
 
@@ -165,7 +177,9 @@ impl Kv {
         let path = self.resolve(name)?;
         self.guard(&path)?;
         self.store
-            .delete_with_source(&path, Some(self.instance_id))?;
+            .delete_with_source(&path, Some(self.instance_id))
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("kv remove: {path}"))?;
         Ok(())
     }
 
@@ -229,8 +243,14 @@ impl Kv {
         self.guard(&path)?;
         self.check_type::<T>(&path)?;
 
-        let field =
-            field_with_path::<T, WritableMode>(&self.store, path, default, self.instance_id)?;
+        let field = field_with_path::<T, WritableMode>(
+            &self.store,
+            path.clone(),
+            default,
+            self.instance_id,
+        )
+        .change_context(WriteError::Storage)
+        .attach_with(|| format!("kv cell: {path}"))?;
 
         let cell = field.cell();
         Ok(cell.owning(Arc::new(field)))
@@ -263,12 +283,9 @@ impl Kv {
         self.guard(&path)?;
         self.check_type::<V>(&path)?;
 
-        Ok(reactive_map_with_path_only(
-            &self.store,
-            path,
-            HashMap::new(),
-            self.instance_id,
-        )?)
+        reactive_map_with_path_only(&self.store, path.clone(), HashMap::new(), self.instance_id)
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("kv map: {path}"))
     }
 
     /// Refuses paths a declared struct owns.
@@ -277,17 +294,17 @@ impl Kv {
     /// wrong thing: the field's subscription fails to decode and keeps its old
     /// value, and the next startup fails outright when it reads the path back.
     fn guard(&self, path: &StorePath) -> WriteResult<()> {
-        let path = path.as_str();
         for entry in inventory::iter::<SchemaEntry> {
-            let Some(prefix) = entry.prefix else {
+            let Some(prefix) = &entry.prefix else {
                 continue;
             };
 
-            if path == prefix || path.starts_with(&format!("{}.", prefix)) {
-                return Err(WriteError::SchemaOwned {
-                    path: path.to_string(),
-                    prefix: prefix.to_string(),
-                });
+            if path.starts_with(prefix) {
+                return Err(Report::new(WriteError::SchemaOwned {
+                    path: path.as_str().to_string(),
+                    prefix: prefix.as_str().to_string(),
+                })
+                .attach(format!("declared by: {}", entry.struct_name)));
             }
         }
 
@@ -304,11 +321,13 @@ impl Kv {
         let wanted = T::TYPE_NAME;
 
         match resolve_field(path) {
-            Some(meta) if meta.value_type_name != wanted => Err(WriteError::TypeMismatch {
-                path: path.to_string(),
-                known: meta.value_type_name.to_string(),
-                asked: wanted.to_string(),
-            }),
+            Some(meta) if meta.value_type_name != wanted => {
+                Err(Report::new(WriteError::TypeMismatch {
+                    path: path.to_string(),
+                    known: meta.value_type_name.to_string(),
+                    asked: wanted.to_string(),
+                }))
+            }
             _ => Ok(()),
         }
     }
@@ -320,7 +339,12 @@ impl Durable<'_, Kv> {
     /// Returns only once it is on disk rather than buffered.
     pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         self.0.set(name, value)?;
-        self.0.store.flush_prefix(&self.0.resolve(name)?)?;
+        let path = self.0.resolve(name)?;
+        self.0
+            .store
+            .flush_prefix(&path)
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("committing kv write: {path}"))?;
         Ok(())
     }
 
@@ -335,7 +359,13 @@ impl Durable<'_, Kv> {
         value: &T,
     ) -> WriteResult<()> {
         self.0.set(name, value)?;
-        self.0.store.flush_async().await?;
+        let path = self.0.resolve(name)?;
+        self.0
+            .store
+            .flush_async()
+            .await
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("committing a kv write: {path}"))?;
         Ok(())
     }
 
@@ -344,7 +374,12 @@ impl Durable<'_, Kv> {
     /// Returns only once the removal is on disk rather than buffered.
     pub fn remove(&self, name: &str) -> WriteResult<()> {
         self.0.remove(name)?;
-        self.0.store.flush_prefix(&self.0.resolve(name)?)?;
+        let path = self.0.resolve(name)?;
+        self.0
+            .store
+            .flush_prefix(&path)
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("committing kv remove: {path}"))?;
         Ok(())
     }
 
@@ -353,9 +388,15 @@ impl Durable<'_, Kv> {
     /// Resolves once the change is on disk rather than buffered.
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn remove_async(&self, path: &str) -> WriteResult<()> {
-        self.0.remove(path)?;
-        self.0.store.flush_async().await?;
+    pub async fn remove_async(&self, name: &str) -> WriteResult<()> {
+        self.0.remove(name)?;
+        let path = self.0.resolve(name)?;
+        self.0
+            .store
+            .flush_async()
+            .await
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("committing a kv remove: {path}"))?;
         Ok(())
     }
 }

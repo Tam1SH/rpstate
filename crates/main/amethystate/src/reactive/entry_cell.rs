@@ -4,6 +4,7 @@ use crate::reactive::error::WriteError;
 use crate::store::StoreBackend;
 use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue, WritableMode};
 use amethystate_core::{MapChange, Signal};
+use error_stack::{Report, ResultExt};
 use std::sync::Arc;
 
 impl<K, V> ReactiveMap<K, V, WritableMode>
@@ -81,8 +82,14 @@ where
         let start = weak.clone();
         let commit = CellCommit {
             now: Arc::new(move || {
-                let inner = flush.upgrade().ok_or(WriteError::SourceGone)?;
-                Ok(inner.store.flush_prefix(&inner.path)?)
+                let inner = flush
+                    .upgrade()
+                    .ok_or_else(|| Report::new(WriteError::SourceGone))?;
+                inner
+                    .store
+                    .flush_prefix(&inner.path)
+                    .change_context(WriteError::Storage)
+                    .attach_with(|| format!("committing an entry write: {}", inner.path))
             }),
             start: Arc::new(move || match start.upgrade() {
                 Some(inner) => inner.store.flush_async(),

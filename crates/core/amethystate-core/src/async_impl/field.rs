@@ -4,6 +4,7 @@ use crate::path::StorePath;
 use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
 use crate::{Change, FieldCore, InterceptDisposer, SignalSubscription};
+use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::sync::{Arc, Mutex};
@@ -107,14 +108,19 @@ where
         self.core.get()
     }
 
-    pub async fn get(&self) -> ReactiveFieldResult<T, B::Error> {
+    pub async fn get(&self) -> ReactiveFieldResult<T> {
         self.backend
             .get(&self.path)
-            .await?
-            .ok_or_else(|| FieldError::KeyNotFound(self.path.to_string()))
+            .await
+            .change_context(FieldError::Storage)
+            .attach_with(|| format!("field: {}", self.path))?
+            .ok_or_else(|| {
+                Report::new(FieldError::KeyNotFound(self.path.to_string()))
+                    .attach("read through a field handle")
+            })
     }
 
-    pub async fn update<F>(&self, f: F) -> ReactiveFieldResult<T, B::Error>
+    pub async fn update<F>(&self, f: F) -> ReactiveFieldResult<T>
     where
         F: FnOnce(T) -> T,
     {
@@ -124,7 +130,7 @@ where
         Ok(new_val)
     }
 
-    pub async fn modify<F>(&self, f: F) -> ReactiveFieldResult<(), B::Error>
+    pub async fn modify<F>(&self, f: F) -> ReactiveFieldResult<()>
     where
         F: FnOnce(&mut T),
     {
@@ -133,7 +139,7 @@ where
         self.set(val).await
     }
 
-    pub async fn set(&self, value: T) -> ReactiveFieldResult<(), B::Error> {
+    pub async fn set(&self, value: T) -> ReactiveFieldResult<()> {
         crate::field_set_async(
             &self.backend,
             &self.core,

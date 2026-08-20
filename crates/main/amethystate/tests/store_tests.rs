@@ -2,6 +2,8 @@ use amethystate::Store;
 use amethystate::migration::fields::FieldDescriptor;
 use amethystate::migration::set::MigrationSet;
 use amethystate::migration::{MigrationError, MigrationPlan};
+use amethystate::store::IntoStorageReport;
+use amethystate::store::StorageError;
 use amethystate::store::SubscriptionKind;
 use amethystate::store::config::StoreConfig;
 use amethystate_core::test_utils::unique_path;
@@ -61,13 +63,14 @@ fn test_delete_flow() {
 }
 
 #[test]
-fn test_smart_recovery_decode() {
+fn bytes_that_are_not_the_type_are_an_error_rather_than_a_default() {
     let path = unique_path("recovery");
     let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
     let garbage = vec![0x00, 0x01, 0x02];
 
-    let result: String = store.decode(&garbage).unwrap();
-    assert_eq!(result, String::default());
+    let err = store.decode::<String>(&garbage).unwrap_err();
+
+    assert_eq!(err.current_context(), &StorageError::Codec);
 }
 
 #[test]
@@ -164,7 +167,7 @@ fn test_component_atomic_rollback() {
         .add(
             "ui",
             MigrationPlan::new().step(1, "fail", |_| {
-                Err(MigrationError::Custom("crash".into()).into())
+                Err(MigrationError::Custom("crash".into()).into_report())
             }),
             0,
             EMPTY_FIELDS,
