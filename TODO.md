@@ -577,6 +577,86 @@ The steps, each standing on its own:
    prevent a collision, they only stop one from happening by accident;
 7. a format version in the metadata.
 
+## The error model: `error-stack`, and what it has to buy
+
+### What is wrong now
+
+Ten `thiserror` enums, nested by `#[error(transparent)]`. `StorageError` wraps
+five engines plus the codec, the migration engine and `StorePathError`;
+`WriteError` wraps `StorageError` in turn. Transparent nesting keeps the
+innermost message and throws away every layer that knew something useful, so
+what reaches a caller is the engine's sentence and nothing else:
+
+    Error: no such table: data
+
+Which path, which store, which operation, which prefix a migration was on - all
+of it was known at some frame on the way out and none of it is in the value. The
+enums cannot fix this by adding fields: the context differs per call site, not
+per variant, and a variant per call site is not a design.
+
+Three consequences already written down elsewhere in this file:
+
+- a key that will not parse is skipped in silence, because there is nowhere to
+  put "which key, in which file" (the section below);
+- the conformance suite cannot assert failures, only successes, because the
+  errors are not distinguishable enough to assert on (the section near the end);
+- a failed migration reports the engine's error, not which prefix or which step
+  it was on.
+
+### What `error-stack` gives
+
+A `Report<C>` is one context type plus a stack of frames, each carrying
+attachments. The context is the *kind* of failure; the attachments are the
+*particulars*, added by whoever knew them:
+
+    store.get_raw(path)
+        .change_context(StorageError::Read)
+        .attach_printable_lazy(|| format!("path: {path}"))?;
+
+The type stays one type. The message becomes the whole chain, printed as a tree,
+with each attachment beside the frame that added it. That is precisely the shape
+this library needs, because the useful context is always positional.
+
+`stackerror` was the other candidate and is the wrong one here: it makes errors
+opaque plus a code, which suits a boundary crate, not one whose callers branch
+on what happened.
+
+### The shape it becomes
+
+- Keep the enums as *contexts*, but shrink them. A context should name what
+  failed, not restate the cause: `StorageError::{Read, Write, Flush, Open,
+  Migrate, Decode, Encode}` rather than one variant per engine. The engine's own
+  error becomes an attached frame.
+- Public signatures become `Result<T, Report<StorageError>>` and
+  `Result<T, Report<WriteError>>`. `StorageResult<T>` and `WriteResult<T>` stay
+  as the aliases; most call sites do not change shape.
+- Engine crates keep their own error types and stop being variants of
+  `StorageError`; they attach.
+- `?` keeps working through `change_context`, but every `?` that crosses a layer
+  boundary has to name what it was doing. That is the actual work, and the
+  actual value.
+
+### Order
+
+1. Add the dependency and convert `amethystate-core` first - it has the
+   smallest surface (`WriteError<E>`, `StorePathError`) and everything else
+   depends on it.
+2. `StorageError`: collapse the engine variants into contexts, attach the engine
+   errors. Everything compiles at each step because the alias absorbs it.
+3. Attach at the boundaries that know something: path on every store operation,
+   file on every text-engine operation, prefix and step on every migration.
+4. Then, and only then: replace the silent `else { continue }` skips with a
+   skip that carries a report, and write the backend conformance suite's failure
+   half.
+
+### What it costs
+
+Every `From` impl that exists only to nest one enum in another goes away;
+`reactive/error.rs`'s hand-written `From<core::WriteError<E>>` goes with it. The
+enums get smaller. The cost is at the `?` sites: a bare `?` across a layer is no
+longer enough, and there are on the order of a few hundred. That is the point -
+each one is a place where context is being dropped today.
+
 ## A key that will not parse disappears from a scan without a word
 
 The text backends rebuild a key from the document tree and read it back with
@@ -676,16 +756,270 @@ a clean return from `main`.
 This also qualifies the debouncer fix: the pending write reaches disk on drop,
 where a drop happens.
 
-## Sync and async durable writes commit different amounts
+## `.pipe()` keeps its sources alive with two of them and drops them with one
+
+`IntoPipeline for R: Reactive<T>` (`core/primitives/pipeline.rs:250`) subscribes
+to the source and drops it, keeping only `keepalive()` - which is `None` for
+`Field` and `ReactiveMap`. The tuple impl (`:290`) captures a clone of every
+source, so those live. One method name, opposite ownership. Confirmed by
+running it:
+
+| built as | after the source is dropped |
+| --- | --- |
+| `port.pipe().map(..)` | frozen at the old value |
+| `(host, port).pipe().map(..)` | still live |
+| `port.into_cell().pipe().map(..)` | frozen |
+| `port.subscribe(cb)`, handle held | dead, no callback |
+
+The third row is the worst: `into_cell` and `Kv::cell` exist precisely to be the
+handle that owns, and `.pipe()` throws that away - `ReactiveCell::keepalive`
+does not include `_owner`. The README's own pattern is affected: a component
+that pipes one field and lets go of the state struct shows the right first value
+and never updates again, with nothing to warn it.
+
+`pipe` should push `Arc::new(self)` into `keepalive`, which is the move the
+tuple impl already makes, and `ReactiveCell::keepalive` should carry `_owner`.
+That a bare `SignalSubscription` does not keep its source alive is a real choice
+and should be written down rather than left to be discovered.
+
+## `SignalSubscription` is `Clone`, and dropping any clone cancels the original
+
+`core/primitives/signal.rs:36` - the derive copies the id, `Drop` calls
+`cleanup(id)`, and cleanup retains by id. So a clone is a second trigger rather
+than a co-owner. Confirmed by running it: clone the handle, drop the clone, and
+the original stops firing while still held. `ReactiveScope` is `Clone` too, and
+that is what the macro's `subscribe_all` hands back - so a component handle with
+a derived `Clone` stops updating after being cloned once.
+
+The type is a cancellation token; it should not be `Clone` at all, or it should
+be an `Arc<Inner>` whose `Inner: Drop` unsubscribes.
+
+## The error model's seams with the outside world
+
+Three, none about the contexts themselves - those are right.
+
+`Report<C>` does not implement `std::error::Error`, so `?` from a
+`StorageResult` into an `anyhow::Result` does not compile. `Box<dyn Error>`
+works; `anyhow` is what an application's `main`, its Tauri commands and its task
+bodies are actually written in, and every call site there becomes
+`.map_err(|e| anyhow!("{e:?}"))`, which throws away the tree the whole
+conversion was for. `Report::into_error()` is the sanctioned exit and nothing
+points at it.
+
+`error_stack` is in every public signature and is not re-exported from the
+facade, though `serde`, `uuid`, `inventory` and `serde_json` all are. A caller
+who wants `.attach()` must add the dependency themselves and keep the version in
+lock-step or the traits do not apply.
+
+There is no `From<Report<StorageError>>` for `Report<WriteError>`, so the store
+layer and the reactive layer do not compose with a bare `?`. `WriteError` is
+local, so the impl is allowed.
+
+## `ReactiveMap`'s reads return `Result`, and none of them can fail
+
+`reactive/map.rs:129,145,157,196,228,233`. Since reads moved to the projection,
+`get`, `contains_key`, `entries`, `keys`, `len` and `is_empty` are `Ok(..)` with
+nothing fallible above them. This is the line a GUI types most often, in a
+render function with nothing to return an error to. `get` also takes `&K`, so
+with a `String` key it is `widths.get(&"cpu".to_string())` - the doctests do
+exactly that seven times.
+
+Drop the `Result` from all six, and take `&Q where K: Borrow<Q>` on
+`get`/`contains_key`/`remove`. Both are breaking and get cheaper the sooner they
+land.
+
+## `AmeType` locks every foreign type out, and the user cannot let it back in
+
+`Kv::get`/`set`/`cell`/`map` and every persistent leaf field require
+`T: AmeType`. Impls exist for the numeric primitives, `bool`, `String`, `Vec`,
+`Option`, `HashMap`. `IpAddr`, `Duration`, `PathBuf`, `SystemTime`, `BTreeMap`,
+`HashSet`, arrays and tuples are therefore unstorable - and the user cannot fix
+it, because both trait and type are foreign and the orphan rule forbids the
+impl. This is not a coverage gap that more impls close; it is a hole with no
+user-side patch, and it needs an escape hatch before the bound spreads further.
+`Kv::get` takes the bound and never uses it.
+
+## Dead weight around the sync backend trait
+
+`AmeBackendSync` has one implementor in the workspace - `SyncBridge`, which
+forwards every method to `Store` and immediately re-erases what the generics
+bought. Its `Raw: Borrow<Borrowed>` pair exists to serve one `decode` signature.
+And `map_get`, `map_contains_key`, `map_entries` and `map_len`
+(`core/primitives/map_ops.rs`) have **zero callers** anywhere now that the map
+reads from its projection - confirmed by grep - while remaining `pub` and
+re-exported, and still doing the buffered scan the `flush_prefix` entry measures
+at 364 ms. The async twins are live; the sync four are not.
+
+## Smaller, and cheap
+
+- `ReadOnlyReactiveMap` and `WritableReactiveMap` alias `Field`, not
+  `ReactiveMap` (`reactive/map.rs:41`), and take one type parameter where a map
+  needs two. Publicly reachable.
+- `reactive_map_with_path<TScope, ..>` binds `TScope: StateScope` and never uses
+  it; callers turbofish four parameters for nothing.
+- `Kv::keys` returns joined, escaped, absolute strings, where
+  `ReactiveMap::keys` returns `Vec<K>`. It should return the names below the
+  namespace.
+- `StorePath::from_static` is public and unchecked, with a doc saying `joined`
+  must match `segments` and nothing enforcing it. It exists for the macro;
+  `#[doc(hidden)]` it.
+- A leaf field with no `default` panics the proc macro
+  (`generate/init.rs:115`), pointing at the attribute rather than the field, so
+  a struct with ten fields does not say which one. The map and nested branches
+  four lines above fall back to `Default::default()`.
+- `get_map_types` decides a field is a map by matching the last path segment
+  against the literal string `"ReactiveMap"`, so a type alias or a renaming
+  import silently generates a scalar field.
+- Every prefixed struct gets a generated `new()` that calls `global_store()`,
+  so the most obviously named constructor is the one that panics when there is
+  no global store. There is no `try_init_global`.
+- `ReactiveCell::update`/`modify` return `SourceGone` for an absent map key,
+  whose message sends the reader looking for a lifetime bug they do not have.
+  `KeyNotFound` is in the same enum.
+- The README's headline example does not compile: `amethystate::Result` does not
+  exist.
+
+## Errors that reach nobody
+
+From an audit of every bare `?` and every silent skip in `core/` and
+`amethystate/src`. Ordered by what it costs.
+
+**A failed migration is invisible through `StoreBuilder::build`.** The engine
+turns a failure into data - `ComponentOutcome::Failed { error }` inside an
+`Ok(report)` - and `build` (`store/builder.rs:262`) discards the report.
+`build_with_report` calls `log_to_tracing`; `build` does not, and
+`MigrationReport` is not `#[must_use]`. Confirmed by running it: a store at v1
+with a v2 step that returns `Err` opens successfully, silently, holding
+pre-migration data, and the application then runs new code against old data.
+That is the thing migrations exist to prevent. `confy::get_store` and every
+doctest take this path.
+
+**Every engine discards its last flush on drop.** `let _ = self.close()` in
+`redb/mod.rs:147`, `sqlite/mod.rs:516`, and `let _ = self.save_now()` in
+`text/store.rs:178`. `close` is the only thing that commits the write buffer at
+shutdown. redb's `close` even attaches "flushing the buffer before close", and
+the attachment goes on the floor. `Drop` cannot return, but it can log.
+
+**`confy::load_or_else` deletes the config file on any store-open error**
+(`confy/mod.rs:410`). `get_store` fails on a poisoned mutex, on `create_dir_all`,
+and on `build()` - which covers the database being locked by another process and
+permission denied. None of those mean the config is bad; all of them delete it.
+The report is discarded, so the error the user finally sees describes the
+freshly recreated store rather than the original failure.
+
+**`CommitSignal` reduces a report to one bool** (`store/durable.rs:35`). Every
+producer has a `Report` in hand and throws it away; `outcome` then builds a bare
+`CommitFailed` from nothing. A user awaiting a durable write on a full disk gets
+the same one line as one whose database was deleted. Two smaller faults in the
+same struct: `last_failed` is one flag rather than per-generation, so a waiter
+across two overlapping flushes reads the wrong result; and `Commit::gone` gives
+the same `CommitFailed`, so "the store was dropped" and "the write did not land"
+are indistinguishable.
+
+**The migration engine does not attach what the error model documents it
+will.** `store/error.rs` says the frames around a step - which prefix, which
+version, which store - are put there by the engine. At `engine.rs:371`
+(`step.run(&mut ctx)?`) it holds all three and attaches none. Same for every
+bare `?` on the bookkeeping calls in `migrate_prefix`, where `ensure_snapshots`
+in the same file attaches carefully. On sqlite, whose `run_migrations` also does
+not name the store where redb's does, a failed migration yields a report with no
+locating information at all.
+
+**Every interceptor rejection reports the same thing, including the one that is
+not a rejection.** `run_interceptors` distinguishes three outcomes; all five
+call sites collapse them to `Intercepted`. The damaging one is depth
+exhaustion - nothing rejected anything, the guard refused to run because the
+write is ten levels deep in interceptor-triggered recursion, which is a bug in
+the caller's own code reported as a validation refusal.
+
+**The file watcher can go deaf without saying so.** `text/store.rs:320` -
+`let Ok(event) = res else { return };`. `notify` delivers its own failures
+through that channel: a dropped watch, a lost handle, queue overflow. After one,
+the store may stop seeing external edits entirely, and the only symptom is that
+they stop arriving.
+
+**`restore_from_backup` discards its errors while `open` claims the restore
+happened.** `text/store.rs:95-104` is four `let _ =` over `fs::copy` and
+`fs::remove_file`; `open` then attaches "the files were restored from their
+backups". If the copy failed, that attachment is a claim the discarded error
+would have refuted, and a reader who believes it will not check the file.
+
+**`entry_cell` turns a read failure into "the key is empty"**
+(`reactive/entry_cell.rs:61`), which is the vocabulary the cell reserves for a
+removed key. The real defect is the signature: `entry_cell` returns
+`ReactiveCell<V>` with nowhere to put an error.
+
+**Poisoned-lock fallbacks that silently disable a subsystem.**
+`map_core.rs:289,298,310` fail open in `notify` while the same file uses
+`.lock().unwrap()` in seven other places - so a poisoned mutex makes
+`subscribe_any` panic while `notify` quietly delivers to nobody, permanently.
+`observability/mod.rs:77,87` does the same to the registry that `Kv::check_type`
+consults, turning off the guard against one path being claimed as two types.
+
+**`Kv::keys` breaks the `Kv` error type** (`store/kv.rs:204`): it returns
+`StorageResult` where every other method returns `WriteResult`, so a caller
+using `get` and `keys` in one function needs two error types.
+
+## The background flush can fail silently, and a waiter on it can hang
+
+Found while converting the engines to `error-stack`, in redb and sqlite alike.
+
+The debouncer callback is `FnMut()` with nowhere to return to, so it discards
+every error: redb's closure is an `Option`-returning block full of `.ok()?`
+(`backend/redb/mod.rs:235-254`), sqlite's uses `Err(_)` and `.is_err()`
+(`backend/sqlite/mod.rs:587-644`). A full disk, a missing table and the test's
+`SIMULATE_WRITE_FAILURE` all collapse into one bare `false`, and nothing is
+logged even though `tracing` is already in scope in both files. This is the
+background write path, so a user's data fails to land with no trace anywhere.
+
+Worse in sqlite: if `conn.transaction()` or any of the three `prepare` calls
+fails, the closure returns **without** calling `commits_save.finished(..)`. A
+`Commit` riding on that flush is never woken. That is a hang, not a lost error.
+
+redb's synchronous `flush_prefix` has the matching hole: `commits.finished(true)`
+is only on the success path (`backend/redb/mod.rs:134`), so every `?` above it
+returns without telling the waiters anything.
+
+`StorageError::CommitFailed` is the context these want, and `CommitSignal`
+already carries a failure flag - what is missing is calling it on the way out.
+
+## The sqlite migration adapter still scans by `GLOB`
+
+`backend/sqlite/migration.rs:128` builds its prefix scan as
+`WHERE key GLOB ?` with `format!("{}*", prefix)`. `utils::key_range` exists
+precisely so this is not done: a name may hold GLOB metacharacters - `panel[0]`
+is a name - and nothing escapes them. `ui*` also matches `uix.width`, with no
+separator boundary. The main engine's path was fixed; this one was missed.
+
+## `confy`'s error conversion is written against an error model that is gone
+
+`confy/mod.rs:134-177` destructures `RpError::TextStore(..)`, `RpError::Codec(..)`,
+`RpError::Path(..)`. `StorageError` is now a payload-free enum naming the
+operation, so that whole match is stale. It only compiles under `confy-compat`,
+which is why nothing has noticed.
+
+## A durable write commits a different amount on each engine
 
 `Durable::set` calls `flush_prefix`; `Durable::set_async` calls `flush_async`,
 which every backend implements as a full `save_now` of the whole buffer. The
-same pair on `ReactiveCell`, `ReactiveMap` and `Kv` behaves the same way.
+same pair on `ReactiveCell`, `ReactiveMap` and `Kv` behaves the same way. So the
+two forms of one operation have different granularity, and the documentation of
+the sync form is spent explaining a granularity the async form does not have.
+
+The engines then disagree about the sync form too.
+`tests/durability_crash.rs` runs one statement against all five: write one field
+plainly, one durably, abort the process, reopen. The durable write is there
+every time. The plain one is gone on redb and sqlite - and present on json, toml
+and ron, because `flush_prefix` there ignores its prefix and calls `save_now`
+(`backend/text/store.rs:642`), so committing anything commits everything.
+
+Nothing about that is unsafe, and it is why the test asserts it rather than
+papering over it. But `Durable` is documented as a promise about one write, and
+on three of five engines it is a promise about the store. A caller batching
+writes for cost cannot tell which they have.
 
 Distinct from the `flush_prefix` entry at the top, which is about how much rides
-along with a prefix flush. This one is that the two forms of the same operation
-have different granularity, and the documentation of the sync form is spent
-explaining a granularity the async form does not have.
+along with a prefix flush.
 
 ## `LocalScope::clear` does the opposite of what it says
 
@@ -732,6 +1066,134 @@ open by promising the durability their `Durable` counterparts provide.
 `Watch` builder's, so every subscription made the way the subscriptions chapter
 teaches logs a line inside this library.
 
+## What tampering with a text document does, found by doing it
+
+`tests/tamper_*.rs` write a store, edit the file the way a person or another
+tool would, and reopen. Every failing test asserts the behaviour that would be
+right, so its failure message is the finding. Worst first; six of these lose
+data with no error at all.
+
+**A level named `.` is the whole document.** `normalise_parts` maps `["."]` to
+the root (`document.rs:45`), and `StorePath::segment(".")` is a legal one-level
+path, so `kv.set(".", &value)` replaces the entire document and `get_raw` on
+`.` returns the whole store. `delete(["."])` removes nothing and emits a
+`Delete` anyway. json, toml, ron; redb and sqlite have no root alias and are
+unaffected. `tamper_dot_sentinel.rs`, 7 failures on each format.
+
+**An empty TOML file is a valid empty document.** `TomlDocument::parse`
+(`toml_doc.rs:84`) has no root check, where json and ron reject a non-object
+root. An editor's truncate-then-write window therefore reads as "every key
+deleted": subscribers are told, and the next save writes the emptiness back.
+The watcher's debounce cannot help, because the truncated file parses.
+`tamper_live.rs`, `tamper_toml_inline.rs`.
+
+**Writing under a TOML inline table or array-of-tables empties it.**
+`ensure_map` tests `is_table()`, false for `Item::Value(InlineTable)` and
+`ArrayOfTables`, and replaces the node (`toml_doc.rs:24`). `cfg = { width,
+height }` plus one `set(["cfg","scale"])` loses both. `tamper_toml_inline.rs`.
+
+**A declared section holding a scalar or a list is wiped at startup.** Same
+`ensure_map` in all three formats; `field_with_path` writes its default when the
+read is `None`, and the walk to the parent replaces whatever stood there.
+`tamper_shapes.rs`.
+
+**TOML reads a section back as one of its children.** `with_bytes_de` renders a
+non-value node as `val = ...` and cuts at the first `=`, which for a table is
+the one inside it (`toml_doc.rs:150`). `[cfg.width]\npx = 800` reads as
+`Some(800)`. json and ron error here, which is the right answer.
+
+**Deleting inside a TOML inline table reports success and removes nothing.**
+`remove_child` uses `as_table_mut()` (`toml_doc.rs:33`); `store.rs:426` emits
+the `Delete` regardless, so a bound `Field` resets to its default while the
+store still holds the old value, and a restart brings it back.
+
+**The metadata is a second file nothing binds to the data.** Versions,
+snapshots and `__init` markers live in `path.with_extension("meta")`
+(`store.rs:191`). Losing it replays migrations over migrated data - 21 doubles
+to 42, then to 84 - restores defaults the user deleted, and a forged marker
+suppresses the real ones. redb and sqlite keep this in the same transaction as
+the data, so it cannot come apart. `tamper_meta.rs`.
+
+**An unrelated pending write rolls back a concurrent external edit.**
+`sync_external_changes` refuses to pull while `writes != persisted`
+(`store.rs:826`) and a persist writes the whole document from memory, so one
+buffered write anywhere discards every hand edit, including to untouched keys.
+`tamper_live.rs`.
+
+**A broken external edit is dropped without a word and then overwritten.**
+`D::parse` fails, `sync_external_changes` returns early (`store.rs:815`),
+nothing reaches the caller, and the next save replaces the half-written file.
+
+**The data and metadata share one backup path.** `with_extension("bak")`
+(`store.rs:47`) collides for `store.db` and `store.meta`, so the surviving
+`.bak` holds the metadata; a `store.bak` the user already had is overwritten and
+then deleted. The corruption this should cause is masked by `Drop` running
+`save_now` afterwards - an ordering accident, not a defence.
+`tamper_broken_file.rs`.
+
+**A key with no name is invisible to every scan.** `generic_scan` skips a child
+it cannot push (`document.rs:116`). The entry survives a round trip but cannot
+be listed or deleted.
+
+Held up under the same tampering, worth knowing: wrong scalar types at a
+declared field fail loudly on all three; undeclared keys survive a rewrite; a
+truncated or scalar-rooted file is refused and left byte-for-byte intact; a
+scan over a prefix lists the value at the prefix itself identically on all five
+engines.
+
+## What the conformance suite says the engines disagree about
+
+`tests/backend_conformance.rs` states twenty-one properties about what a store
+is and runs each against every engine compiled in. redb and sqlite pass all
+twenty-one. json, toml and ron fail the same eight - which is itself the
+finding: the three formats share one implementation and diverge from the flat
+engines in exactly one place, the document walk.
+
+Four of the eight are written up above (a level named `.`, a leaf and a branch
+at one name, `delete_prefix` re-splitting a scanned key). The rest are new.
+
+**A scan on a text engine goes one level deep.** `scan_prefix_impl` and
+`scan_keys_impl` set `target_depth = parts.len() + 1` (`text/store.rs:825`,
+`:1004`), so a scan lists direct children only; anything deeper comes back as
+the intermediate branch, with a serialized subtree for its value. redb ranges
+the whole subtree and sqlite ranges `key_range`, so both list every key at any
+depth. A value three levels down is invisible to a scan of its grandparent.
+`ReactiveMap` survives this only because a map's entries are always exactly one
+level below it. `Store::scan_keys` means two different things depending on the
+engine.
+
+**`delete` at a path that holds no value takes everything under it.**
+`generic_delete` removes the node, so `delete(["a"])` where only `a.b` exists
+deletes `a.b`. On the flat engines there is no key at `a` and nothing happens.
+On a document engine `delete` and `delete_prefix` are the same call.
+
+**On toml, deleting an absent path creates the levels on the way to it.**
+`Navigable::get_child_mut` for toml is `Item::get_mut`, which is
+`Index::index_mut`, which does `entry(key).or_insert(Item::None)`.
+`generic_delete` walks the heads with it, so the walk vivifies, and the phantom
+branches are then listed by the next scan. json and ron do not - a difference
+*within* the shared text implementation.
+
+**Reading a path that holds no value but has values under it gives three
+answers.** redb and sqlite say `Ok(None)`. json and ron give a decode error, the
+branch object not being a `u32`. toml gives the child's value, through the
+`with_bytes_de` cut at the first `=`. None of the text answers is `None`.
+
+**The error model does not agree.** redb and sqlite report undecodable bytes
+with `current_context() == StorageError::Codec`. All three text engines wrap it
+once more at `text/store.rs:652`, so the outermost context is `Read` and `Codec`
+is a frame below. A caller matching on `current_context()` cannot tell "the
+bytes are the wrong type" from "the file would not read". This is exactly what
+the error model was meant to make assertable.
+
+**Not covered, and the largest remaining gap: events.** Nothing asserts that one
+operation emits the same `StoreOp`, the same `old`/`new` bytes and the same
+count on every engine. `text/store.rs:426` already emits a `Delete` for a
+removal that did not happen, so that suite would find things. Also uncovered:
+concurrency between two handles, the async surface, `is_initialized`, and value
+shapes past `u32`/`String` - nested structs, enums and sequences are where the
+three text formats differ most from each other and from msgpack.
+
 ## The text engines take a path apart and put it back on every call
 
 `TextDocument` addresses a node by `&[&str]`, so every `get`, `set` and `delete`
@@ -740,10 +1202,19 @@ the scan walkers allocate one more per child. `generic_scan` then builds a
 `StorePath` back out of that slice to compose the child keys.
 
 `split_path` parses the joined form a third way - by `str::split('.')`, which
-knows nothing about the escape - and `delete_prefix` still goes through it.
-`tests/delete_prefix_dotted_keys.rs` says a dotted name does get deleted with
-its subtree today, so this is a disagreement between two parsers rather than a
-reproduced failure; it stays a hazard while both exist.
+knows nothing about the escape - and `delete_prefix` still goes through it
+(`store.rs:463`). A scanned key comes back escaped as `cfg.a\.b`, splits into
+`["cfg", "a\\", "b"]`, and addresses a level that is not there, so the delete
+removes nothing and returns `Ok(())`.
+
+`tests/tamper_names.rs` reproduces it. `tests/delete_prefix_dotted_keys.rs`
+passes only because its dotted key sits below the scan's depth cut-off; the bug
+bites when the name lands at the scanned depth. `text/migration.rs:22,30,37`
+route every migration read and write through the same `split_path`.
+
+Wider than a dot: the conformance suite's generator shrank this to a name that
+is a lone **backslash**, so any name holding the escape character triggers it
+too, not only one holding the separator.
 
 `normalise_parts` maps `["."]` to the root, left from when `"."` was the
 sentinel for the whole document. A level genuinely named `.` is a path now, and
@@ -767,11 +1238,9 @@ What is wanted is one set of tests, parameterised by engine, that says what a
 store is regardless of which one is underneath - and a per-engine file left with
 only what is genuinely particular to it.
 
-Durability is the clearest case of a statement written against one engine.
-`tests/durability_crash.rs::a_durable_write_survives_a_crash_and_a_plain_one_does_not`
-names a property every store has to have, and runs it against redb alone - so
-whether a text engine or sqlite keeps a durable write across a crash is
-currently unasserted, and the answer differs by engine.
+`tests/durability_crash.rs` is what one of these looks like: one statement, run
+against every engine compiled in. Widening it from redb alone immediately turned
+up a difference nothing was watching - see the granularity entry above.
 
 A good part of it belongs as properties rather than examples, because the
 statements are universally quantified and the interesting inputs are the ones
