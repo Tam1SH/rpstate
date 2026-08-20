@@ -84,51 +84,6 @@ consuming all 10 000, because the scan materialises every key and value before
 the iterator is handed over. Decoding is lazy; the scan is not, and the scan is
 the whole cost. The doc on `entries` should stop implying otherwise.
 
-## `ReactiveCell` needs reworking: a weak view, not a source
-
-The type is slated for rework, not a patch - the three faults below are one
-cause, and fixing them separately would leave the model half-changed.
-
-Decided: a cell is a view over data that lives somewhere else. If that data is
-gone, every operation fails - it does not substitute a default, and it does not
-put the value back.
-
-Three things break today, and all three follow from the cell behaving like an
-owner instead:
-
-**It hands back a value the store never held.** `entry_cell` keeps its
-`default` in the signal and never writes it, so `cell.get()` returns a number
-while `map.get(&key)` returns `None` and `contains_key` says `false`. A field
-does the opposite - it writes its default on creation - so one word means two
-things depending on which primitive is under it.
-
-**A write to a removed entry silently recreates it.** `cell.set(v)` after
-`map.remove(key)` puts the key back. For a view of data that no longer exists,
-the honest answer is an error.
-
-**A stray cell pins the whole store open.** The writer closure captures a clone
-of the `ReactiveMap`, which holds `store: Store` - an `Arc<dyn StoreBackend>` -
-and `_keepalive` holds the subscription. So one forgotten cell in a UI keeps the
-database file open and the debouncer thread alive long after the map and the
-store handle were dropped. Holding `Weak` fixes that as a side effect.
-
-Consequences to work through:
-
-- Reads and writes become fallible. That is heavier than returning `Option`,
-  and it lands on cells over fields too, where the source practically never
-  dies. Worth checking whether the error can be confined to the paths that can
-  actually fail.
-- Erasure forces the weakest common contract. `ReactiveCell` exists so fields,
-  map entries and in-memory values share one type and one collection; once map
-  entries are in that set, "the value is always there" stops being true of the
-  set, which is why the current `T` return lies for every kind and not just for
-  entries. A separate `EntryReactiveCell` would remove the lie and the erasure
-  with it.
-- An in-memory cell has no source to lose, so it never fails - the same API
-  covers it, just never taking the error branch.
-- The doctest on `entry_cell` currently asserts the recreation behaviour. It is
-  meant to fail when this lands.
-
 ## A non-finite float is silently destroyed on the text backends
 
 JSON has no `NaN` or infinity, so `serde_json` writes them as `null`, and
@@ -622,30 +577,25 @@ The steps, each standing on its own:
    prevent a collision, they only stop one from happening by accident;
 7. a format version in the metadata.
 
-## A prefix is a string prefix, not a segment boundary
+## A key that will not parse disappears from a scan without a word
 
-`scan_keys` is documented as "the keys under `prefix`" and `delete_prefix` as
-"removes every key under `prefix`", and on the flat engines both match a raw
-string prefix instead.
+The text backends rebuild a key from the document tree and read it back with
+`StorePath::parse_joined`. Where that fails - a hand-edited file, a key written
+before the encoding existed - the code does
 
-With `ui.width = 1280` and `uix.width = 640`, `kv.keys("ui")` returns both, and
-`store.delete_prefix("ui")` destroys `uix.width` - an unrelated subtree. The
-text backends walk the document tree and are segment-correct, so the same call
-has a different blast radius depending on the engine.
+    let Ok(child_path) = StorePath::parse_joined(&full_key) else {
+        continue;
+    };
 
-Reproduced in `tests/prefix_boundary.rs`, with a control that spells the
-separator and passes.
+so the entry is absent from `scan_prefix`, `scan_keys`, and therefore from
+`len`, `keys` and the map's projection, with nothing in the log and no error to
+the caller. The same shape is in `document.rs`, where a child whose name cannot
+be pushed onto the prefix is skipped.
 
-**sqlite additionally feeds the prefix to `GLOB` unescaped.** `sqlite/mod.rs`
-builds `format!("{}*", prefix)` and runs `key GLOB ?`, so `[`, `?` and `*` in a
-path become wildcards. A map at `panel[0].widths` reads correctly by point key -
-those use `=` - while `len()` reports 0 and `clear()` deletes nothing, because
-`[0]` parses as a character class. Reachable through a `key` override or any
-caller-supplied `Kv` path, and `delete_prefix` rides the same scan, so it can
-under-delete as easily as the case above over-deletes.
-
-Checked and clean: subscription prefix matching in `backend/utils.rs` is
-segment-correct, so this does not leak into the event layer.
+Skipping is the right behaviour; being silent about it is not. This wants the
+error carrying enough context to say which key and which file, which is what the
+`error-stack` move above is for - so it should be fixed as part of that rather
+than by bolting a `warn!` on now and leaving the shape behind.
 
 ## Migration cleanup deletes one key, so a composite field survives being dropped
 
@@ -683,15 +633,157 @@ construct - which is the failure `guard`'s own doc says it exists to prevent.
 All five backends. Reproduced in `tests/kv_guard_root.rs`, with a control
 showing the identical write against a prefixed struct is refused.
 
-## Deleting a map's prefix notifies nobody
+## `Kv` refuses the same type it just recorded
 
-`primitives_factory.rs` recognises a `DeletePrefix` event only when its path is
-`"<path>."`, while `store.delete_prefix("columns")` emits the path without the
-separator - and a prefix delete emits one event rather than a delete per key.
-Every entry disappears while the map's cache and its subscribers hear nothing.
+`check_type` compares `T::TYPE_NAME` while `register_field` stores
+`std::any::type_name::<T>()`. For `u32` the two strings agree; for `String` they
+are `"String"` and `"alloc::string::String"`, and for a derived type the bare
+identifier against the fully qualified path. So asking twice for the same path
+and the same type fails:
 
-Reproduced in `tests/map_delete_prefix_notify.rs`, with a control showing
-`map.clear()` emits the dotted form and does notify.
+    let a = kv.cell("theme", "dark".to_string())?;   // records the long form
+    let b = kv.cell("theme", "dark".to_string())?;   // Err(TypeMismatch)
+
+Introduced by moving `check_type` off `std::any::type_name`, which is unstable
+across compilers, onto the name a type declares. The move is right; what is
+missing is the other half - the registry has to record the same string, or the
+comparison has to be over `TYPE_HASH` rather than either name. The entry above
+about the two hashes covers what that costs.
+
+## `build()` runs no generated migrations, and nothing at the call site says so
+
+`build_with_report` calls `collect_codegen` before opening; `build` does not.
+Both open a store, both succeed, and only one runs the steps `#[migrate]`
+emitted. A program that opens with `build` compiles, starts, and silently skips
+every generated migration - and then the version gate sees a prefix behind the
+code and reports drift for a reason that has nothing to do with the data.
+
+`init_global` goes through `build_with_report`, so the same application migrates
+or does not depending on which of the two setups it copied.
+
+Either `build` should collect too, or it should refuse to open when a generated
+step exists for a prefix it is about to touch. Silently doing half the work is
+the one option that should go.
+
+## The global store never flushes, because statics are never dropped
+
+Every backend commits its buffer from `Drop`, and that is what makes "closing
+cleanly loses nothing" true. `GLOBAL_STORE` is a `OnceLock<Store>`, and Rust
+does not drop statics at exit, so for an application built on `init_global` the
+`Drop` never runs and every write younger than the debounce interval is lost on
+a clean return from `main`.
+
+This also qualifies the debouncer fix: the pending write reaches disk on drop,
+where a drop happens.
+
+## Sync and async durable writes commit different amounts
+
+`Durable::set` calls `flush_prefix`; `Durable::set_async` calls `flush_async`,
+which every backend implements as a full `save_now` of the whole buffer. The
+same pair on `ReactiveCell`, `ReactiveMap` and `Kv` behaves the same way.
+
+Distinct from the `flush_prefix` entry at the top, which is about how much rides
+along with a prefix flush. This one is that the two forms of the same operation
+have different granularity, and the documentation of the sync form is spent
+explaining a granularity the async form does not have.
+
+## `LocalScope::clear` does the opposite of what it says
+
+The doc reads "drops the queued values without delivering them, leaving the
+subscriptions in place". The body clears `subs` and `pumps` - the subscriptions
+unsubscribe on drop, and the queued values live in the pumps' captured buffers,
+so it drops exactly what it promises to keep and keeps nothing it promises to
+drop.
+
+Which side is the bug is a decision: there is currently no way to discard a
+backlog without unsubscribing, and the name suggests there should be.
+`LocalScope::len` and `is_empty` document a queue length too and return the
+subscription count.
+
+## The book documents a library that is no longer there
+
+Found by reading it end to end against the sources. Not a list of typos - these
+are things a reader following the book cannot make work:
+
+- `set_or_create` appears in five pages and exists nowhere; it is `insert`
+  since the rename. One section is built entirely on it.
+- `StoreBuilder::collect_migrations` and `amethystate::Result` do not exist.
+- The migration pages destructure a report out of `build()`, which returns a
+  store.
+- `Concepts/reactive-cell.md` documents the owning cell throughout: it teaches
+  building cells and dropping the struct they came from, which now yields a map
+  of dead cells, and never mentions `into_cell`, `into_entry_cell` or
+  `Kv::cell`. `entry_cell` is shown with a `default` argument it no longer
+  takes, and `get()` is used as `T` rather than `Option<T>`, so several
+  snippets would not compile.
+- `Concepts/kv.md` predates namespaces: `keys` is shown with an argument, and
+  every dotted example now addresses one name rather than the levels it means.
+- The dioxus and leptos pages name the provider component `amethystateProvider`;
+  it is `AmeStateProvider`. The dioxus page uses both.
+
+Rustdoc has its own: the macro's own documentation gives constructors that do
+not exist (`new(&Arc<Store>)` where the real one takes no arguments and the
+store is already `Arc`-backed), and says `default` is required on leaf fields
+where the code falls back to `Default::default()`. `Kv::set` and `Kv::remove`
+open by promising the durability their `Durable` counterparts provide.
+
+`Concepts/observability.md` promises `location` is the caller's `file:line`.
+`#[track_caller]` is on the direct `subscribe` methods but on none of the
+`Watch` builder's, so every subscription made the way the subscriptions chapter
+teaches logs a line inside this library.
+
+## The text engines take a path apart and put it back on every call
+
+`TextDocument` addresses a node by `&[&str]`, so every `get`, `set` and `delete`
+allocates a `Vec<&str>` out of a `StorePath` that already holds the levels, and
+the scan walkers allocate one more per child. `generic_scan` then builds a
+`StorePath` back out of that slice to compose the child keys.
+
+`split_path` parses the joined form a third way - by `str::split('.')`, which
+knows nothing about the escape - and `delete_prefix` still goes through it.
+`tests/delete_prefix_dotted_keys.rs` says a dotted name does get deleted with
+its subtree today, so this is a disagreement between two parsers rather than a
+reproduced failure; it stays a hazard while both exist.
+
+`normalise_parts` maps `["."]` to the root, left from when `"."` was the
+sentinel for the whole document. A level genuinely named `.` is a path now, and
+that mapping silently sends it to the root instead.
+
+The trait should take `&StorePath` and walk it by `segment_at`, `scan` should
+hand back the child's name rather than a joined string, and `split_path` should
+go. Nothing outside these three files sees the trait, so it costs the three
+document impls and the two walkers.
+
+## One conformance suite for the backends, run against each
+
+Every engine has its own unit tests, written when it was written, and they
+overlap by accident rather than by design. Almost every defect found this week
+was a difference between engines that no single suite was watching: a prefix
+scan that stopped at a level on one and at a character on another, a key with a
+separator that survived on the flat engines and split on the tree ones, a
+migration cleanup that removed a subtree on one family and nothing on the other.
+
+What is wanted is one set of tests, parameterised by engine, that says what a
+store is regardless of which one is underneath - and a per-engine file left with
+only what is genuinely particular to it.
+
+Durability is the clearest case of a statement written against one engine.
+`tests/durability_crash.rs::a_durable_write_survives_a_crash_and_a_plain_one_does_not`
+names a property every store has to have, and runs it against redb alone - so
+whether a text engine or sqlite keeps a durable write across a crash is
+currently unasserted, and the answer differs by engine.
+
+A good part of it belongs as properties rather than examples, because the
+statements are universally quantified and the interesting inputs are the ones
+nobody thinks to write: a value written at a path reads back at that path and
+nowhere else; a scan under a prefix returns exactly the keys written under it;
+`delete_prefix` removes exactly the subtree and nothing beside it; a name
+holding the separator stays one level through a write, a reopen and a scan.
+
+**After the error model, not before.** Half of what such a suite should pin is
+what happens when an operation fails - which error, for which cause - and today
+those are not distinguishable enough to assert. Written now it would test the
+successes and stay silent about the failures, which is the half that differs.
 
 ## Documentation
 

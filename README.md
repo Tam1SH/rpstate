@@ -27,7 +27,7 @@ in the background. Schema versions are explicit, migrations run on startup, and 
 - **Struct-defined state** — one attribute, persisted reactive fields with defaults
 - **A reactive layer, not a config file** — subscriptions, derived values via `.pipe()`, interceptors that can refuse a write
 - **Read and write every frame** — writes are buffered and batched, reads answer from memory
-- **Dynamic state stays in the system** — keys unknown at compile time are still reactive and persisted, no escape hatch
+- **Keys you only learn at runtime** — a map entry or a `Kv` path gets the same subscriptions, interceptors and durability as a declared field
 - **Migrations** — explicit versions, run at startup; drift is logged
 - **Three backends, five formats** — `redb`, `sqlite`, and text as `json`/`toml`/`ron`; text files reload on external edits
 - **[Integrations](https://uniproc-dev.github.io/amethystate/integrations/overview)** — Tauri (+TS bindings), Leptos, Dioxus, Yew, GPUI, windows-reactor, egui/iced/ratatui
