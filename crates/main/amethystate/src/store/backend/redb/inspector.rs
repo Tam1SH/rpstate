@@ -7,6 +7,7 @@ use crate::store::backend::utils;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::RedbStore;
 use crate::{StorageResult, StoreBackend};
+use amethystate_core::path::StorePath;
 use redb::{ReadableDatabase, ReadableTable};
 
 impl InspectorBackend for RedbStore {
@@ -15,7 +16,7 @@ impl InspectorBackend for RedbStore {
     }
 
     fn scan_all(&self) -> StorageResult<Vec<(String, Vec<u8>)>> {
-        self.scan_prefix("")
+        self.scan_prefix(&StorePath::root())
     }
 
     fn get_schema_snapshots(&self) -> StorageResult<Vec<(String, SchemaSnapshot)>> {

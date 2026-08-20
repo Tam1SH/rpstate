@@ -73,18 +73,10 @@ impl AppConfig {
                 u16,
             >(store, "port", 8080, instance_id)?,
             session_id: ::amethystate::Field::new_volatile_with_id(
-                ::std::sync::Arc::from({
+                {
                     let prefix = <Self as ::amethystate::StateScope>::PREFIX;
-                    if prefix == "." {
-                        "session_id".to_string()
-                    } else {
-                        ::alloc::__export::must_use({
-                            ::alloc::fmt::format(
-                                format_args!("{0}.{1}", prefix, "session_id"),
-                            )
-                        })
-                    }
-                }),
+                    ::amethystate::join_path(prefix, "session_id")
+                },
                 "localhost".to_string(),
                 instance_id,
             ),

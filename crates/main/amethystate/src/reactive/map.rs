@@ -3,6 +3,7 @@ use crate::store::Durable;
 use crate::store::StoreBackend;
 use crate::store::sync_backend::SyncBridge;
 use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
+use amethystate_core::path::StorePath;
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use std::marker::PhantomData;
 
@@ -11,7 +12,7 @@ use uuid::Uuid;
 
 pub(crate) struct MapInner<K, V> {
     pub(crate) core: ReactiveMapCore<K, V>,
-    pub(crate) path: Arc<str>,
+    pub(crate) path: StorePath,
     pub(crate) instance_id: Uuid,
     pub(crate) store: Store,
     pub(crate) store_sub: Arc<StoreSubscription>,
@@ -90,7 +91,7 @@ where
     }
 
     /// Where the map lives in the store.
-    pub fn path(&self) -> Arc<str> {
+    pub fn path(&self) -> StorePath {
         self.inner.path.clone()
     }
 
@@ -786,7 +787,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test_map.external"),
+                ["test_map", "external"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -844,7 +845,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test_map.external_key"),
+                ["test_map", "external_key"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -880,7 +881,7 @@ mod tests {
     #[test]
     fn test_map_crud_logic() {
         let store = unique_store("crud");
-        let path: Arc<str> = Arc::from("test_map.data");
+        let path = StorePath::from_segments(["test_map", "data"]);
 
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
@@ -919,7 +920,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.intercept"),
+                ["test", "intercept"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -949,7 +950,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.transform"),
+                ["test", "transform"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -985,7 +986,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.subs"),
+                ["test", "subs"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1018,7 +1019,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.reentrancy"),
+                ["test", "reentrancy"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1046,7 +1047,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.clear"),
+                ["test", "clear"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1081,7 +1082,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.contains"),
+                ["test", "contains"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1112,7 +1113,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.keyspec"),
+                ["test", "keyspec"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1150,7 +1151,7 @@ mod tests {
     #[test]
     fn test_entries_parsing_failures() {
         let store = unique_store("parsing");
-        let path: Arc<str> = Arc::from("test.parse");
+        let path = StorePath::from_segments(["test", "parse"]);
 
         {
             let map_str: ReactiveMap<String, String, WritableMode> =
@@ -1190,7 +1191,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.remove"),
+                ["test", "remove"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1200,7 +1201,7 @@ mod tests {
         assert!(res.is_none());
 
         map.insert("ghost".into(), &1).unwrap();
-        store.delete("test.remove.ghost").unwrap();
+        store.delete(["test", "remove", "ghost"]).unwrap();
 
         let res = map.remove("ghost".into()).unwrap();
         assert!(res.is_none());
@@ -1214,7 +1215,7 @@ mod tests {
         let map: ReactiveMap<String, i32, WritableMode> =
             crate::store::reactive_map_with_path::<TestScope, _, _, _>(
                 &store,
-                Arc::from("test.recursive_map"),
+                ["test", "recursive_map"],
                 HashMap::new(),
                 Uuid::new_v4(),
             )
@@ -1239,7 +1240,7 @@ mod tests {
         let store = unique_store("map_external");
         let map = crate::store::reactive_map_with_path::<TestScope, String, i32, WritableMode>(
             &store,
-            Arc::from("test.external"),
+            ["test", "external"],
             HashMap::new(),
             Uuid::new_v4(),
         )

@@ -1,4 +1,5 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
+use crate::path::StorePath;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use crate::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
@@ -9,7 +10,7 @@ use uuid::Uuid;
 
 pub struct ReactiveMap<K, V, B> {
     pub core: ReactiveMapCore<K, V>,
-    pub prefix: Arc<str>,
+    pub prefix: StorePath,
     pub instance_id: Uuid,
     _subscription: Arc<Mutex<SubscriptionHandle>>,
     backend: B,
@@ -75,28 +76,23 @@ where
         }
     }
 
-    pub fn new(prefix: impl Into<Arc<str>>, initial_values: HashMap<K, V>) -> Self
+    pub fn new(prefix: StorePath, initial_values: HashMap<K, V>) -> Self
     where
         B: Default,
     {
         Self::new_with_backend(prefix, initial_values, B::default())
     }
 
-    pub fn new_with_backend(
-        prefix: impl Into<Arc<str>>,
-        initial_values: HashMap<K, V>,
-        backend: B,
-    ) -> Self {
+    pub fn new_with_backend(prefix: StorePath, initial_values: HashMap<K, V>, backend: B) -> Self {
         Self::new_with_backend_and_id(prefix, initial_values, backend, Uuid::new_v4())
     }
 
     pub fn new_with_backend_and_id(
-        prefix: impl Into<Arc<str>>,
+        prefix: StorePath,
         initial_values: HashMap<K, V>,
         backend: B,
         instance_id: Uuid,
     ) -> Self {
-        let prefix = prefix.into();
         let core = ReactiveMapCore::new();
 
         for (k, v) in initial_values {

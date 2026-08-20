@@ -42,7 +42,7 @@ fn a_write_is_never_rolled_back_by_the_watcher() {
     }
 
     store.save_now().unwrap();
-    assert_eq!(store.get::<u64>("race.counter").unwrap(), Some(400));
+    assert_eq!(store.get::<u64>(["race", "counter"]).unwrap(), Some(400));
 }
 
 /// A persist that runs while a write lands must not mark that write saved. The
@@ -70,7 +70,7 @@ fn a_write_during_a_persist_still_reaches_the_file() {
 
     let store = StoreBuilder::new(&path).build().unwrap();
     assert_eq!(
-        store.get::<u64>("race.counter").unwrap(),
+        store.get::<u64>(["race", "counter"]).unwrap(),
         Some(200),
         "the last write must have reached the file"
     );

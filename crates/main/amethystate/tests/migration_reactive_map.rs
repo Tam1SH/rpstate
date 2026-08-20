@@ -89,6 +89,6 @@ fn test_embedded_map_migration() {
     assert_eq!(entries[0].0, "api");
     assert_eq!(entries[0].1.url, "http://api.v1");
 
-    let old_keys = store.scan_prefix("network.routes.").unwrap();
+    let old_keys = store.scan_prefix(["network", "routes"]).unwrap();
     assert!(old_keys.is_empty());
 }

@@ -12,6 +12,7 @@ use crate::store::{
     SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
     SubscriptionId, SubscriptionKind,
 };
+use amethystate_core::path::StorePath;
 use error::SqliteStoreError;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension};
@@ -42,12 +43,12 @@ impl SqliteStoreInner {
         Ok(())
     }
 
-    pub fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
+    pub fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         let _write_guard = self.write_lock.lock();
 
         let changes = {
             let lock = self.pending.lock();
-            utils::pending_prefix(&lock, prefix)
+            utils::pending_prefix(&lock, prefix.as_str())
         };
 
         {
@@ -102,8 +103,13 @@ impl SqliteStoreInner {
     /// The buffer wins where it has the key, since it holds the newer value;
     /// otherwise the committed one. Reading the buffer alone reported no old
     /// value once a flush had emptied it, though the key was in the database.
-    fn committed_or_buffered(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
-        if let Some(op) = self.pending.lock().get(path).filter(|o| o.is_data()) {
+    fn committed_or_buffered(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
+        if let Some(op) = self
+            .pending
+            .lock()
+            .get(path.as_str())
+            .filter(|o| o.is_data())
+        {
             return Ok(op.value().map(Vec::from));
         }
 
@@ -113,7 +119,7 @@ impl SqliteStoreInner {
             .map_err(SqliteStoreError::from)?;
 
         Ok(stmt
-            .query_row([path], |row| row.get::<_, Vec<u8>>(0))
+            .query_row([path.as_str()], |row| row.get::<_, Vec<u8>>(0))
             .optional()
             .map_err(SqliteStoreError::from)?)
     }
@@ -146,10 +152,10 @@ impl SqliteStoreInner {
         engine.run(mset)
     }
 
-    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         {
             let lock = self.pending.lock();
-            if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
+            if let Some(op) = lock.get(path.as_str()).filter(|o| o.is_data()) {
                 return Ok(op.value().map(|b| b.to_vec()));
             }
         }
@@ -159,7 +165,7 @@ impl SqliteStoreInner {
             .prepare_cached("SELECT value FROM data WHERE key = ?")
             .map_err(SqliteStoreError::from)?;
         let res: Option<Vec<u8>> = stmt
-            .query_row([path], |row| row.get(0))
+            .query_row([path.as_str()], |row| row.get(0))
             .optional()
             .map_err(SqliteStoreError::from)?;
         Ok(res)
@@ -167,16 +173,16 @@ impl SqliteStoreInner {
 
     fn set_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.set_owned_erased(Arc::from(path), value, source)
+        self.set_owned_erased(path.clone(), value, source)
     }
 
     fn set_owned_erased(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -189,13 +195,13 @@ impl SqliteStoreInner {
 
         {
             let mut lock = self.pending.lock();
-            lock.insert(path.clone(), utils::PendingOp::Set(vec.clone()));
+            lock.insert(Arc::from(path.as_str()), utils::PendingOp::Set(vec.clone()));
         }
 
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path,
+                path: Arc::from(path.as_str()),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(vec),
@@ -208,20 +214,21 @@ impl SqliteStoreInner {
     }
 
     fn save_now(&self) -> StorageResult<()> {
-        self.flush_prefix("")
+        self.flush_prefix(&StorePath::root())
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        let bound = utils::subtree_bound(prefix);
         let mut storage_results = Vec::new();
 
         {
             let conn = self.conn.lock();
             let mut stmt = conn
-                .prepare_cached("SELECT key, value FROM data WHERE key GLOB ?")
+                .prepare_cached("SELECT key, value FROM data WHERE key >= ? AND key < ?")
                 .map_err(SqliteStoreError::from)?;
-            let pattern = format!("{}*", prefix);
+            let (low, high) = utils::key_range(prefix);
             let rows = stmt
-                .query_map([pattern], |row| {
+                .query_map([low, high], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
                 })
                 .map_err(SqliteStoreError::from)?;
@@ -236,7 +243,7 @@ impl SqliteStoreInner {
         {
             let lock = self.pending.lock();
             for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if k.starts_with(prefix) {
+                if utils::is_under(k, prefix.as_str(), &bound) {
                     pending_map.insert(k.to_string(), op.value().map(Vec::from));
                 }
             }
@@ -258,16 +265,18 @@ impl SqliteStoreInner {
         Ok(storage_results)
     }
 
-    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+        let bound = utils::subtree_bound(prefix);
         let mut keys = Vec::new();
 
         {
             let conn = self.conn.lock();
             let mut stmt = conn
-                .prepare_cached("SELECT key FROM data WHERE key GLOB ?")
+                .prepare_cached("SELECT key FROM data WHERE key >= ? AND key < ?")
                 .map_err(SqliteStoreError::from)?;
+            let (low, high) = utils::key_range(prefix);
             let rows = stmt
-                .query_map([format!("{}*", prefix)], |row| row.get::<_, String>(0))
+                .query_map([low, high], |row| row.get::<_, String>(0))
                 .map_err(SqliteStoreError::from)?;
 
             for row in rows {
@@ -278,7 +287,7 @@ impl SqliteStoreInner {
         {
             let lock = self.pending.lock();
             for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if !k.starts_with(prefix) {
+                if !utils::is_under(k, prefix.as_str(), &bound) {
                     continue;
                 }
                 match op.value() {
@@ -295,9 +304,9 @@ impl SqliteStoreInner {
         Ok(keys)
     }
 
-    fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer();
-        let path_arc: Arc<str> = Arc::from(path);
+        let path_arc: Arc<str> = Arc::from(path.as_str());
 
         let old_bytes = self.committed_or_buffered(path)?;
 
@@ -321,7 +330,7 @@ impl SqliteStoreInner {
         Ok(())
     }
 
-    fn delete_prefix(&self, prefix: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete_prefix(&self, prefix: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer();
 
         let keys = self.scan_prefix(prefix)?;
@@ -336,7 +345,7 @@ impl SqliteStoreInner {
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(prefix),
+                path: Arc::from(prefix.as_str()),
                 op: StoreOp::DeletePrefix,
                 old: None,
                 new: None,
@@ -559,13 +568,13 @@ impl SchemaAwareStore for SqliteStore {
 }
 
 impl StoreBackend for SqliteStore {
-    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         self.inner.get_raw(path)
     }
 
     fn get_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool> {
         match self.inner.get_raw(path)? {
@@ -589,7 +598,7 @@ impl StoreBackend for SqliteStore {
 
     fn set_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -598,7 +607,7 @@ impl StoreBackend for SqliteStore {
 
     fn set_owned_erased(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -609,25 +618,29 @@ impl StoreBackend for SqliteStore {
         self.inner.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         self.inner.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
         self.inner.scan_keys(prefix)
     }
 
-    fn delete(&self, path: &str) -> StorageResult<()> {
+    fn delete(&self, path: &StorePath) -> StorageResult<()> {
         self.delete_with_source(path, None)
     }
 
-    fn delete_with_source(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete_with_source(
+        &self,
+        path: &StorePath,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
         self.inner.delete(path, source)
     }
 
     fn delete_prefix_with_source(
         &self,
-        prefix: &str,
+        prefix: &StorePath,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.inner.delete_prefix(prefix, source)
@@ -641,7 +654,7 @@ impl StoreBackend for SqliteStore {
         self.inner.unsubscribe(id)
     }
 
-    fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
+    fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         self.inner.flush_prefix(prefix)
     }
 
@@ -661,6 +674,7 @@ impl StoreBackend for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::store::StoreExt;
     use amethystate_core::test_utils::unique_path;
     use serial_test::serial;
@@ -677,7 +691,7 @@ mod tests {
 
         let (store, _) = SqliteStore::open(config, MigrationSet::default()).unwrap();
 
-        store.set("config.port", &8080u16).unwrap();
+        store.set(["config", "port"], &8080u16).unwrap();
 
         {
             let conn = store.inner.conn.lock();
@@ -704,11 +718,13 @@ mod tests {
         let (store, _) =
             SqliteStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
 
-        store.set("temp.key", &1).unwrap();
+        store.set(["temp", "key"], &1).unwrap();
 
         store.save_now().unwrap();
-        store.delete("temp.key").unwrap();
-        assert_eq!(store.get::<i32>("temp.key").unwrap(), None);
+        store
+            .delete(&StorePath::from_segments(["temp", "key"]))
+            .unwrap();
+        assert_eq!(store.get::<i32>(["temp", "key"]).unwrap(), None);
 
         store.save_now().unwrap();
 
@@ -727,13 +743,13 @@ mod tests {
 
         {
             let (mut store, _) = SqliteStore::open(config, MigrationSet::default()).unwrap();
-            store.set("urgent.data", &true).unwrap();
+            store.set(["urgent", "data"], &true).unwrap();
             store.close().unwrap();
         }
 
         let (store, _) =
             SqliteStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-        assert_eq!(store.get::<bool>("urgent.data").unwrap(), Some(true));
+        assert_eq!(store.get::<bool>(["urgent", "data"]).unwrap(), Some(true));
     }
 
     #[test]
@@ -745,9 +761,11 @@ mod tests {
 
         let (store, _) = SqliteStore::open(config, MigrationSet::default()).unwrap();
 
-        store.set("net.host", &"127.0.0.1".to_string()).unwrap();
-        store.set("net.port", &8080u16).unwrap();
-        store.set("ui.theme", &"dark".to_string()).unwrap();
+        store
+            .set(["net", "host"], &"127.0.0.1".to_string())
+            .unwrap();
+        store.set(["net", "port"], &8080u16).unwrap();
+        store.set(["ui", "theme"], &"dark".to_string()).unwrap();
 
         {
             let pending = store.inner.pending.lock();
@@ -760,7 +778,9 @@ mod tests {
             assert!(!stmt.exists(["ui.theme"]).unwrap());
         }
 
-        store.flush_prefix("net").unwrap();
+        store
+            .flush_prefix(&StorePath::from_segments(["net"]))
+            .unwrap();
 
         {
             let conn = store.inner.conn.lock();
@@ -791,7 +811,7 @@ mod tests {
             assert!(!pending.contains_key("net.port"));
         }
 
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(&StorePath::root()).unwrap();
         {
             let pending = store.inner.pending.lock();
             assert!(

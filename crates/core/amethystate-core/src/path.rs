@@ -12,7 +12,7 @@ const ESCAPE: char = '\\';
 /// document tree, and the joined string for engines that store a key whole - so
 /// neither costs an allocation to read.
 #[derive(Clone)]
-pub struct Path {
+pub struct StorePath {
     segments: Segments,
     joined: Joined,
 }
@@ -52,7 +52,7 @@ impl Segments {
     }
 }
 
-impl Path {
+impl StorePath {
     /// The path that is under nothing.
     pub const fn root() -> Self {
         Self {
@@ -67,7 +67,7 @@ impl Path {
     /// fail: whoever writes them - the macro, in practice - is the one that
     /// checks them, and does it at expansion time rather than at startup.
     ///
-    /// `joined` must be what [`Path::as_str`] would produce for `segments`.
+    /// `joined` must be what [`StorePath::as_str`] would produce for `segments`.
     pub const fn from_static(segments: &'static [&'static str], joined: &'static str) -> Self {
         Self {
             segments: Segments::Static(segments),
@@ -76,11 +76,40 @@ impl Path {
     }
 
     /// One level named `name`, whatever `name` contains - except nothing.
-    pub fn segment(name: impl AsRef<str>) -> Result<Self, PathError> {
+    ///
+    /// # Panics
+    ///
+    /// If `name` is empty. Use [`StorePath::try_segment`] for a name that comes
+    /// from data rather than from the source.
+    pub fn segment(name: impl AsRef<str>) -> Self {
         Self::from_segments([name])
     }
 
-    pub fn from_segments<I, S>(segments: I) -> Result<Self, PathError>
+    /// [`StorePath::segment`] for a name that can turn out to be empty.
+    pub fn try_segment(name: impl AsRef<str>) -> Result<Self, StorePathError> {
+        Self::try_from_segments([name])
+    }
+
+    /// A path out of the levels it is under, outermost first.
+    ///
+    /// # Panics
+    ///
+    /// If any level is empty, which is a path that cannot exist - see
+    /// [`StorePathError::EmptySegment`]. Written-out levels are the source's to
+    /// get right; levels that come from data go through
+    /// [`StorePath::try_from_segments`] instead, and every call that builds a
+    /// path out of a caller's strings - [`IntoStorePath`], and so `Store::get`,
+    /// `Kv::set`, `ReactiveMap::insert` - already does.
+    pub fn from_segments<I, S>(segments: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::try_from_segments(segments).expect("a path segment cannot be empty")
+    }
+
+    /// [`StorePath::from_segments`] for levels that can turn out to be empty.
+    pub fn try_from_segments<I, S>(segments: I) -> Result<Self, StorePathError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -90,7 +119,7 @@ impl Path {
         for segment in segments {
             let segment = segment.as_ref();
             if segment.is_empty() {
-                return Err(PathError::EmptySegment);
+                return Err(StorePathError::EmptySegment);
             }
             collected.push(Arc::from(segment));
         }
@@ -108,10 +137,20 @@ impl Path {
     }
 
     /// This path with one more level under it.
-    pub fn push(&self, name: impl AsRef<str>) -> Result<Self, PathError> {
+    ///
+    /// # Panics
+    ///
+    /// If `name` is empty. Use [`StorePath::try_push`] for a name that comes
+    /// from data.
+    pub fn push(&self, name: impl AsRef<str>) -> Self {
+        self.try_push(name).expect("a path segment cannot be empty")
+    }
+
+    /// [`StorePath::push`] for a name that can turn out to be empty.
+    pub fn try_push(&self, name: impl AsRef<str>) -> Result<Self, StorePathError> {
         let name = name.as_ref();
         if name.is_empty() {
-            return Err(PathError::EmptySegment);
+            return Err(StorePathError::EmptySegment);
         }
 
         let mut segments = self.segments.to_owned_vec();
@@ -120,7 +159,7 @@ impl Path {
     }
 
     /// This path with `other`'s levels under it.
-    pub fn join(&self, other: &Path) -> Self {
+    pub fn join(&self, other: &StorePath) -> Self {
         let mut segments = self.segments.to_owned_vec();
         segments.extend(other.segments.to_owned_vec());
         Self::from_checked(segments)
@@ -163,25 +202,25 @@ impl Path {
     ///
     /// Compared level by level, so `ui` does not start `uix.width` - which
     /// comparing the joined strings would say it does.
-    pub fn starts_with(&self, prefix: &Path) -> bool {
+    pub fn starts_with(&self, prefix: &StorePath) -> bool {
         prefix.segments.len() <= self.segments.len()
             && prefix.segments().zip(self.segments()).all(|(a, b)| a == b)
     }
 
     /// The levels below `prefix`, or `None` when `prefix` does not start this
     /// path.
-    pub fn strip_prefix(&self, prefix: &Path) -> Option<Path> {
+    pub fn strip_prefix(&self, prefix: &StorePath) -> Option<StorePath> {
         self.starts_with(prefix).then(|| {
-            Path::from_checked(self.segments.to_owned_vec()[prefix.segments.len()..].to_vec())
+            StorePath::from_checked(self.segments.to_owned_vec()[prefix.segments.len()..].to_vec())
         })
     }
 
     /// The path one level up, or `None` at the root.
-    pub fn parent(&self) -> Option<Path> {
+    pub fn parent(&self) -> Option<StorePath> {
         (!self.is_root()).then(|| {
             let mut segments = self.segments.to_owned_vec();
             segments.pop();
-            Path::from_checked(segments)
+            StorePath::from_checked(segments)
         })
     }
 
@@ -190,13 +229,26 @@ impl Path {
         self.segments.get(self.segments.len().checked_sub(1)?)
     }
 
-    /// Reads back what [`Path::as_str`] wrote.
+    /// The name `key` is stored under, below this path.
+    ///
+    /// What a flat engine's scan needs: it hands back whole keys, and a caller
+    /// that addressed a subtree wants the name of each thing in it. `None` when
+    /// `key` is not a path this type could have written, or is not under this
+    /// one.
+    pub fn entry_name(&self, key: &str) -> Option<String> {
+        StorePath::parse_joined(key)
+            .ok()
+            .and_then(|path| path.strip_prefix(self))
+            .and_then(|rest| rest.name().map(str::to_string))
+    }
+
+    /// Reads back what [`StorePath::as_str`] wrote.
     ///
     /// Only for data already on disk: a path in code is built from its
     /// segments, so nothing else needs to parse one. Fallible because a key
     /// this library did not write can hold a level with no name, and such a
     /// path is not one.
-    pub fn parse_joined(joined: &str) -> Result<Self, PathError> {
+    pub fn parse_joined(joined: &str) -> Result<Self, StorePathError> {
         let mut segments: Vec<Arc<str>> = Vec::new();
         let mut current = String::new();
         let mut escaped = false;
@@ -205,7 +257,7 @@ impl Path {
             match ch {
                 _ if escaped => {
                     if ch != SEPARATOR && ch != ESCAPE {
-                        return Err(PathError::DanglingEscape);
+                        return Err(StorePathError::DanglingEscape);
                     }
                     current.push(ch);
                     escaped = false;
@@ -217,7 +269,7 @@ impl Path {
         }
 
         if escaped {
-            return Err(PathError::DanglingEscape);
+            return Err(StorePathError::DanglingEscape);
         }
 
         if !joined.is_empty() {
@@ -225,7 +277,7 @@ impl Path {
         }
 
         if segments.iter().any(|s| s.is_empty()) {
-            return Err(PathError::EmptySegment);
+            return Err(StorePathError::EmptySegment);
         }
 
         Ok(Self::from_checked(segments))
@@ -234,7 +286,7 @@ impl Path {
 
 /// Why a set of segments is not a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathError {
+pub enum StorePathError {
     /// A level with no name. It would be indistinguishable from the root once
     /// joined, and there is nothing a store could address by it.
     EmptySegment,
@@ -244,18 +296,58 @@ pub enum PathError {
     DanglingEscape,
 }
 
-impl std::fmt::Display for PathError {
+impl std::fmt::Display for StorePathError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PathError::EmptySegment => f.write_str("a path segment cannot be empty"),
-            PathError::DanglingEscape => {
+            StorePathError::EmptySegment => f.write_str("a path segment cannot be empty"),
+            StorePathError::DanglingEscape => {
                 f.write_str("an escape must be followed by a separator or another escape")
             }
         }
     }
 }
 
-impl std::error::Error for PathError {}
+impl std::error::Error for StorePathError {}
+
+/// What a call can be given where a path is wanted.
+///
+/// A list of levels, or a path already built. Deliberately not `&str`: a string
+/// is a name, and letting one stand in for a path is the confusion this type
+/// exists to end - `store.get(["ui", "width"])` and `store.get("ui.width")`
+/// would otherwise look alike and mean different things.
+pub trait IntoStorePath {
+    fn into_store_path(self) -> Result<StorePath, StorePathError>;
+}
+
+impl IntoStorePath for StorePath {
+    fn into_store_path(self) -> Result<StorePath, StorePathError> {
+        Ok(self)
+    }
+}
+
+impl IntoStorePath for &StorePath {
+    fn into_store_path(self) -> Result<StorePath, StorePathError> {
+        Ok(self.clone())
+    }
+}
+
+impl<S: AsRef<str>, const N: usize> IntoStorePath for [S; N] {
+    fn into_store_path(self) -> Result<StorePath, StorePathError> {
+        StorePath::try_from_segments(self)
+    }
+}
+
+impl<S: AsRef<str>> IntoStorePath for &[S] {
+    fn into_store_path(self) -> Result<StorePath, StorePathError> {
+        StorePath::try_from_segments(self)
+    }
+}
+
+impl<S: AsRef<str>> IntoStorePath for Vec<S> {
+    fn into_store_path(self) -> Result<StorePath, StorePathError> {
+        StorePath::try_from_segments(self)
+    }
+}
 
 fn join(segments: &[Arc<str>]) -> Arc<str> {
     let mut out = String::new();
@@ -275,16 +367,16 @@ fn join(segments: &[Arc<str>]) -> Arc<str> {
     Arc::from(out.as_str())
 }
 
-impl PartialEq for Path {
+impl PartialEq for StorePath {
     fn eq(&self, other: &Self) -> bool {
         self.segments.len() == other.segments.len()
             && self.segments().zip(other.segments()).all(|(a, b)| a == b)
     }
 }
 
-impl Eq for Path {}
+impl Eq for StorePath {}
 
-impl std::hash::Hash for Path {
+impl std::hash::Hash for StorePath {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_usize(self.segments.len());
         for segment in self.segments() {
@@ -293,13 +385,13 @@ impl std::hash::Hash for Path {
     }
 }
 
-impl std::fmt::Debug for Path {
+impl std::fmt::Debug for StorePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Path({:?})", self.as_str())
+        write!(f, "StorePath({:?})", self.as_str())
     }
 }
 
-impl std::fmt::Display for Path {
+impl std::fmt::Display for StorePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -374,7 +466,7 @@ mod tests {
         fn a_separator_inside_a_name_is_never_a_level(
             segments in prop::collection::vec(dotted_segment(), 1..16)
         ) {
-            let path = Path::from_segments(&segments).unwrap();
+            let path = StorePath::from_segments(&segments);
 
             prop_assert_eq!(path.len(), segments.len());
             prop_assert_eq!(
@@ -383,7 +475,7 @@ mod tests {
             );
 
             let split: Vec<&str> = segments.iter().flat_map(|s| s.split('.')).collect();
-            if let Ok(taken_apart) = Path::from_segments(&split) {
+            if let Ok(taken_apart) = StorePath::try_from_segments(&split) {
                 prop_assert_ne!(taken_apart, path);
             }
         }
@@ -396,8 +488,8 @@ mod tests {
         /// inference to the reader.
         #[test]
         fn the_joined_form_round_trips(segments in path_strategy()) {
-            let path = Path::from_segments(&segments).unwrap();
-            prop_assert_eq!(Path::parse_joined(path.as_str()).unwrap(), path);
+            let path = StorePath::from_segments(&segments);
+            prop_assert_eq!(StorePath::parse_joined(path.as_str()).unwrap(), path);
         }
 
         /// The property the whole design rests on: two different sets of levels
@@ -405,8 +497,8 @@ mod tests {
         /// could collide with a nesting a caller meant.
         #[test]
         fn different_levels_never_join_to_one_key(a in path_strategy(), b in path_strategy()) {
-            let pa = Path::from_segments(&a).unwrap();
-            let pb = Path::from_segments(&b).unwrap();
+            let pa = StorePath::from_segments(&a);
+            let pb = StorePath::from_segments(&b);
 
             prop_assert_eq!(a == b, pa.as_str() == pb.as_str());
         }
@@ -414,13 +506,13 @@ mod tests {
         /// Prefix matching is over levels, and stripping one is its inverse.
         #[test]
         fn a_prefix_is_stripped_back_off(head in path_strategy(), tail in path_strategy()) {
-            let prefix = Path::from_segments(&head).unwrap();
-            let full = prefix.join(&Path::from_segments(&tail).unwrap());
+            let prefix = StorePath::from_segments(&head);
+            let full = prefix.join(&StorePath::from_segments(&tail));
 
             prop_assert!(full.starts_with(&prefix));
             prop_assert_eq!(
                 full.strip_prefix(&prefix).unwrap(),
-                Path::from_segments(&tail).unwrap()
+                StorePath::from_segments(&tail)
             );
         }
 
@@ -429,15 +521,15 @@ mod tests {
         /// levels, so how a path was built never shows.
         #[test]
         fn a_path_does_not_remember_how_it_was_built(segments in path_strategy()) {
-            let all_at_once = Path::from_segments(&segments).unwrap();
+            let all_at_once = StorePath::from_segments(&segments);
 
-            let mut one_at_a_time = Path::root();
+            let mut one_at_a_time = StorePath::root();
             for segment in &segments {
-                one_at_a_time = one_at_a_time.push(segment).unwrap();
+                one_at_a_time = one_at_a_time.push(segment);
             }
 
-            let by_joining = segments.iter().fold(Path::root(), |acc, segment| {
-                acc.join(&Path::segment(segment).unwrap())
+            let by_joining = segments.iter().fold(StorePath::root(), |acc, segment| {
+                acc.join(&StorePath::segment(segment))
             });
 
             prop_assert_eq!(&one_at_a_time, &all_at_once);
@@ -445,11 +537,23 @@ mod tests {
             prop_assert_eq!(one_at_a_time.as_str(), all_at_once.as_str());
         }
 
+        /// Whatever spells the levels, the path is the same one.
+        #[test]
+        fn any_spelling_of_the_levels_gives_the_same_path(segments in path_strategy()) {
+            let built = StorePath::from_segments(&segments);
+            let refs: Vec<&str> = segments.iter().map(String::as_str).collect();
+
+            prop_assert_eq!(refs.as_slice().into_store_path().unwrap(), built.clone());
+            prop_assert_eq!(segments.clone().into_store_path().unwrap(), built.clone());
+            prop_assert_eq!((&built).into_store_path().unwrap(), built.clone());
+            prop_assert_eq!(built.clone().into_store_path().unwrap(), built);
+        }
+
         /// The root is under everything, so stripping it is the identity.
         #[test]
         fn every_path_is_under_the_root(segments in path_strategy()) {
-            let path = Path::from_segments(&segments).unwrap();
-            let root = Path::root();
+            let path = StorePath::from_segments(&segments);
+            let root = StorePath::root();
 
             prop_assert!(path.starts_with(&root));
             prop_assert_eq!(path.strip_prefix(&root).unwrap(), path.clone());
@@ -468,12 +572,12 @@ mod tests {
             with_a_hole.insert(at, String::new());
 
             prop_assert_eq!(
-                Path::from_segments(&with_a_hole),
-                Err(PathError::EmptySegment)
+                StorePath::try_from_segments(&with_a_hole),
+                Err(StorePathError::EmptySegment)
             );
             prop_assert_eq!(
-                Path::from_segments(&segments).unwrap().push(""),
-                Err(PathError::EmptySegment)
+                StorePath::from_segments(&segments).try_push(""),
+                Err(StorePathError::EmptySegment)
             );
         }
 
@@ -482,7 +586,7 @@ mod tests {
         /// one per gap between levels survives unescaped in the joined form.
         #[test]
         fn every_separator_inside_a_name_is_escaped(segments in path_strategy()) {
-            let path = Path::from_segments(&segments).unwrap();
+            let path = StorePath::from_segments(&segments);
 
             let mut unescaped = 0usize;
             let mut escaped = false;
@@ -507,11 +611,11 @@ mod tests {
             head in path_strategy(),
             extra in segment_strategy()
         ) {
-            let base = Path::from_segments(&head).unwrap();
+            let base = StorePath::from_segments(&head);
 
             let mut grown = head.clone();
             grown.last_mut().unwrap().push_str(&extra);
-            let longer = Path::from_segments(&grown).unwrap();
+            let longer = StorePath::from_segments(&grown);
 
             prop_assert!(longer.as_str().starts_with(base.as_str()));
 
@@ -528,8 +632,8 @@ mod tests {
             a in path_strategy(),
             b in path_strategy()
         ) {
-            let path = Path::from_segments(&a).unwrap();
-            let candidate = Path::from_segments(&b).unwrap();
+            let path = StorePath::from_segments(&a);
+            let candidate = StorePath::from_segments(&b);
 
             prop_assert_eq!(
                 path.strip_prefix(&candidate).is_some(),
@@ -544,7 +648,7 @@ mod tests {
         /// the next write over that path destroys the other.
         #[test]
         fn a_key_that_parses_joins_back_to_itself(key in key_strategy()) {
-            if let Ok(path) = Path::parse_joined(&key) {
+            if let Ok(path) = StorePath::parse_joined(&key) {
                 prop_assert_eq!(path.as_str(), key.as_str());
             }
         }
@@ -561,14 +665,14 @@ mod tests {
             tail in path_strategy(),
             other in path_strategy()
         ) {
-            let prefix = Path::from_segments(&head).unwrap();
+            let prefix = StorePath::from_segments(&head);
             let boundary = format!("{}{}", prefix.as_str(), SEPARATOR);
 
             let candidates = [
-                prefix.join(&Path::from_segments(&tail).unwrap()),
-                Path::from_segments(&other).unwrap(),
+                prefix.join(&StorePath::from_segments(&tail)),
+                StorePath::from_segments(&other),
                 prefix.clone(),
-                Path::from_segments(&tail).unwrap().join(&prefix),
+                StorePath::from_segments(&tail).join(&prefix),
             ];
 
             for candidate in candidates {
@@ -585,20 +689,21 @@ mod tests {
             a in path_strategy(),
             b in path_strategy()
         ) {
-            let pa = Path::from_segments(&a).unwrap();
-            let pb = Path::from_segments(&b).unwrap();
+            let pa = StorePath::from_segments(&a);
+            let pb = StorePath::from_segments(&b);
 
             let mut derived = vec![
                 pa.join(&pb),
-                pa.push("x").unwrap(),
-                Path::parse_joined(pa.as_str()).unwrap(),
-                pa.join(&Path::root()),
+                pa.push("x"),
+                StorePath::parse_joined(pa.as_str()).unwrap(),
+                pa.join(&StorePath::root()),
             ];
             derived.extend(pa.parent());
             derived.extend(pa.join(&pb).strip_prefix(&pa));
 
             for path in derived {
-                let rebuilt = Path::from_segments(path.segments()).unwrap();
+                let rebuilt = StorePath::try_from_segments(path.segments())
+                    .expect("a derived path holds no empty level");
                 prop_assert_eq!(&rebuilt, &path);
                 prop_assert_eq!(rebuilt.as_str(), path.as_str());
             }
@@ -609,11 +714,11 @@ mod tests {
         /// hand back, which the other properties never reach.
         #[test]
         fn equality_hashing_and_the_key_agree(a in path_strategy(), b in path_strategy()) {
-            let pa = Path::from_segments(&a).unwrap();
-            let pb = Path::from_segments(&b).unwrap();
+            let pa = StorePath::from_segments(&a);
+            let pb = StorePath::from_segments(&b);
 
-            let left = [pa.clone(), pa.parent().unwrap_or_else(Path::root), Path::root()];
-            let right = [pb.clone(), pa.join(&pb).strip_prefix(&pa).unwrap(), Path::root()];
+            let left = [pa.clone(), pa.parent().unwrap_or_else(StorePath::root), StorePath::root()];
+            let right = [pb.clone(), pa.join(&pb).strip_prefix(&pa).unwrap(), StorePath::root()];
 
             for x in &left {
                 for y in &right {
@@ -633,20 +738,20 @@ mod tests {
     /// already written.
     #[test]
     fn the_encoding_is_a_backslash_before_the_separator() {
-        assert_eq!(Path::segment("dark.mode").unwrap().as_str(), "dark\\.mode");
+        assert_eq!(StorePath::segment("dark.mode").as_str(), "dark\\.mode");
         assert_eq!(
-            Path::from_segments(["dark", "mode"]).unwrap().as_str(),
+            StorePath::from_segments(["dark", "mode"]).as_str(),
             "dark.mode"
         );
     }
 
     #[test]
     fn the_root_is_empty_and_stays_empty() {
-        let root = Path::root();
+        let root = StorePath::root();
 
         assert!(root.is_root());
         assert_eq!(root.as_str(), "");
-        assert_eq!(Path::parse_joined("").unwrap(), root);
+        assert_eq!(StorePath::parse_joined("").unwrap(), root);
         assert_eq!(root.parent(), None);
         assert_eq!(root.name(), None);
     }
@@ -658,10 +763,13 @@ mod tests {
     #[test]
     fn a_key_no_join_could_have_written_is_not_a_second_name_for_one() {
         assert_ne!(
-            Path::parse_joined("a\\b").ok(),
-            Path::parse_joined("ab").ok()
+            StorePath::parse_joined("a\\b").ok(),
+            StorePath::parse_joined("ab").ok()
         );
-        assert_ne!(Path::parse_joined("a\\").ok(), Path::parse_joined("a").ok());
+        assert_ne!(
+            StorePath::parse_joined("a\\").ok(),
+            StorePath::parse_joined("a").ok()
+        );
     }
 
     /// The boundary that makes a flat scan safe cannot be spelled at the root.
@@ -670,15 +778,14 @@ mod tests {
     /// scan bound the same way at every depth scans nothing at the top.
     #[test]
     fn the_root_has_no_separator_boundary() {
-        let root = Path::root();
-        let child = Path::from_segments(["ui", "width"]).unwrap();
+        let root = StorePath::root();
+        let child = StorePath::from_segments(["ui", "width"]);
 
         assert!(child.starts_with(&root));
         assert_eq!(format!("{}{}", root.as_str(), SEPARATOR), ".");
         assert!(!child.as_str().starts_with(SEPARATOR));
         assert!(
-            !Path::segment(".hidden")
-                .unwrap()
+            !StorePath::segment(".hidden")
                 .as_str()
                 .starts_with(SEPARATOR)
         );
@@ -690,10 +797,10 @@ mod tests {
     /// the node behind, and one that scans by it never lists that value.
     #[test]
     fn a_subtree_boundary_does_not_cover_the_node_itself() {
-        let node = Path::segment("ui").unwrap();
+        let node = StorePath::segment("ui");
         let boundary = format!("{}{}", node.as_str(), SEPARATOR);
 
-        assert!(node.push("width").unwrap().as_str().starts_with(&boundary));
+        assert!(node.push("width").as_str().starts_with(&boundary));
         assert!(!node.as_str().starts_with(&boundary));
         assert!(node.starts_with(&node));
     }
@@ -704,7 +811,7 @@ mod tests {
     /// than itself.
     #[test]
     fn a_key_carries_what_a_glob_pattern_reads() {
-        let path = Path::segment("a*b[c]?\u{0}d").unwrap();
+        let path = StorePath::segment("a*b[c]?\u{0}d");
 
         assert_eq!(path.as_str(), "a*b[c]?\u{0}d");
     }
@@ -715,11 +822,17 @@ mod tests {
     /// in stores, and neither is a path.
     #[test]
     fn keys_already_written_that_are_not_paths() {
-        assert_eq!(Path::parse_joined("."), Err(PathError::EmptySegment));
-        assert_eq!(Path::parse_joined("ui."), Err(PathError::EmptySegment));
         assert_eq!(
-            Path::parse_joined("ui..width"),
-            Err(PathError::EmptySegment)
+            StorePath::parse_joined("."),
+            Err(StorePathError::EmptySegment)
+        );
+        assert_eq!(
+            StorePath::parse_joined("ui."),
+            Err(StorePathError::EmptySegment)
+        );
+        assert_eq!(
+            StorePath::parse_joined("ui..width"),
+            Err(StorePathError::EmptySegment)
         );
     }
 
@@ -729,7 +842,7 @@ mod tests {
     /// unsound - so every lookup from a stored key has to build a path first.
     #[test]
     fn a_path_does_not_hash_like_its_key() {
-        let path = Path::segment("ui").unwrap();
+        let path = StorePath::segment("ui");
 
         assert_eq!(path.as_str(), "ui");
         assert_ne!(hash_of(&path), hash_of(&"ui"));
@@ -740,8 +853,8 @@ mod tests {
     /// every value under such a name to a path nothing looks up.
     #[test]
     fn two_spellings_of_one_name_are_two_paths() {
-        let precomposed = Path::segment("caf\u{e9}").unwrap();
-        let decomposed = Path::segment("cafe\u{301}").unwrap();
+        let precomposed = StorePath::segment("caf\u{e9}");
+        let decomposed = StorePath::segment("cafe\u{301}");
 
         assert_ne!(precomposed, decomposed);
         assert_ne!(precomposed.as_str(), decomposed.as_str());
@@ -756,7 +869,7 @@ mod tests {
     /// anything in between.
     #[test]
     fn walking_a_document_borrows_each_level() {
-        let path = Path::from_segments(["ui", "window", "width"]).unwrap();
+        let path = StorePath::from_segments(["ui", "window", "width"]);
 
         assert_eq!(
             path.segments().collect::<Vec<_>>(),
@@ -770,11 +883,11 @@ mod tests {
     /// because whoever wrote the levels checked them where they were written.
     #[test]
     fn a_static_path_is_the_same_path() {
-        static UI_WIDTH: Path = Path::from_static(&["ui", "width"], "ui.width");
+        static UI_WIDTH: StorePath = StorePath::from_static(&["ui", "width"], "ui.width");
 
-        assert_eq!(UI_WIDTH, Path::from_segments(["ui", "width"]).unwrap());
+        assert_eq!(UI_WIDTH, StorePath::from_segments(["ui", "width"]));
         assert_eq!(UI_WIDTH.as_str(), "ui.width");
         assert_eq!(UI_WIDTH.name(), Some("width"));
-        assert!(UI_WIDTH.starts_with(&Path::from_static(&["ui"], "ui")));
+        assert!(UI_WIDTH.starts_with(&StorePath::from_static(&["ui"], "ui")));
     }
 }

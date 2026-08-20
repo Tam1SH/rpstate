@@ -1,6 +1,6 @@
-use amethystate::StoreBackend;
 use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
 #[amethystate(as_root)]
@@ -25,7 +25,9 @@ fn kv_refuses_a_path_owned_by_a_prefixed_struct() {
     assert!(
         store
             .kv()
-            .set("guarded.width", &"oops".to_string())
+            .namespace("guarded")
+            .unwrap()
+            .set("width", &"oops".to_string())
             .is_err()
     );
 }
@@ -59,7 +61,7 @@ fn a_root_field_survives_a_kv_write_of_another_type() {
         let store = StoreBuilder::new(path.path()).build().unwrap();
         let _cfg = RootConfig::new_with(&store).unwrap();
         store.kv().set("width", &"oops".to_string()).ok();
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(StorePath::root()).unwrap();
     }
 
     let store = StoreBuilder::new(path.path()).build().unwrap();

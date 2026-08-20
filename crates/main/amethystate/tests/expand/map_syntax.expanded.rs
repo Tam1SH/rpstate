@@ -694,11 +694,7 @@ impl DatabaseConfig {
             __amethystate_instance_id: __amethystate_guard,
             host: ::amethystate::store::field_with_path(
                 store,
-                ::std::sync::Arc::from(
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(format_args!("{0}.{1}", namespace, "host"))
-                    }),
-                ),
+                ::amethystate::join_path(namespace, "host"),
                 "localhost".to_string(),
                 instance_id,
             )?,
@@ -1184,15 +1180,9 @@ impl SystemSettings {
             __amethystate_instance_id: __amethystate_guard,
             db: {
                 let prefix = <Self as ::amethystate::StateScope>::PREFIX;
-                let path = if prefix == "." {
-                    "db".to_string()
-                } else {
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(format_args!("{0}.{1}", prefix, "db"))
-                    })
-                };
+                let path = ::amethystate::join_path(prefix, "db");
                 ::std::sync::Arc::new(
-                    DatabaseConfig::new_with_id(store, &path, instance_id)?,
+                    DatabaseConfig::new_with_id(store, path.as_str(), instance_id)?,
                 )
             },
             monitoring: ::amethystate::store::field::<

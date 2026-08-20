@@ -13,6 +13,7 @@ mod traits;
 mod types;
 pub mod util;
 
+pub use amethystate_core::path::{StorePath, StorePathError};
 pub use durable::{Commit, Durable};
 pub use error::{StorageError, StorageResult};
 pub use kv::Kv;

@@ -1,11 +1,12 @@
 use crate::migration::AppliedStep;
 use crate::migration::set::MigrationSet;
 use crate::store::error::StorageResult;
+use amethystate_core::path::{IntoStorePath, StorePath};
+
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::{CodecFormat, StoreCallback, SubscriptionId};
 use crate::{MigrationReport, Store, SubscriptionKind};
 use serde::{Serialize, de::DeserializeOwned};
-use std::sync::Arc;
 use uuid::Uuid;
 
 pub trait MigrationBackendAdapter {
@@ -14,15 +15,18 @@ pub trait MigrationBackendAdapter {
     fn get(&self, key: &str) -> StorageResult<Option<Vec<u8>>>;
     fn set(&mut self, key: &str, value: &[u8]) -> StorageResult<()>;
     fn delete(&mut self, key: &str) -> StorageResult<()>;
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>>;
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
-    fn get_meta(&self, prefix: &str) -> StorageResult<Option<PrefixMeta>>;
-    fn set_meta(&mut self, prefix: &str, meta: &PrefixMeta) -> StorageResult<()>;
-    fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>>;
-    fn set_schema_snapshot(&mut self, prefix: &str, snapshot: &SchemaSnapshot)
-    -> StorageResult<()>;
-    fn get_migration_log(&self, prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>>;
-    fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()>;
+    fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>>;
+    fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()>;
+    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>>;
+    fn set_schema_snapshot(
+        &mut self,
+        prefix: &StorePath,
+        snapshot: &SchemaSnapshot,
+    ) -> StorageResult<()>;
+    fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>>;
+    fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()>;
 }
 
 pub trait SchemaAwareStore: StoreBackend {
@@ -30,18 +34,18 @@ pub trait SchemaAwareStore: StoreBackend {
 }
 
 pub trait StoreBackend: Send + Sync + 'static {
-    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>>;
+    fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>>;
 
     fn set_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<Uuid>,
     ) -> StorageResult<()>;
 
     fn set_owned_erased(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<Uuid>,
     ) -> StorageResult<()>;
@@ -50,7 +54,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// own format. `Ok(false)` means the key is absent and `f` never ran.
     fn get_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool>;
 
@@ -61,26 +65,30 @@ pub trait StoreBackend: Send + Sync + 'static {
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()>;
 
-    fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()>;
-    fn delete(&self, path: &str) -> StorageResult<()>;
+    fn delete_with_source(&self, path: &StorePath, source: Option<Uuid>) -> StorageResult<()>;
+    fn delete(&self, path: &StorePath) -> StorageResult<()>;
 
     /// Removes every key under `prefix`, emitting one
     /// [`crate::StoreOp::DeletePrefix`] instead of a `Delete` per key.
-    fn delete_prefix_with_source(&self, prefix: &str, source: Option<Uuid>) -> StorageResult<()>;
+    fn delete_prefix_with_source(
+        &self,
+        prefix: &StorePath,
+        source: Option<Uuid>,
+    ) -> StorageResult<()>;
 
-    fn delete_prefix(&self, prefix: &str) -> StorageResult<()> {
+    fn delete_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         self.delete_prefix_with_source(prefix, None)
     }
 
     /// Every key under `prefix`, sorted by key on every backend.
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>>;
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
     /// The keys under `prefix`, sorted, without reading their values.
     ///
     /// `scan_prefix` copies every value out of the backend, which is wasted
     /// work when only the keys are wanted - and grows with the data rather
     /// than with the answer.
-    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>>;
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>>;
 
     fn save_now(&self) -> StorageResult<()>;
 
@@ -93,7 +101,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// Behavior is backend-specific: transactional engines (such as `redb`, `sqlite`) will
     /// selectively commit changes under the given prefix, while monolithic document engines
     /// (such as `json`, `toml`) will serialize and rewrite the entire file.
-    fn flush_prefix(&self, prefix: &str) -> StorageResult<()>;
+    fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()>;
 
     /// Commits without blocking; the future resolves once a flush has landed.
     ///
@@ -108,35 +116,36 @@ pub trait StoreBackend: Send + Sync + 'static {
 /// The typed surface over [`StoreBackend`]. Blanket-implemented, including for
 /// `dyn StoreBackend`, so a call site never has to know which it holds.
 pub trait StoreExt: StoreBackend {
-    fn get<T: DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
+    fn get<T: DeserializeOwned>(&self, path: impl IntoStorePath) -> StorageResult<Option<T>> {
+        let path = path.into_store_path()?;
         let mut out = None;
-        let found = self.get_erased(path, &mut |d| {
+        let found = self.get_erased(&path, &mut |d| {
             out = Some(erased_serde::deserialize::<T>(d).map_err(crate::codec::CodecError::from)?);
             Ok(())
         })?;
         Ok(if found { out } else { None })
     }
 
-    fn set<T: Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
-        self.set_erased(path, &value, None)
+    fn set<T: Serialize>(&self, path: impl IntoStorePath, value: &T) -> StorageResult<()> {
+        self.set_erased(&path.into_store_path()?, &value, None)
     }
 
-    fn set_owned<T: Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
+    fn set_owned<T: Serialize>(&self, path: StorePath, value: &T) -> StorageResult<()> {
         self.set_owned_erased(path, &value, None)
     }
 
     fn set_with_source<T: Serialize>(
         &self,
-        path: &str,
+        path: impl IntoStorePath,
         value: &T,
         source: Option<Uuid>,
     ) -> StorageResult<()> {
-        self.set_erased(path, &value, source)
+        self.set_erased(&path.into_store_path()?, &value, source)
     }
 
     fn set_owned_with_source<T: Serialize>(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &T,
         source: Option<Uuid>,
     ) -> StorageResult<()> {

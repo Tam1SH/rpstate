@@ -1,4 +1,5 @@
 use crate::store::StorageError;
+use amethystate_core::path::StorePathError;
 use thiserror::Error;
 
 /// Anything that can go wrong writing through a reactive primitive.
@@ -23,9 +24,9 @@ pub enum WriteError {
     )]
     SourceGone,
 
-    /// A name that would silently become two levels.
-    #[error("`{name}` is a name, not a path: use `namespace(..)` for nesting")]
-    SeparatorInName { name: String },
+    /// A name that cannot be a level.
+    #[error(transparent)]
+    Path(#[from] StorePathError),
 
     /// A `Kv` write aimed at a path a declared struct owns.
     #[error("path `{path}` belongs to the schema at `{prefix}`")]
@@ -59,6 +60,7 @@ where
             Core::StorageError(e) => WriteError::StorageError(StorageError::from(e)),
             Core::Intercepted => WriteError::Intercepted,
             Core::KeyNotFound(k) => WriteError::KeyNotFound(k),
+            Core::Path(e) => WriteError::Path(e),
         }
     }
 }

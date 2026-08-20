@@ -109,10 +109,10 @@ fn test_nested_and_ephemeral_integration() {
 
         assert!(!ui.is_loading().get());
 
-        let old_raw: Option<u16> = store.get("system.net.port").unwrap();
+        let old_raw: Option<u16> = store.get(["system", "net", "port"]).unwrap();
         assert!(old_raw.is_none(), "Old nested key should be gone");
 
-        let new_raw: Option<u16> = store.get("system.net.listen_port").unwrap();
+        let new_raw: Option<u16> = store.get(["system", "net", "listen_port"]).unwrap();
         assert_eq!(new_raw, Some(9999));
     }
 }

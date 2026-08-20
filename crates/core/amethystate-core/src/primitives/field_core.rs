@@ -1,4 +1,5 @@
 use crate::change::Change;
+use crate::path::StorePath;
 use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::{Signal, SignalSubscription};
 use serde::Serialize;
@@ -74,7 +75,7 @@ impl<T: Clone + 'static> FieldCore<T> {
         self.signal.subscribe_with_source(callback)
     }
 
-    pub fn intercept<F>(&self, path: Arc<str>, callback: F) -> InterceptDisposer
+    pub fn intercept<F>(&self, path: StorePath, callback: F) -> InterceptDisposer
     where
         F: Fn(Change<T>) -> Option<Change<T>> + Send + Sync + 'static,
     {
@@ -98,7 +99,7 @@ impl<T: Clone + 'static> FieldCore<T> {
 
     pub fn run_interceptors(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: T,
         source: Option<Uuid>,
     ) -> Result<Change<T>, String> {

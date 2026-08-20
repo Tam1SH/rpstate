@@ -80,11 +80,15 @@ fn migration_builder_mixes_codegen_and_manual_steps() {
     assert_eq!(profile.initials().get(), "GH");
 
     assert_eq!(
-        store.get::<String>("hybrid_profile.full_name").unwrap(),
+        store
+            .get::<String>(["hybrid_profile", "full_name"])
+            .unwrap(),
         None
     );
     assert_eq!(
-        store.get::<bool>("hybrid_profile.legacy_flag").unwrap(),
+        store
+            .get::<bool>(["hybrid_profile", "legacy_flag"])
+            .unwrap(),
         None
     );
 }

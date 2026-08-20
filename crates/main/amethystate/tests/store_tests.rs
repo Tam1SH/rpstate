@@ -16,9 +16,9 @@ fn test_set_get_immediate() {
     let path = unique_path("immediate");
     let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
 
-    store.set("user.name", &"Alice".to_string()).unwrap();
+    store.set(["user", "name"], &"Alice".to_string()).unwrap();
 
-    let val: Option<String> = store.get("user.name").unwrap();
+    let val: Option<String> = store.get(["user", "name"]).unwrap();
     assert_eq!(val, Some("Alice".to_string()));
 }
 
@@ -38,7 +38,7 @@ fn test_local_reactivity() {
         }),
     );
 
-    store.set("ui.theme", &"dark".to_string()).unwrap();
+    store.set(["ui", "theme"], &"dark".to_string()).unwrap();
 
     assert!(*hit.lock());
 }
@@ -48,16 +48,16 @@ fn test_delete_flow() {
     let path = unique_path("delete");
     {
         let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-        store.set("temp.key", &1).unwrap();
+        store.set(["temp", "key"], &1).unwrap();
         store.save_now().unwrap();
-        store.delete("temp.key").unwrap();
-        assert_eq!(store.get::<i32>("temp.key").unwrap(), None);
+        store.delete(["temp", "key"]).unwrap();
+        assert_eq!(store.get::<i32>(["temp", "key"]).unwrap(), None);
         store.save_now().unwrap();
     }
 
     let (store_reopened, _) =
         Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-    assert_eq!(store_reopened.get::<i32>("temp.key").unwrap(), None);
+    assert_eq!(store_reopened.get::<i32>(["temp", "key"]).unwrap(), None);
 }
 
 #[test]
@@ -75,13 +75,13 @@ fn test_deterministic_closure_and_reopen() {
     let path = unique_path("closure");
     {
         let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-        store.set("test.key", &"hello".to_string()).unwrap();
+        store.set(["test", "key"], &"hello".to_string()).unwrap();
     }
 
     let (store_reopened, _) = Store::open(StoreConfig::new(&path), MigrationSet::default())
         .expect("Database should be available immediately after close");
 
-    let val: Option<String> = store_reopened.get("test.key").unwrap();
+    let val: Option<String> = store_reopened.get(["test", "key"]).unwrap();
     assert_eq!(val, Some("hello".to_string()));
 }
 
@@ -90,13 +90,16 @@ fn test_drop_behavior_is_deterministic() {
     let path = unique_path("drop_logic");
     {
         let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-        store.set("drop.test", &42u32).unwrap();
+        store.set(["drop", "test"], &42u32).unwrap();
     }
 
     let (store_reopened, _) = Store::open(StoreConfig::new(&path), MigrationSet::default())
         .expect("Drop must release file lock deterministically");
 
-    assert_eq!(store_reopened.get::<u32>("drop.test").unwrap(), Some(42));
+    assert_eq!(
+        store_reopened.get::<u32>(["drop", "test"]).unwrap(),
+        Some(42)
+    );
 }
 
 #[test]
@@ -107,11 +110,11 @@ fn test_close_saves_pending_data() {
 
     {
         let (store, _) = Store::open(config, MigrationSet::default()).unwrap();
-        store.set("urgent.data", &true).unwrap();
+        store.set(["urgent", "data"], &true).unwrap();
     }
 
     let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-    assert_eq!(store.get::<bool>("urgent.data").unwrap(), Some(true));
+    assert_eq!(store.get::<bool>(["urgent", "data"]).unwrap(), Some(true));
 }
 
 #[test]
@@ -146,7 +149,7 @@ fn test_component_atomic_rollback() {
     cfg.save_debounce = Duration::from_millis(50);
     {
         let (store, _) = Store::open(cfg, MigrationSet::default()).unwrap();
-        store.set("net.ip", &"1.1.1.1".to_string()).unwrap();
+        store.set(["net", "ip"], &"1.1.1.1".to_string()).unwrap();
         store.save_now().unwrap();
     }
 
@@ -171,6 +174,6 @@ fn test_component_atomic_rollback() {
     let (store, report) = Store::open(StoreConfig::new(&path), mset).unwrap();
     assert!(report.has_failures());
 
-    let val: String = store.get("net.ip").unwrap().unwrap();
+    let val: String = store.get(["net", "ip"]).unwrap().unwrap();
     assert_eq!(val, "1.1.1.1");
 }

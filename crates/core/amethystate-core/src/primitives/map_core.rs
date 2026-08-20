@@ -1,5 +1,6 @@
 use crate::SignalSubscription;
 use crate::change::MapChange;
+use crate::path::StorePath;
 use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::SubscriptionMeta;
 use serde::Serialize;
@@ -186,7 +187,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
         }
     }
 
-    pub fn intercept<F>(&self, path: Arc<str>, callback: F) -> InterceptDisposer
+    pub fn intercept<F>(&self, path: StorePath, callback: F) -> InterceptDisposer
     where
         F: Fn(MapChange<K, V>) -> Option<MapChange<K, V>> + Send + Sync + 'static,
     {
@@ -221,7 +222,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
         let subs = self.interceptors_key.clone();
         InterceptDisposer {
             id,
-            path: Arc::from(""),
+            path: StorePath::root(),
             cleanup: Arc::new(move |id| {
                 if let Ok(mut lock) = subs.lock()
                     && let Some(list) = lock.get_mut(&key)
@@ -234,7 +235,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
 
     pub fn run_interceptors(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         mut change: MapChange<K, V>,
     ) -> Result<MapChange<K, V>, String> {
         let Some(_guard) = InterceptGuard::enter(&self.intercept_depth, path) else {

@@ -6,6 +6,7 @@ use crate::store::Durable;
 use crate::store::{StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only};
 use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
 use crate::{ReactiveMapKey, ReactiveMapValue};
+use amethystate_core::path::StorePath;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -24,7 +25,7 @@ use uuid::Uuid;
 pub struct Kv {
     store: Store,
     instance_id: Uuid,
-    prefix: Option<Arc<str>>,
+    prefix: Option<StorePath>,
 }
 
 impl Kv {
@@ -71,25 +72,19 @@ impl Kv {
         Ok(Self {
             store: self.store.clone(),
             instance_id: self.instance_id,
-            prefix: Some(Arc::from(self.resolve(name)?)),
+            prefix: Some(self.resolve(name)?),
         })
     }
 
     /// Where this handle is rooted, or `None` at the top.
-    pub fn prefix(&self) -> Option<&str> {
-        self.prefix.as_deref()
+    pub fn prefix(&self) -> Option<&StorePath> {
+        self.prefix.as_ref()
     }
 
-    fn resolve(&self, name: &str) -> WriteResult<String> {
-        if name.contains('.') {
-            return Err(WriteError::SeparatorInName {
-                name: name.to_string(),
-            });
-        }
-
+    fn resolve(&self, name: &str) -> WriteResult<StorePath> {
         Ok(match &self.prefix {
-            Some(prefix) => format!("{prefix}.{name}"),
-            None => name.to_string(),
+            Some(prefix) => prefix.try_push(name)?,
+            None => StorePath::try_segment(name)?,
         })
     }
 
@@ -134,8 +129,11 @@ impl Kv {
     /// kv.set("theme", &"dark".to_string()).unwrap();
     /// assert_eq!(kv.get::<String>("theme").unwrap(), Some("dark".into()));
     ///
-    /// // A name is a name: nesting is asked for, never punctuated into one.
-    /// assert!(kv.set("ui.theme", &"dark".to_string()).is_err());
+    /// // A name is a name: a separator in one is part of it, and nesting is
+    /// // asked for through `namespace` rather than punctuated into a string.
+    /// kv.set("ui.theme", &"solarized".to_string()).unwrap();
+    /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("solarized".into()));
+    /// assert_eq!(kv.namespace("ui").unwrap().get::<String>("theme").unwrap(), None);
     /// ```
     pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         let path = self.resolve(name)?;
@@ -192,7 +190,7 @@ impl Kv {
     pub fn keys(&self) -> StorageResult<Vec<String>> {
         match &self.prefix {
             Some(prefix) => self.store.scan_keys(prefix),
-            None => self.store.scan_keys(""),
+            None => self.store.scan_keys(StorePath::root()),
         }
     }
 
@@ -231,12 +229,8 @@ impl Kv {
         self.guard(&path)?;
         self.check_type::<T>(&path)?;
 
-        let field = field_with_path::<T, WritableMode>(
-            &self.store,
-            Arc::from(path.as_str()),
-            default,
-            self.instance_id,
-        )?;
+        let field =
+            field_with_path::<T, WritableMode>(&self.store, path, default, self.instance_id)?;
 
         let cell = field.cell();
         Ok(cell.owning(Arc::new(field)))
@@ -271,7 +265,7 @@ impl Kv {
 
         Ok(reactive_map_with_path_only(
             &self.store,
-            Arc::from(path.as_str()),
+            path,
             HashMap::new(),
             self.instance_id,
         )?)
@@ -282,7 +276,8 @@ impl Kv {
     /// Writing a `String` where a `u16` is declared does not merely store the
     /// wrong thing: the field's subscription fails to decode and keeps its old
     /// value, and the next startup fails outright when it reads the path back.
-    fn guard(&self, path: &str) -> WriteResult<()> {
+    fn guard(&self, path: &StorePath) -> WriteResult<()> {
+        let path = path.as_str();
         for entry in inventory::iter::<SchemaEntry> {
             let Some(prefix) = entry.prefix else {
                 continue;
@@ -304,7 +299,8 @@ impl Kv {
     /// Only what this process has built is known, so this catches a mistake
     /// rather than guaranteeing a type. A path written by an earlier run is not
     /// checked, and neither is the raw [`Kv::set`].
-    fn check_type<T: AmeType + 'static>(&self, path: &str) -> WriteResult<()> {
+    fn check_type<T: AmeType + 'static>(&self, path: &StorePath) -> WriteResult<()> {
+        let path = path.as_str();
         let wanted = T::TYPE_NAME;
 
         match resolve_field(path) {

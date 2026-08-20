@@ -4,6 +4,7 @@ use crate::migration::AppliedStep;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageResult};
+use amethystate_core::path::StorePath;
 use rusqlite::{OptionalExtension, Transaction};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -89,7 +90,7 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let mut stmt = self
             .txn
             .prepare_cached("SELECT key, value FROM data WHERE key GLOB ?")
@@ -106,28 +107,28 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         Ok(res)
     }
 
-    fn get_meta(&self, prefix: &str) -> StorageResult<Option<PrefixMeta>> {
-        self.get_typed("metadata", prefix)
+    fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
+        self.get_typed("metadata", prefix.as_str())
     }
-    fn set_meta(&mut self, prefix: &str, meta: &PrefixMeta) -> StorageResult<()> {
-        self.set_typed("metadata", prefix, meta)
+    fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
+        self.set_typed("metadata", prefix.as_str(), meta)
     }
 
-    fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
-        self.get_typed("schema_snapshot", prefix)
+    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
+        self.get_typed("schema_snapshot", prefix.as_str())
     }
     fn set_schema_snapshot(
         &mut self,
-        prefix: &str,
+        prefix: &StorePath,
         snapshot: &SchemaSnapshot,
     ) -> StorageResult<()> {
-        self.set_typed("schema_snapshot", prefix, snapshot)
+        self.set_typed("schema_snapshot", prefix.as_str(), snapshot)
     }
 
-    fn get_migration_log(&self, prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>> {
-        self.get_typed("migration_log", prefix)
+    fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {
+        self.get_typed("migration_log", prefix.as_str())
     }
-    fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()> {
-        self.set_typed("migration_log", prefix, &log)
+    fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
+        self.set_typed("migration_log", prefix.as_str(), &log)
     }
 }

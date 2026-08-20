@@ -4,6 +4,7 @@ use crate::migration::fields::AmeStateFields;
 use crate::migration::migrate_from::MigrateFrom;
 use crate::store::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageResult};
+use amethystate_core::path::StorePath;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -198,12 +199,12 @@ impl<'a> MigrationContext<'a> {
         K: FromStr + Eq + Hash,
         V: DeserializeOwned,
     {
-        let full_prefix = format!("{}.", self.scoped_path(key));
+        let full_prefix = StorePath::parse_joined(&self.scoped_path(key))?;
         let raw = self.storage.scan_prefix(&full_prefix)?;
         let mut map = HashMap::new();
         for (path, bytes) in raw {
-            if let Some(k_str) = path.strip_prefix(&full_prefix)
-                && let Ok(kv) = K::from_str(k_str)
+            if let Some(k_str) = full_prefix.entry_name(&path)
+                && let Ok(kv) = K::from_str(&k_str)
                 && let Ok(vv) = decode::<V>(self.storage, &bytes)
             {
                 map.insert(kv, vv);
@@ -350,35 +351,45 @@ mod tests {
             Ok(())
         }
 
-        fn scan_prefix(&self, _: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        fn scan_prefix(&self, _: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
             unreachable!()
         }
 
-        fn get_meta(&self, _prefix: &str) -> StorageResult<Option<PrefixMeta>> {
+        fn get_meta(&self, _prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
             unreachable!()
         }
 
-        fn set_meta(&mut self, _prefix: &str, _meta: &PrefixMeta) -> StorageResult<()> {
+        fn set_meta(&mut self, _prefix: &StorePath, _meta: &PrefixMeta) -> StorageResult<()> {
             unreachable!()
         }
 
-        fn get_schema_snapshot(&self, _prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
+        fn get_schema_snapshot(
+            &self,
+            _prefix: &StorePath,
+        ) -> StorageResult<Option<SchemaSnapshot>> {
             unreachable!()
         }
 
         fn set_schema_snapshot(
             &mut self,
-            _prefix: &str,
+            _prefix: &StorePath,
             _snapshot: &SchemaSnapshot,
         ) -> StorageResult<()> {
             unreachable!()
         }
 
-        fn get_migration_log(&self, _prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>> {
+        fn get_migration_log(
+            &self,
+            _prefix: &StorePath,
+        ) -> StorageResult<Option<Vec<AppliedStep>>> {
             unreachable!()
         }
 
-        fn set_migration_log(&mut self, _prefix: &str, _log: &[AppliedStep]) -> StorageResult<()> {
+        fn set_migration_log(
+            &mut self,
+            _prefix: &StorePath,
+            _log: &[AppliedStep],
+        ) -> StorageResult<()> {
             unreachable!()
         }
     }

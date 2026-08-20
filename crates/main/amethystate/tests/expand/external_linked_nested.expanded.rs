@@ -71,25 +71,13 @@ impl ConnectionPool {
             __amethystate_instance_id: __amethystate_guard,
             max_connections: ::amethystate::store::field_with_path(
                 store,
-                ::std::sync::Arc::from(
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(
-                            format_args!("{0}.{1}", namespace, "max_connections"),
-                        )
-                    }),
-                ),
+                ::amethystate::join_path(namespace, "max_connections"),
                 10,
                 instance_id,
             )?,
             timeout_secs: ::amethystate::store::field_with_path(
                 store,
-                ::std::sync::Arc::from(
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(
-                            format_args!("{0}.{1}", namespace, "timeout_secs"),
-                        )
-                    }),
-                ),
+                ::amethystate::join_path(namespace, "timeout_secs"),
                 30,
                 instance_id,
             )?,
@@ -655,15 +643,9 @@ impl DatabaseState {
             __amethystate_instance_id: __amethystate_guard,
             pool: {
                 let prefix = <Self as ::amethystate::StateScope>::PREFIX;
-                let path = if prefix == "." {
-                    "pool".to_string()
-                } else {
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(format_args!("{0}.{1}", prefix, "pool"))
-                    })
-                };
+                let path = ::amethystate::join_path(prefix, "pool");
                 ::std::sync::Arc::new(
-                    ConnectionPool::new_with_id(store, &path, instance_id)?,
+                    ConnectionPool::new_with_id(store, path.as_str(), instance_id)?,
                 )
             },
         };
@@ -1147,19 +1129,11 @@ impl InspectorState {
                         .__schema_field_pool();
                 };
                 let parent_prefix = <DatabaseState as ::amethystate::StateScope>::PREFIX;
-                let path = if parent_prefix == "." {
-                    "pool".to_string()
-                } else {
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(
-                            format_args!("{0}.{1}", parent_prefix, "pool"),
-                        )
-                    })
-                };
+                let path = ::amethystate::join_path(parent_prefix, "pool");
                 ::std::sync::Arc::new(
                     <ConnectionPool as ::amethystate::AmeStateNode>::new_node_with_id(
                         store,
-                        &path,
+                        path.as_str(),
                         instance_id,
                     )?,
                 )

@@ -34,7 +34,7 @@ fn a_write_during_a_commit_is_not_dropped() {
         std::thread::sleep(Duration::from_millis(60));
 
         assert_eq!(
-            store.get::<u64>("dbl.counter").unwrap(),
+            store.get::<u64>(["dbl", "counter"]).unwrap(),
             Some(second),
             "round {round}: the write that landed during the commit is gone"
         );
@@ -55,12 +55,12 @@ fn a_burst_of_writes_settles_on_the_last_one() {
         }
 
         std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(store.get::<u64>("dbl.counter").unwrap(), Some(300));
+        assert_eq!(store.get::<u64>(["dbl", "counter"]).unwrap(), Some(300));
     }
 
     let store = StoreBuilder::new(&path).build().unwrap();
     assert_eq!(
-        store.get::<u64>("dbl.counter").unwrap(),
+        store.get::<u64>(["dbl", "counter"]).unwrap(),
         Some(300),
         "and it survives a reopen"
     );
@@ -83,5 +83,5 @@ fn dropping_the_store_writes_what_is_still_buffered() {
     }
 
     let store = StoreBuilder::new(path.path()).build().unwrap();
-    assert_eq!(store.get::<u64>("dbl.counter").unwrap(), Some(777));
+    assert_eq!(store.get::<u64>(["dbl", "counter"]).unwrap(), Some(777));
 }

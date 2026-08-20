@@ -353,6 +353,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::Store;
     use crate::store::StateScope;
     use crate::test_utils::unique_store;
@@ -385,7 +386,7 @@ mod tests {
 
         cell.set(200).expect("write should reach the store");
 
-        assert_eq!(store.get::<u64>("ui.width").unwrap(), Some(200));
+        assert_eq!(store.get::<u64>(["ui", "width"]).unwrap(), Some(200));
         assert_eq!(
             cell.get(),
             Some(200),
@@ -407,7 +408,7 @@ mod tests {
             field.cell()
         };
 
-        store.set("ui.height", &42u64).expect("external write");
+        store.set(["ui", "height"], &42u64).expect("external write");
 
         assert_eq!(cell.get(), None, "the field is gone, so the view is empty");
         assert!(cell.set(1).is_err(), "and there is nowhere to write");
@@ -425,7 +426,7 @@ mod tests {
 
         cell.set(2).unwrap();
         field.set(3).unwrap();
-        store.set("ui.depth", &4u64).unwrap();
+        store.set(["ui", "depth"], &4u64).unwrap();
 
         assert_eq!(*seen.lock().unwrap(), vec![2, 3, 4]);
     }
@@ -469,7 +470,7 @@ mod tests {
             Some(5),
             "cache must not hold a value the store refused"
         );
-        assert_eq!(store.get::<u64>("ui.guarded").unwrap(), Some(5));
+        assert_eq!(store.get::<u64>(["ui", "guarded"]).unwrap(), Some(5));
     }
 
     #[test]

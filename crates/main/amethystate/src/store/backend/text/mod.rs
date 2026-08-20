@@ -68,14 +68,17 @@ macro_rules! define_store_test_suite {
                 let store = make_store("roundtrip");
 
                 store
-                    .set("ui.theme.dark", &true)
+                    .set(["ui", "theme", "dark"], &true)
                     .expect("set should succeed");
-                assert_eq!(store.get::<bool>("ui.theme.dark").unwrap(), Some(true));
+                assert_eq!(
+                    store.get::<bool>(["ui", "theme", "dark"]).unwrap(),
+                    Some(true)
+                );
 
                 store
-                    .delete("ui.theme.dark")
+                    .delete(&StorePath::from_segments(["ui", "theme", "dark"]))
                     .expect("delete should succeed");
-                assert_eq!(store.get::<bool>("ui.theme.dark").unwrap(), None);
+                assert_eq!(store.get::<bool>(["ui", "theme", "dark"]).unwrap(), None);
             }
 
             #[test]
@@ -111,10 +114,10 @@ macro_rules! define_store_test_suite {
                 );
 
                 store
-                    .set("ui.theme.dark", &true)
+                    .set(["ui", "theme", "dark"], &true)
                     .expect("set should succeed");
                 store
-                    .set("ui.layout.sidebar_width", &260u64)
+                    .set(["ui", "layout", "sidebar_width"], &260u64)
                     .expect("set should succeed");
 
                 assert_eq!(any_hits.lock().len(), 2);
@@ -136,11 +139,11 @@ macro_rules! define_store_test_suite {
                 );
 
                 store
-                    .set("ui.theme.dark", &true)
+                    .set(["ui", "theme", "dark"], &true)
                     .expect("set should succeed");
                 store.unsubscribe(id);
                 store
-                    .set("ui.theme.dark", &false)
+                    .set(["ui", "theme", "dark"], &false)
                     .expect("set should succeed");
 
                 assert_eq!(*hit_count.lock(), 1);
@@ -208,8 +211,8 @@ macro_rules! define_store_test_suite {
                 let path = unique_test_path("save_now");
                 let store = open_store_at(path.clone());
 
-                store.set("app.version", &"1.0.0".to_string()).unwrap();
-                store.set("app.debug", &true).unwrap();
+                store.set(["app", "version"], &"1.0.0".to_string()).unwrap();
+                store.set(["app", "debug"], &true).unwrap();
 
                 if path.exists() {
                     std::fs::remove_file(&path).unwrap();
@@ -249,10 +252,12 @@ macro_rules! define_store_test_suite {
                 let store = make_store("init_scan");
                 store.mark_initialized("settings").unwrap();
                 store
-                    .set("settings.host", &"localhost".to_string())
+                    .set(["settings", "host"], &"localhost".to_string())
                     .unwrap();
 
-                let entries = store.scan_prefix("settings").unwrap();
+                let entries = store
+                    .scan_prefix(&StorePath::from_segments(["settings"]))
+                    .unwrap();
                 assert!(
                     entries.iter().all(|(k, _)| !k.contains("__init")),
                     "init key should not appear in scan_prefix results"

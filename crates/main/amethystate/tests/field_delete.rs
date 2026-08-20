@@ -21,9 +21,9 @@ fn a_deleted_key_falls_back_to_the_default() {
     cfg.counter().set(42).unwrap();
     assert_eq!(cfg.counter().get(), 42);
 
-    store.delete("del.counter").unwrap();
+    store.delete(["del", "counter"]).unwrap();
 
-    assert_eq!(store.get::<u64>("del.counter").unwrap(), None);
+    assert_eq!(store.get::<u64>(["del", "counter"]).unwrap(), None);
     assert_eq!(cfg.counter().get(), 7, "field must not outlive the key");
 }
 
@@ -40,7 +40,7 @@ fn a_delete_notifies_subscribers() {
         .subscribe(move |v: &u64| cap.lock().unwrap().push(*v));
 
     cfg.counter().set(42).unwrap();
-    store.delete("del.counter").unwrap();
+    store.delete(["del", "counter"]).unwrap();
 
     assert_eq!(*seen.lock().unwrap(), vec![42, 7]);
 }
@@ -51,9 +51,9 @@ fn writing_again_after_a_delete_works() {
     let store = StoreBuilder::new(&path).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
-    store.delete("del.counter").unwrap();
+    store.delete(["del", "counter"]).unwrap();
     cfg.counter().set(5).unwrap();
 
     assert_eq!(cfg.counter().get(), 5);
-    assert_eq!(store.get::<u64>("del.counter").unwrap(), Some(5));
+    assert_eq!(store.get::<u64>(["del", "counter"]).unwrap(), Some(5));
 }

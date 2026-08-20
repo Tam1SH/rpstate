@@ -7,6 +7,7 @@ use crate::store::CodecFormat;
 use crate::store::error::StorageResult;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
+use amethystate_core::path::StorePath;
 use redb::ReadableTable;
 
 pub(super) struct RedbMigrationBackend<'a> {
@@ -53,7 +54,8 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        let prefix = prefix.as_str();
         use redb::ReadableTable;
         let table = self
             .txn
@@ -69,33 +71,39 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         }
         Ok(result)
     }
-    fn get_meta(&self, prefix: &str) -> StorageResult<Option<PrefixMeta>> {
+    fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
+        let prefix = prefix.as_str();
         Ok(self.txn.load_typed(TABLE_META, prefix)?)
     }
 
-    fn set_meta(&mut self, prefix: &str, meta: &PrefixMeta) -> StorageResult<()> {
+    fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
+        let prefix = prefix.as_str();
         Ok(self.txn.save_typed(TABLE_META, prefix, meta)?)
     }
 
-    fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
+    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
+        let prefix = prefix.as_str();
         Ok(self.txn.load_typed(TABLE_SCHEMA_SNAPSHOT, prefix)?)
     }
 
     fn set_schema_snapshot(
         &mut self,
-        prefix: &str,
+        prefix: &StorePath,
         snapshot: &SchemaSnapshot,
     ) -> StorageResult<()> {
+        let prefix = prefix.as_str();
         Ok(self
             .txn
             .save_typed(TABLE_SCHEMA_SNAPSHOT, prefix, snapshot)?)
     }
 
-    fn get_migration_log(&self, prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>> {
+    fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {
+        let prefix = prefix.as_str();
         Ok(self.txn.load_typed(TABLE_MIGRATION_LOG, prefix)?)
     }
 
-    fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()> {
+    fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
+        let prefix = prefix.as_str();
         Ok(self.txn.save_typed(TABLE_MIGRATION_LOG, prefix, &log)?)
     }
 }

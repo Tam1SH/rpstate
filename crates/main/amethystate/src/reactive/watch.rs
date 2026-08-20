@@ -91,7 +91,7 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     /// # use std::sync::Mutex;
     /// let seen = Arc::new(Mutex::new(Vec::new()));
@@ -137,7 +137,7 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     /// # use std::sync::Mutex;
     /// let port_fork = port.fork();
@@ -190,7 +190,7 @@ impl<W: Watchable> Watch<W, Local<'_>> {
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// // Coalescing, the default.

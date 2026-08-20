@@ -52,7 +52,7 @@ fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
         "saw {:?}",
         reached.lock().unwrap()
     );
-    assert!(store.get::<u64>("ic.counter").unwrap().unwrap_or(0) <= 100);
+    assert!(store.get::<u64>(["ic", "counter"]).unwrap().unwrap_or(0) <= 100);
 }
 
 /// A `Clear` is not about any one key, so key interceptors must not see it.

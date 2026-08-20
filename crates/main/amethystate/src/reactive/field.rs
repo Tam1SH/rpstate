@@ -6,6 +6,7 @@ use crate::store::Durable;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{StoreBackend, SubscriptionId};
 use crate::{AccessMode, ReadOnlyMode, Store, WritableMode};
+use amethystate_core::path::StorePath;
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -33,7 +34,7 @@ impl Drop for StoreSubscription {
 /// # let store = StoreBuilder::new(&*path).build().unwrap();
 /// let port = field_with_path::<u16, WritableMode>(
 ///     &store,
-///     Arc::from("net.port"),
+///     ["net", "port"],
 ///     8080,
 ///     amethystate::uuid::Uuid::new_v4(),
 /// ).unwrap();
@@ -44,7 +45,7 @@ impl Drop for StoreSubscription {
 /// ```
 pub(crate) struct FieldInner<TValue> {
     pub(crate) core: FieldCore<TValue>,
-    pub(crate) path: Arc<str>,
+    pub(crate) path: StorePath,
     pub(crate) instance_id: Uuid,
     pub(crate) store_sub: Option<Arc<StoreSubscription>>,
 }
@@ -106,7 +107,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// let twin = port.clone();   // same instance id
@@ -137,7 +138,7 @@ where
         Self {
             inner: Arc::new(FieldInner {
                 core: self.inner.core.clone(),
-                path: Arc::clone(&self.inner.path),
+                path: self.inner.path.clone(),
                 instance_id: new_instance_id,
                 store_sub: self.inner.store_sub.clone(),
             }),
@@ -158,7 +159,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// assert_eq!(port.get(), 8080);
@@ -169,9 +170,8 @@ where
 
     /// The full path this field is stored under, prefix included.
     ///
-    /// The prefix and the key are joined by [`join_path`](crate::join_path),
-    /// which trims a trailing dot from one and a leading dot from the other.
-    /// Which prefix and which key a declared field ends up with is the
+    /// The prefix's levels come first and the key's after, with the empty ones
+    /// dropped. Which prefix and which key a declared field ends up with is the
     /// macro's business - see [`macro@crate::amethystate`].
     ///
     /// ```
@@ -180,21 +180,17 @@ where
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// assert_eq!(amethystate::join_path("net", "port"), "net.port");
-    /// assert_eq!(amethystate::join_path("sys.db", "host"), "sys.db.host");
-    /// assert_eq!(amethystate::join_path("net.", ".port"), "net.port", "dots are trimmed");
-    /// assert_eq!(amethystate::join_path("", "port"), "port", "no prefix, no dot");
-    ///
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
-    /// assert_eq!(&*port.path(), "net.port");
+    /// assert_eq!(port.path().segments().collect::<Vec<_>>(), ["net", "port"]);
+    /// assert_eq!(port.path().as_str(), "net.port");
     ///
     /// // The same path addresses it through `Kv`, one segment at a time.
     /// let net = store.kv().namespace("net").unwrap();
     /// assert_eq!(net.get::<u16>("port").unwrap(), Some(8080));
     /// ```
-    pub fn path(&self) -> Arc<str> {
+    pub fn path(&self) -> StorePath {
         self.inner.path.clone()
     }
 
@@ -226,7 +222,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// # let host = field_with_path::<String, WritableMode>(
-    /// #     &store, Arc::from("net.host"), "localhost".to_string(),
+    /// #     &store, ["net", "host"], "localhost".to_string(),
     /// #     amethystate::uuid::Uuid::new_v4(),
     /// # ).unwrap();
     /// let (tx, rx) = std::sync::mpsc::channel();
@@ -297,7 +293,7 @@ where
     /// let width = {
     ///     let field = field_with_path::<u64, WritableMode>(
     ///         &store,
-    ///         Arc::from("ui.width"),
+    ///         ["ui", "width"],
     ///         800,
     ///         amethystate::uuid::Uuid::new_v4(),
     ///     ).unwrap();
@@ -385,7 +381,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let hits = field_with_path::<u32, WritableMode>(
-    ///     &store, Arc::from("stats.hits"), 0, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["stats", "hits"], 0, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// assert_eq!(hits.update(|n| n + 1).unwrap(), 1);
@@ -482,7 +478,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let volume = field_with_path::<u8, WritableMode>(
-    ///     &store, Arc::from("audio.volume"), 50, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["audio", "volume"], 50, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// let guard = volume.intercept(|mut change| {
@@ -528,8 +524,11 @@ where
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let session: Field<String, WritableMode> =
-    ///     Field::new_volatile(Arc::from("app.session"), "anonymous".to_string());
+    /// # use amethystate::store::StorePath;
+    /// let session: Field<String, WritableMode> = Field::new_volatile(
+    ///     StorePath::from_segments(["app", "session"]),
+    ///     "anonymous".to_string(),
+    /// );
     ///
     /// session.set("alice".to_string()).unwrap();
     /// assert_eq!(session.get(), "alice");
@@ -538,13 +537,13 @@ where
     /// let app = store.kv().namespace("app").unwrap();
     /// assert_eq!(app.get::<String>("session").unwrap(), None);
     /// ```
-    pub fn new_volatile(path: Arc<str>, default: TValue) -> Self {
+    pub fn new_volatile(path: StorePath, default: TValue) -> Self {
         Self::new_volatile_with_id(path, default, Uuid::new_v4())
     }
 
     /// [`Field::new_volatile`] with the instance id chosen rather than
     /// generated.
-    pub fn new_volatile_with_id(path: Arc<str>, default: TValue, instance_id: Uuid) -> Self {
+    pub fn new_volatile_with_id(path: StorePath, default: TValue, instance_id: Uuid) -> Self {
         Self {
             inner: Arc::new(FieldInner {
                 core: FieldCore::new(default),
@@ -645,7 +644,7 @@ where
     /// // A debouncer a minute out: nothing reaches disk on its own.
     /// # let store = StoreBuilder::new(&*path).debounce(60_000).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// port.durable().set(9090).unwrap();
@@ -675,7 +674,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
-    ///     &store, Arc::from("net.port"), 8080, amethystate::uuid::Uuid::new_v4(),
+    ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
     /// let durable = port.durable();
@@ -758,6 +757,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::SubscriptionKind;
     use crate::store::{StateScope, StoreBackend};
     use crate::test_utils::unique_store;
@@ -777,10 +777,10 @@ mod tests {
             .expect("field should be created");
 
         assert_eq!(field.get(), 14);
-        assert_eq!(field.path().as_ref(), "ui.font_size");
+        assert_eq!(field.path(), StorePath::from_segments(["ui", "font_size"]));
 
         field.set(18).expect("set should succeed");
-        assert_eq!(store.get::<i32>("ui.font_size").unwrap(), Some(18));
+        assert_eq!(store.get::<i32>(["ui", "font_size"]).unwrap(), Some(18));
 
         let callback_val = Arc::new(Mutex::new(0i32));
         let cap = callback_val.clone();
@@ -811,7 +811,7 @@ mod tests {
             let field: Field<String, WritableMode> = Field {
                 inner: Arc::new(FieldInner {
                     core,
-                    path: Arc::from("test.field"),
+                    path: StorePath::from_segments(["test", "field"]),
                     store_sub: Some(Arc::new(StoreSubscription {
                         store: store.clone(),
                         id: sub_id,
@@ -823,11 +823,11 @@ mod tests {
 
             field.set("hello".to_string()).unwrap();
             assert_eq!(calls.load(Ordering::SeqCst), 1);
-            store.set("test.field", &"world").unwrap();
+            store.set(["test", "field"], &"world").unwrap();
             assert_eq!(calls.load(Ordering::SeqCst), 2);
         }
 
-        store.set("test.field", &"world").unwrap();
+        store.set(["test", "field"], &"world").unwrap();
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -853,7 +853,7 @@ mod tests {
     fn test_volatile_field_behavior() {
         let store = unique_store("test_volatile_field_behavior");
 
-        let field_path: Arc<str> = Arc::from("ui.temp_spinner");
+        let field_path = StorePath::from_segments(["ui", "temp_spinner"]);
 
         let field = Field::<bool, WritableMode>::new_volatile(field_path.clone(), false);
 
@@ -884,7 +884,8 @@ mod tests {
 
     #[test]
     fn test_field_additional_coverage() {
-        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test"), 42);
+        let field =
+            Field::<i32, WritableMode>::new_volatile(StorePath::from_segments(["test"]), 42);
 
         let disp = field.intercept(|mut change| {
             change.new_value *= 2;
@@ -915,7 +916,7 @@ mod tests {
 
     #[test]
     fn test_field_depth_guard() {
-        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test"), 1);
+        let field = Field::<i32, WritableMode>::new_volatile(StorePath::from_segments(["test"]), 1);
 
         field
             .inner
@@ -941,7 +942,10 @@ mod tests {
     #[test]
     #[traced_test]
     fn test_field_recursion_warning() {
-        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test.recursive_field"), 0);
+        let field = Field::<i32, WritableMode>::new_volatile(
+            StorePath::from_segments(["test", "recursive_field"]),
+            0,
+        );
 
         let field_clone = field.clone();
 
@@ -958,7 +962,8 @@ mod tests {
 
     #[test]
     fn test_field_subscribe_external() {
-        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test.ext"), 0);
+        let field =
+            Field::<i32, WritableMode>::new_volatile(StorePath::from_segments(["test", "ext"]), 0);
         let fork = field.fork();
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1025,7 +1030,10 @@ mod tests {
     }
     #[test]
     fn test_field_update_and_modify() {
-        let field = Field::<i32, WritableMode>::new_volatile(Arc::from("test.update_modify"), 10);
+        let field = Field::<i32, WritableMode>::new_volatile(
+            StorePath::from_segments(["test", "update_modify"]),
+            10,
+        );
 
         let updated = field.update(|val| val + 5).unwrap();
         assert_eq!(updated, 15);

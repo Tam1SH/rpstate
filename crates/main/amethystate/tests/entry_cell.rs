@@ -252,7 +252,10 @@ fn an_owning_cell_survives_the_struct_it_came_from() {
 
     assert_eq!(width.get(), Some(110));
     width.set(140).unwrap();
-    assert_eq!(store.get::<u64>("app.default_width").unwrap(), Some(140));
+    assert_eq!(
+        store.get::<u64>(["app", "default_width"]).unwrap(),
+        Some(140)
+    );
 }
 
 #[test]

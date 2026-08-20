@@ -5,6 +5,7 @@ use crate::store::backend::text::document::TextDocument;
 use crate::store::backend::text::store;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
+use amethystate_core::path::StorePath;
 
 pub struct TextMigrationBackend<'a, D: TextDocument> {
     pub(crate) data_doc: &'a mut D,
@@ -38,12 +39,12 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         store::scan_prefix_impl(self.data_doc, prefix)
     }
 
-    fn get_meta(&self, prefix: &str) -> StorageResult<Option<PrefixMeta>> {
-        let parts = vec!["meta", prefix];
+    fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
+        let parts = vec!["meta", prefix.as_str()];
         if let Some(node) = self.meta_doc.get(&parts) {
             Ok(Some(D::deserialize_node(node)?))
         } else {
@@ -51,15 +52,15 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
         }
     }
 
-    fn set_meta(&mut self, prefix: &str, meta: &PrefixMeta) -> StorageResult<()> {
-        let parts = vec!["meta", prefix];
+    fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
+        let parts = vec!["meta", prefix.as_str()];
         let node = D::serialize_node(meta)?;
         self.meta_doc.set(&parts, node)?;
         Ok(())
     }
 
-    fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
-        let parts = vec!["schema", prefix];
+    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
+        let parts = vec!["schema", prefix.as_str()];
         if let Some(node) = self.meta_doc.get(&parts) {
             Ok(Some(D::deserialize_node(node)?))
         } else {
@@ -69,17 +70,17 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
 
     fn set_schema_snapshot(
         &mut self,
-        prefix: &str,
+        prefix: &StorePath,
         snapshot: &SchemaSnapshot,
     ) -> StorageResult<()> {
-        let parts = vec!["schema", prefix];
+        let parts = vec!["schema", prefix.as_str()];
         let node = D::serialize_node(snapshot)?;
         self.meta_doc.set(&parts, node)?;
         Ok(())
     }
 
-    fn get_migration_log(&self, prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>> {
-        let parts = vec!["log", prefix];
+    fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {
+        let parts = vec!["log", prefix.as_str()];
         if let Some(node) = self.meta_doc.get(&parts) {
             Ok(Some(D::deserialize_node(node)?))
         } else {
@@ -87,8 +88,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
         }
     }
 
-    fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()> {
-        let parts = vec!["log", prefix];
+    fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
+        let parts = vec!["log", prefix.as_str()];
         let node = D::serialize_node(&log)?;
         self.meta_doc.set(&parts, node)?;
         Ok(())

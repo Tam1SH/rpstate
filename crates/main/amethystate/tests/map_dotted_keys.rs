@@ -6,13 +6,12 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 #[test]
-#[ignore = "known: text backends split map keys on the separator - see TODO.md"]
 fn keys_containing_the_separator_stay_separate_entries() {
     let path = TempPath::new("map_dotted");
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let map = reactive_map_with_path_only::<String, u32, WritableMode>(
         &store,
-        "dotted.items".into(),
+        ["dotted", "items"],
         HashMap::new(),
         Uuid::new_v4(),
     )
@@ -32,7 +31,7 @@ fn keys_containing_the_separator_stay_separate_entries() {
     drop(map);
     let reopened = reactive_map_with_path_only::<String, u32, WritableMode>(
         &store,
-        "dotted.items".into(),
+        ["dotted", "items"],
         HashMap::new(),
         Uuid::new_v4(),
     )
@@ -47,13 +46,12 @@ fn keys_containing_the_separator_stay_separate_entries() {
 }
 
 #[test]
-#[ignore = "known: text backends split map keys on the separator - see TODO.md"]
 fn a_key_that_is_a_prefix_of_another_keeps_its_own_value() {
     let path = TempPath::new("map_dotted_collide");
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let map = reactive_map_with_path_only::<String, u32, WritableMode>(
         &store,
-        "collide.items".into(),
+        ["collide", "items"],
         HashMap::new(),
         Uuid::new_v4(),
     )
@@ -68,7 +66,7 @@ fn a_key_that_is_a_prefix_of_another_keeps_its_own_value() {
     drop(map);
     let reopened = reactive_map_with_path_only::<String, u32, WritableMode>(
         &store,
-        "collide.items".into(),
+        ["collide", "items"],
         HashMap::new(),
         Uuid::new_v4(),
     )

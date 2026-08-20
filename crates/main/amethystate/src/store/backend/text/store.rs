@@ -15,6 +15,7 @@ use crate::store::{
     SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
     SubscriptionId, SubscriptionKind,
 };
+use amethystate_core::path::StorePath;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::fmt::Debug;
@@ -367,9 +368,9 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
 }
 
 impl<D: TextDocument> TextStoreInner<D> {
-    fn get_node_bytes(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_node_bytes(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         let guard = self.files.data.doc.read();
-        let parts = split_path(path);
+        let parts: Vec<&str> = path.segments().collect();
         match guard.get(&parts) {
             Some(node) => Ok(Some(D::node_to_bytes(node)?)),
             None => Ok(None),
@@ -378,14 +379,13 @@ impl<D: TextDocument> TextStoreInner<D> {
 
     fn set_erased_inner(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer()?;
-        let path_str = normalize_path(path)?;
         let node = D::serialize_node(value)?;
-        self.set_node(path_str, node, source)
+        self.set_node(path.clone(), node, source)
     }
 
     fn save_now(&self) -> StorageResult<()> {
@@ -406,23 +406,22 @@ impl<D: TextDocument> TextStoreInner<D> {
         );
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let guard = self.files.data.doc.read();
         scan_prefix_impl(&*guard, prefix)
     }
 
-    fn scan_keys(&self, prefix: &str) -> Vec<String> {
+    fn scan_keys(&self, prefix: &StorePath) -> Vec<String> {
         let guard = self.files.data.doc.read();
         scan_keys_impl(&*guard, prefix)
     }
 
-    fn delete(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
 
         self.pull_external_changes();
 
-        let path_str = normalize_path(path)?;
-        let parts = split_path(&path_str);
+        let parts: Vec<&str> = path.segments().collect();
 
         let old_bytes = {
             let mut guard = self.files.data.doc.write();
@@ -436,7 +435,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(path_str),
+                path: Arc::from(path.as_str()),
                 op: StoreOp::Delete,
                 old: old_bytes,
                 new: None,
@@ -448,7 +447,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         Ok(())
     }
 
-    fn delete_prefix(&self, prefix: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete_prefix(&self, prefix: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
 
         self.pull_external_changes();
@@ -471,7 +470,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(prefix),
+                path: Arc::from(prefix.as_str()),
                 op: StoreOp::DeletePrefix,
                 old: None,
                 new: None,
@@ -515,13 +514,13 @@ impl<D: TextDocument> TextStoreInner<D> {
 
     pub(crate) fn set_node(
         &self,
-        path_str: String,
+        path_str: StorePath,
         node: D::Node,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.pull_external_changes();
 
-        let parts = split_path(&path_str);
+        let parts: Vec<&str> = path_str.segments().collect();
         let (old_bytes, new_bytes) = {
             let mut guard = self.files.data.doc.write();
             let old = guard.get(&parts).map(|n| D::node_to_bytes(n)).transpose()?;
@@ -536,7 +535,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(path_str),
+                path: Arc::from(path_str.as_str()),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(new_bytes),
@@ -550,13 +549,13 @@ impl<D: TextDocument> TextStoreInner<D> {
 }
 
 impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
-    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         self.inner.get_node_bytes(path)
     }
 
     fn get_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool> {
         match self.inner.get_node_bytes(path)? {
@@ -578,7 +577,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
 
     fn set_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -587,7 +586,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
 
     fn set_owned_erased(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -598,25 +597,29 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         self.inner.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         self.inner.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
         Ok(self.inner.scan_keys(prefix))
     }
 
-    fn delete(&self, path: &str) -> StorageResult<()> {
+    fn delete(&self, path: &StorePath) -> StorageResult<()> {
         self.delete_with_source(path, None)
     }
 
-    fn delete_with_source(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete_with_source(
+        &self,
+        path: &StorePath,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
         self.inner.delete(path, source)
     }
 
     fn delete_prefix_with_source(
         &self,
-        prefix: &str,
+        prefix: &StorePath,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.inner.delete_prefix(prefix, source)
@@ -636,7 +639,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         commit
     }
 
-    fn flush_prefix(&self, _prefix: &str) -> StorageResult<()> {
+    fn flush_prefix(&self, _prefix: &StorePath) -> StorageResult<()> {
         self.save_now()
     }
 
@@ -724,16 +727,22 @@ fn persist_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 
 pub(super) fn scan_prefix_impl<D: TextDocument>(
     doc: &D,
-    prefix: &str,
+    prefix: &StorePath,
 ) -> StorageResult<Vec<(String, Vec<u8>)>> {
-    let parts = split_path(prefix);
+    let parts: Vec<&str> = prefix.segments().collect();
     let target_depth = parts.len() + 1;
     let mut raw_nodes = Vec::new();
-    scan_prefix_recursive(doc, &parts, prefix, &mut raw_nodes, Some(target_depth));
+    scan_prefix_recursive(
+        doc,
+        &parts,
+        prefix.as_str(),
+        &mut raw_nodes,
+        Some(target_depth),
+    );
 
     let mut results = Vec::new();
     for (k, node) in raw_nodes {
-        if k.starts_with(prefix) {
+        if k.starts_with(prefix.as_str()) {
             let bytes = D::node_to_bytes(&node)?;
             results.push((k, bytes));
         }
@@ -774,7 +783,10 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
         }
     } else {
         for (full_key, _node) in children {
-            let child_parts = split_path(&full_key);
+            let Ok(child_path) = StorePath::parse_joined(&full_key) else {
+                continue;
+            };
+            let child_parts: Vec<&str> = child_path.segments().collect();
             let grand_children = doc.scan(&child_parts);
 
             let should_stop = grand_children.is_empty()
@@ -889,13 +901,13 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> Vec<StoreEvent> {
     events
 }
 
-pub(super) fn scan_keys_impl<D: TextDocument>(doc: &D, prefix: &str) -> Vec<String> {
-    let parts = split_path(prefix);
+pub(super) fn scan_keys_impl<D: TextDocument>(doc: &D, prefix: &StorePath) -> Vec<String> {
+    let parts: Vec<&str> = prefix.segments().collect();
     let target_depth = parts.len() + 1;
     let mut keys = Vec::new();
-    scan_keys_recursive(doc, &parts, prefix, &mut keys, Some(target_depth));
+    scan_keys_recursive(doc, &parts, prefix.as_str(), &mut keys, Some(target_depth));
 
-    keys.retain(|k| k.starts_with(prefix));
+    keys.retain(|k| k.starts_with(prefix.as_str()));
     keys.sort();
     keys
 }
@@ -925,7 +937,10 @@ fn scan_keys_recursive<D: TextDocument>(
         }
     } else {
         for (full_key, _node) in children {
-            let child_parts = split_path(&full_key);
+            let Ok(child_path) = StorePath::parse_joined(&full_key) else {
+                continue;
+            };
+            let child_parts: Vec<&str> = child_path.segments().collect();
             let grand_children = doc.scan(&child_parts);
 
             let should_stop = grand_children.is_empty()

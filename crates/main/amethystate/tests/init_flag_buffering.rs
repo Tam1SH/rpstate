@@ -34,10 +34,10 @@ fn a_prefix_flush_carries_the_mark_for_that_namespace() {
 
     {
         let store = StoreBuilder::new(path.clone()).build().unwrap();
-        store.set("settings.port", &8080u16).unwrap();
+        store.set(["settings", "port"], &8080u16).unwrap();
         store.mark_initialized("settings").unwrap();
 
-        store.flush_prefix("settings").unwrap();
+        store.flush_prefix(["settings"]).unwrap();
     }
 
     let store = StoreBuilder::new(path).build().unwrap();
@@ -45,7 +45,7 @@ fn a_prefix_flush_carries_the_mark_for_that_namespace() {
         store.is_initialized("settings").unwrap(),
         "the mark is selected by the same prefix rule as its values"
     );
-    assert_eq!(store.get::<u16>("settings.port").unwrap(), Some(8080));
+    assert_eq!(store.get::<u16>(["settings", "port"]).unwrap(), Some(8080));
 }
 
 #[test]
@@ -53,9 +53,9 @@ fn a_mark_does_not_show_up_as_data() {
     let store = StoreBuilder::new(unique_path("notdata")).build().unwrap();
 
     store.mark_initialized("settings").unwrap();
-    store.set("settings.port", &1u16).unwrap();
+    store.set(["settings", "port"], &1u16).unwrap();
 
-    let found = store.scan_prefix("settings").unwrap();
+    let found = store.scan_prefix(["settings"]).unwrap();
     let keys: Vec<&str> = found.iter().map(|(k, _)| k.as_str()).collect();
 
     assert_eq!(

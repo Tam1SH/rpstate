@@ -1,4 +1,5 @@
 use amethystate::store::builder::StoreBuilder;
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 
@@ -90,15 +91,15 @@ fn a_prefix_may_not_land_on_another_structs_field() {
     root.b().set(10).unwrap();
     branch.x().set(20).unwrap();
 
-    store.flush_prefix("").unwrap();
+    store.flush_prefix(StorePath::root()).unwrap();
 
     assert_eq!(
-        store.get::<u32>("root.b").unwrap(),
+        store.get::<u32>(["root", "b"]).unwrap(),
         Some(10),
         "the leaf on disk"
     );
     assert_eq!(
-        store.get::<u32>("root.b.x").unwrap(),
+        store.get::<u32>(["root", "b", "x"]).unwrap(),
         Some(20),
         "the branch on disk"
     );

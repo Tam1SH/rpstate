@@ -161,7 +161,11 @@ mod on_disk {
             .unwrap();
         let kv = store.kv();
 
-        kv.durable().set("scratch.answer", &42u8).unwrap();
+        kv.namespace("scratch")
+            .unwrap()
+            .durable()
+            .set("answer", &42u8)
+            .unwrap();
 
         assert!(
             contents(&path).contains("42"),

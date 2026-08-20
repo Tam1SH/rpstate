@@ -44,7 +44,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                     continue;
                 }
 
-                let stored = storage.get_schema_snapshot(prefix)?;
+                let stored = storage.get_schema_snapshot(&crate::store::join_path("", prefix))?;
 
                 let needs_update = match &stored {
                     None => true,
@@ -57,7 +57,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
                 if needs_update {
                     storage.set_schema_snapshot(
-                        prefix,
+                        &crate::store::join_path("", prefix),
                         &SchemaSnapshot {
                             version: entry.version,
                             struct_name: Some(entry.struct_name.to_string()),
@@ -134,7 +134,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         mset: &MigrationSet,
     ) -> StorageResult<bool> {
         for prefix in prefixes {
-            let meta = storage.get_meta(prefix)?;
+            let meta = storage.get_meta(&crate::store::join_path("", prefix))?;
             let current_v = meta.as_ref().map(|m| m.version).unwrap_or(0);
             let current_h = meta.as_ref().map(|m| m.hash).unwrap_or(0);
             let (target_v, target_h, _) = mset.get_target(prefix);
@@ -170,7 +170,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         prefix: &str,
         current_fields: &[FieldDescriptor],
     ) -> StorageResult<Option<SchemaDiff>> {
-        let snapshot = storage.get_schema_snapshot(prefix)?;
+        let snapshot = storage.get_schema_snapshot(&crate::store::join_path("", prefix))?;
         let Some(old) = snapshot else {
             return Ok(None);
         };
@@ -222,7 +222,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
     ) -> StorageResult<(Vec<AppliedStep>, Vec<NaggingRecord>)> {
         let (target_v, target_hash, target_fields) = mset.get_target(prefix);
 
-        let meta_opt = storage.get_meta(prefix)?;
+        let meta_opt = storage.get_meta(&crate::store::join_path("", prefix))?;
 
         let mut meta = match meta_opt {
             Some(m) => m,
@@ -235,7 +235,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
                 if start_v == target_v {
                     storage.set_meta(
-                        prefix,
+                        &crate::store::join_path("", prefix),
                         &PrefixMeta {
                             version: target_v,
                             hash: target_hash,
@@ -275,15 +275,17 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
         let mut applied_steps = Vec::new();
         if let Some(plan) = mset.get_migration_plan(prefix) {
-            let mut history = storage.get_migration_log(prefix)?.unwrap_or_default();
+            let mut history = storage
+                .get_migration_log(&crate::store::join_path("", prefix))?
+                .unwrap_or_default();
 
             applied_steps =
                 self.run_migrator_steps(storage, prefix, plan, &mut meta, target_v, &mut history)?;
 
             if !applied_steps.is_empty() {
                 meta.hash = target_hash;
-                storage.set_meta(prefix, &meta)?;
-                storage.set_migration_log(prefix, &history)?;
+                storage.set_meta(&crate::store::join_path("", prefix), &meta)?;
+                storage.set_migration_log(&crate::store::join_path("", prefix), &history)?;
             }
         }
 
@@ -307,7 +309,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                     .collect(),
             };
 
-            storage.set_schema_snapshot(prefix, &new_snapshot)?;
+            storage.set_schema_snapshot(&crate::store::join_path("", prefix), &new_snapshot)?;
         }
 
         Ok((applied_steps, nagging))
@@ -367,6 +369,13 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use amethystate_core::path::StorePath;
+
+    /// The mock adapter is the trait, so it wants a built path rather than the
+    /// levels a store call would take.
+    fn p(name: &str) -> StorePath {
+        StorePath::from_segments([name])
+    }
 
     use crate::migration::context::{decode, encode};
     use crate::migration::fields::FieldDescriptor;
@@ -410,37 +419,41 @@ mod tests {
             self.data.remove(key);
             Ok(())
         }
-        fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
             let mut res = Vec::new();
             for (k, v) in &self.data {
-                if k.starts_with(prefix) {
+                if k.starts_with(prefix.as_str()) {
                     res.push((k.clone(), v.clone()));
                 }
             }
             Ok(res)
         }
-        fn get_meta(&self, prefix: &str) -> StorageResult<Option<PrefixMeta>> {
-            Ok(self.meta.get(prefix).cloned())
+        fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
+            Ok(self.meta.get(prefix.as_str()).cloned())
         }
-        fn set_meta(&mut self, prefix: &str, meta: &PrefixMeta) -> StorageResult<()> {
+        fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
             self.meta.insert(prefix.to_string(), meta.clone());
             Ok(())
         }
-        fn get_schema_snapshot(&self, prefix: &str) -> StorageResult<Option<SchemaSnapshot>> {
-            Ok(self.snapshots.get(prefix).cloned())
+        fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
+            Ok(self.snapshots.get(prefix.as_str()).cloned())
         }
         fn set_schema_snapshot(
             &mut self,
-            prefix: &str,
+            prefix: &StorePath,
             snapshot: &SchemaSnapshot,
         ) -> StorageResult<()> {
             self.snapshots.insert(prefix.to_string(), snapshot.clone());
             Ok(())
         }
-        fn get_migration_log(&self, prefix: &str) -> StorageResult<Option<Vec<AppliedStep>>> {
-            Ok(self.logs.get(prefix).cloned())
+        fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {
+            Ok(self.logs.get(prefix.as_str()).cloned())
         }
-        fn set_migration_log(&mut self, prefix: &str, log: &[AppliedStep]) -> StorageResult<()> {
+        fn set_migration_log(
+            &mut self,
+            prefix: &StorePath,
+            log: &[AppliedStep],
+        ) -> StorageResult<()> {
             self.logs.insert(prefix.to_string(), log.to_vec());
             Ok(())
         }
@@ -483,7 +496,7 @@ mod tests {
         let report = engine.run(mset).unwrap();
 
         assert!(!report.has_failures());
-        let meta = storage.borrow().get_meta("ui").unwrap().unwrap();
+        let meta = storage.borrow().get_meta(&p("ui")).unwrap().unwrap();
         assert_eq!(meta.version, 1);
         assert_eq!(meta.hash, 0);
     }
@@ -494,7 +507,7 @@ mod tests {
         storage
             .borrow_mut()
             .set_meta(
-                "app",
+                &p("app"),
                 &PrefixMeta {
                     version: 1,
                     hash: 100,
@@ -530,7 +543,7 @@ mod tests {
         assert_eq!(*reached_version, 1);
         assert_eq!(*expected_version, 2);
 
-        let meta = storage.borrow().get_meta("app").unwrap().unwrap();
+        let meta = storage.borrow().get_meta(&p("app")).unwrap().unwrap();
         assert_eq!(meta.version, 1);
     }
 
@@ -540,7 +553,7 @@ mod tests {
         storage
             .borrow_mut()
             .set_meta(
-                "net",
+                &p("net"),
                 &PrefixMeta {
                     version: 1,
                     hash: 100,
@@ -569,7 +582,7 @@ mod tests {
             "Nagging must remain empty for a hashless target"
         );
 
-        let meta = storage.borrow().get_meta("net").unwrap().unwrap();
+        let meta = storage.borrow().get_meta(&p("net")).unwrap().unwrap();
         assert_eq!(meta.version, 1);
         assert_eq!(meta.hash, 100);
     }
@@ -580,7 +593,7 @@ mod tests {
         storage
             .borrow_mut()
             .set_meta(
-                "app",
+                &p("app"),
                 &PrefixMeta {
                     version: 5,
                     hash: 500,
@@ -650,7 +663,7 @@ mod tests {
         storage
             .borrow_mut()
             .set_meta(
-                "app",
+                &p("app"),
                 &PrefixMeta {
                     version: 1,
                     hash: 0,
@@ -684,7 +697,7 @@ mod tests {
         storage
             .borrow_mut()
             .set_meta(
-                "a",
+                &p("a"),
                 &PrefixMeta {
                     version: 1,
                     hash: 0,
@@ -762,7 +775,7 @@ mod tests {
         storage
             .borrow_mut()
             .set_meta(
-                "app",
+                &p("app"),
                 &PrefixMeta {
                     version: 1,
                     hash: 0,
@@ -797,7 +810,7 @@ mod tests {
     #[test]
     fn test_drift_detection_field_added() {
         let storage = RefCell::new(InMemoryStorage::default());
-        let prefix = "profile";
+        let prefix = &p("profile");
 
         storage
             .borrow_mut()
@@ -840,7 +853,7 @@ mod tests {
         ];
 
         let mset = MigrationSet::default().add(
-            prefix,
+            prefix.as_str(),
             MigrationPlan::new().step(1, "v1", |_| Ok(())),
             222,
             current_fields,
@@ -859,7 +872,7 @@ mod tests {
     #[test]
     fn test_drift_detection_type_changed() {
         let storage = RefCell::new(InMemoryStorage::default());
-        let prefix = "settings";
+        let prefix = &p("settings");
 
         storage
             .borrow_mut()
@@ -895,7 +908,7 @@ mod tests {
         }];
 
         let mset = MigrationSet::default().add(
-            prefix,
+            prefix.as_str(),
             MigrationPlan::new().step(1, "v1", |_| Ok(())),
             20,
             current_fields,
@@ -914,7 +927,7 @@ mod tests {
     #[test]
     fn test_drift_nagging_persists_until_migration() {
         let storage = RefCell::new(InMemoryStorage::default());
-        let prefix = "app";
+        let prefix = &p("app");
 
         storage
             .borrow_mut()
@@ -947,7 +960,7 @@ mod tests {
 
         {
             let mset = MigrationSet::default().add(
-                prefix,
+                prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
                 99,
                 fields,
@@ -960,7 +973,7 @@ mod tests {
 
         {
             let mset = MigrationSet::default().add(
-                prefix,
+                prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
                 99,
                 fields,
@@ -976,7 +989,7 @@ mod tests {
 
         {
             let mset = MigrationSet::default().add(
-                prefix,
+                prefix.as_str(),
                 MigrationPlan::new()
                     .step(1, "v1", |_| Ok(()))
                     .step(2, "ack_drift", |_| Ok(())),
@@ -1002,7 +1015,7 @@ mod tests {
     #[test]
     fn test_migration_updates_snapshot() {
         let storage = RefCell::new(InMemoryStorage::default());
-        let prefix = "data";
+        let prefix = &p("data");
 
         storage
             .borrow_mut()
@@ -1038,7 +1051,7 @@ mod tests {
         }];
 
         let mset = MigrationSet::default().add(
-            prefix,
+            prefix.as_str(),
             MigrationPlan::new().step(2, "v2", |ctx| ctx.set("new_f", &10u16)),
             222,
             v2_fields,
@@ -1068,7 +1081,7 @@ mod tests {
     #[test]
     fn test_drift_automatic_warning_log() {
         let storage = RefCell::new(InMemoryStorage::default());
-        let prefix = "app_settings";
+        let prefix = &p("app_settings");
 
         {
             let fields_v1: &'static [FieldDescriptor] = &[
@@ -1086,7 +1099,7 @@ mod tests {
             let hash_v1 = 111;
 
             let mset = MigrationSet::default().add(
-                prefix,
+                prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
                 hash_v1,
                 fields_v1,
@@ -1113,7 +1126,7 @@ mod tests {
             let hash_v2 = 222;
 
             let mset = MigrationSet::default().add(
-                prefix,
+                prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
                 hash_v2,
                 fields_v2,

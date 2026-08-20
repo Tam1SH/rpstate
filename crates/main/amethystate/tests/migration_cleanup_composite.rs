@@ -1,5 +1,6 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{AmeData, ReactiveMap, migrate};
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 
@@ -40,9 +41,12 @@ fn dropping_a_reactive_map_field_removes_its_entries() {
         let v1 = dropmap_v1::DropMap::new_with(&store).unwrap();
         v1.cache().insert("alpha".into(), &7u32).unwrap();
         v1.cache().insert("beta".into(), &9u32).unwrap();
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(StorePath::root()).unwrap();
 
-        assert_eq!(store.get::<u32>("dropmap.cache.alpha").unwrap(), Some(7));
+        assert_eq!(
+            store.get::<u32>(["dropmap", "cache", "alpha"]).unwrap(),
+            Some(7)
+        );
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
@@ -55,11 +59,14 @@ fn dropping_a_reactive_map_field_removes_its_entries() {
     let _v2 = DropMap::new_with(&store).unwrap();
 
     assert_eq!(
-        store.get::<u32>("dropmap.cache.alpha").unwrap(),
+        store.get::<u32>(["dropmap", "cache", "alpha"]).unwrap(),
         None,
         "entries of a dropped map are cleaned up"
     );
-    assert_eq!(store.get::<u32>("dropmap.cache.beta").unwrap(), None);
+    assert_eq!(
+        store.get::<u32>(["dropmap", "cache", "beta"]).unwrap(),
+        None
+    );
 }
 
 mod dropscalar_v1 {
@@ -98,8 +105,8 @@ fn dropping_a_scalar_field_removes_its_value() {
         let store = StoreBuilder::new(path.path()).build().unwrap();
         let v1 = dropscalar_v1::DropScalar::new_with(&store).unwrap();
         v1.gone().set(42).unwrap();
-        store.flush_prefix("").unwrap();
-        assert_eq!(store.get::<u32>("dropscalar.gone").unwrap(), Some(42));
+        store.flush_prefix(StorePath::root()).unwrap();
+        assert_eq!(store.get::<u32>(["dropscalar", "gone"]).unwrap(), Some(42));
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
@@ -111,7 +118,7 @@ fn dropping_a_scalar_field_removes_its_value() {
 
     let _v2 = DropScalar::new_with(&store).unwrap();
 
-    assert_eq!(store.get::<u32>("dropscalar.gone").unwrap(), None);
+    assert_eq!(store.get::<u32>(["dropscalar", "gone"]).unwrap(), None);
 }
 
 #[amethystate]
@@ -157,9 +164,9 @@ fn dropping_a_nested_struct_field_removes_its_leaves() {
         let store = StoreBuilder::new(path.path()).build().unwrap();
         let v1 = dropnested_v1::DropNested::new_with(&store).unwrap();
         v1.legacy().inner().set(77).unwrap();
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(StorePath::root()).unwrap();
         assert_eq!(
-            store.get::<u32>("dropnested.legacy.inner").unwrap(),
+            store.get::<u32>(["dropnested", "legacy", "inner"]).unwrap(),
             Some(77)
         );
     }
@@ -174,7 +181,7 @@ fn dropping_a_nested_struct_field_removes_its_leaves() {
     let _v2 = DropNested::new_with(&store).unwrap();
 
     assert_eq!(
-        store.get::<u32>("dropnested.legacy.inner").unwrap(),
+        store.get::<u32>(["dropnested", "legacy", "inner"]).unwrap(),
         None,
         "leaves of a dropped nested struct are cleaned up"
     );

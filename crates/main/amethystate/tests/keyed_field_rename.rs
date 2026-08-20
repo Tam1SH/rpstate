@@ -1,5 +1,6 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{AmeData, migrate};
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 
@@ -38,10 +39,12 @@ fn renaming_a_field_that_carries_a_key_moves_its_stored_value() {
         let store = StoreBuilder::new(path.path()).build().unwrap();
         let v1 = keyed_v1::Keyed::new_with(&store).unwrap();
         v1.left_panel_visible().set(false).unwrap();
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(StorePath::root()).unwrap();
 
         assert_eq!(
-            store.get::<bool>("keyed.panels.left.visible").unwrap(),
+            store
+                .get::<bool>(["keyed", "panels", "left", "visible"])
+                .unwrap(),
             Some(false),
             "the override decides where v1 stores it"
         );
@@ -58,7 +61,9 @@ fn renaming_a_field_that_carries_a_key_moves_its_stored_value() {
     assert!(!v2.panel_visible().get(), "value carried over");
 
     assert_eq!(
-        store.get::<bool>("keyed.panels.left.visible").unwrap(),
+        store
+            .get::<bool>(["keyed", "panels", "left", "visible"])
+            .unwrap(),
         None,
         "the old location is cleaned up"
     );
@@ -99,7 +104,7 @@ fn dropping_a_field_that_carries_a_key_removes_its_stored_value() {
         let store = StoreBuilder::new(path.path()).build().unwrap();
         let v1 = dropped_v1::Dropped::new_with(&store).unwrap();
         v1.legacy_token().set("secret".to_string()).unwrap();
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(StorePath::root()).unwrap();
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
@@ -110,7 +115,7 @@ fn dropping_a_field_that_carries_a_key_removes_its_stored_value() {
         .unwrap();
 
     assert_eq!(
-        store.get::<String>("dropped.legacy.token").unwrap(),
+        store.get::<String>(["dropped", "legacy", "token"]).unwrap(),
         None,
         "the field is gone from the schema, so its value goes too"
     );
@@ -150,7 +155,7 @@ fn dropping_a_plain_field_removes_its_stored_value() {
         let store = StoreBuilder::new(path.path()).build().unwrap();
         let v1 = plain_v1::Plain::new_with(&store).unwrap();
         v1.legacy_token().set("secret".to_string()).unwrap();
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(StorePath::root()).unwrap();
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
@@ -161,7 +166,7 @@ fn dropping_a_plain_field_removes_its_stored_value() {
         .unwrap();
 
     assert_eq!(
-        store.get::<String>("plain.legacy_token").unwrap(),
+        store.get::<String>(["plain", "legacy_token"]).unwrap(),
         None,
         "control: without a key override the cleanup lands"
     );

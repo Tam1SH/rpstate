@@ -34,12 +34,17 @@ use crate::store::StorageError as RpError;
 use crate::{Store, StoreBuilder};
 
 use crate::store::StoreBackend;
+use amethystate_core::path::StorePath;
 #[cfg(feature = "toml")]
 use toml_edit::de::Error as TomlDeErr;
 #[cfg(feature = "toml")]
 use toml_edit::ser::Error as TomlSerErr;
 
-const DEFAULT_KEY: &str = ".";
+/// confy owns the whole file, so its values sit at the document root rather
+/// than under a name.
+fn default_key() -> StorePath {
+    StorePath::root()
+}
 
 static STRATEGY: std::sync::OnceLock<std::sync::Mutex<ConfigStrategy>> = std::sync::OnceLock::new();
 static STORES: std::sync::OnceLock<
@@ -130,6 +135,7 @@ impl From<RpError> for ConfyError {
     fn from(err: RpError) -> Self {
         match err {
             RpError::Codec(e) => ConfyError::GeneralLoadError(std::io::Error::other(e.to_string())),
+            RpError::Path(e) => ConfyError::GeneralLoadError(std::io::Error::other(e.to_string())),
             #[cfg(feature = "text")]
             RpError::TextStore(text_err) => {
                 use crate::store::backend::text::error::TextStoreError;
@@ -354,16 +360,16 @@ pub fn load_path<T: Serialize + DeserializeOwned + Default>(
 
     if file_missing_or_empty {
         let cfg = T::default();
-        store.set(DEFAULT_KEY, &cfg).map_err(ConfyError::from)?;
+        store.set(default_key(), &cfg).map_err(ConfyError::from)?;
         store.save_now().map_err(ConfyError::from)?;
         return Ok(cfg);
     }
 
-    match store.get::<T>(DEFAULT_KEY) {
+    match store.get::<T>(default_key()) {
         Ok(Some(cfg)) => Ok(cfg),
         Ok(None) => {
             let cfg = T::default();
-            store.set(DEFAULT_KEY, &cfg).map_err(ConfyError::from)?;
+            store.set(default_key(), &cfg).map_err(ConfyError::from)?;
             store.save_now().map_err(ConfyError::from)?;
             Ok(cfg)
         }
@@ -393,17 +399,17 @@ where
     if file_missing_or_empty {
         let store = get_store(path)?;
         let cfg = op();
-        store.set(DEFAULT_KEY, &cfg).map_err(ConfyError::from)?;
+        store.set(default_key(), &cfg).map_err(ConfyError::from)?;
         store.save_now().map_err(ConfyError::from)?;
         return Ok(cfg);
     }
 
     match get_store(path) {
-        Ok(store) => match store.get::<T>(DEFAULT_KEY) {
+        Ok(store) => match store.get::<T>(default_key()) {
             Ok(Some(cfg)) => Ok(cfg),
             _ => {
                 let cfg = op();
-                store.set(DEFAULT_KEY, &cfg).map_err(ConfyError::from)?;
+                store.set(default_key(), &cfg).map_err(ConfyError::from)?;
                 store.save_now().map_err(ConfyError::from)?;
                 Ok(cfg)
             }
@@ -412,7 +418,7 @@ where
             let _ = std::fs::remove_file(path);
             let store = get_store(path)?;
             let cfg = op();
-            store.set(DEFAULT_KEY, &cfg).map_err(ConfyError::from)?;
+            store.set(default_key(), &cfg).map_err(ConfyError::from)?;
             store.save_now().map_err(ConfyError::from)?;
             Ok(cfg)
         }
@@ -515,7 +521,7 @@ fn do_store<T: Serialize>(
     fs::create_dir_all(config_dir).map_err(ConfyError::DirectoryCreationFailed)?;
 
     let store = get_store(path)?;
-    store.set(DEFAULT_KEY, &cfg).map_err(ConfyError::from)?;
+    store.set(default_key(), &cfg).map_err(ConfyError::from)?;
     store.save_now().map_err(ConfyError::from)?;
 
     if let Some(p) = perms {

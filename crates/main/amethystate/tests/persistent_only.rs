@@ -26,7 +26,7 @@ fn persistent_only_load_save_and_mutate() {
 
     data.port = 9090;
     data.save().unwrap();
-    assert_eq!(store.get::<u16>("network.port").unwrap(), Some(9090));
+    assert_eq!(store.get::<u16>(["network", "port"]).unwrap(), Some(9090));
 
     data.mutate(|d| {
         d.host = "127.0.0.1".to_string();
@@ -35,8 +35,8 @@ fn persistent_only_load_save_and_mutate() {
     .unwrap();
 
     assert_eq!(
-        store.get::<String>("network.host").unwrap(),
+        store.get::<String>(["network", "host"]).unwrap(),
         Some("127.0.0.1".to_string())
     );
-    assert_eq!(store.get::<u16>("network.port").unwrap(), Some(4040));
+    assert_eq!(store.get::<u16>(["network", "port"]).unwrap(), Some(4040));
 }

@@ -1,4 +1,5 @@
 use crate::event::Event;
+use amethystate_core::path::StorePath;
 use amethystate_core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::{AmeBackendAsync, AsyncSubscriptionBackend, SubscriptionHandle};
 use amethystate_core::{FieldCore, MapChange, ReactiveMapCore};
@@ -29,7 +30,7 @@ impl AmeBackendAsync for TauriBackend {
     type Error = String;
     type Raw = serde_json::Value;
 
-    async fn get<T>(&self, path: &str) -> Result<Option<T>, Self::Error>
+    async fn get<T>(&self, path: &StorePath) -> Result<Option<T>, Self::Error>
     where
         T: DeserializeOwned,
     {
@@ -40,7 +41,7 @@ impl AmeBackendAsync for TauriBackend {
 
         let raw = core::invoke_result::<Option<serde_json::Value>, String>(
             "plugin:amethystate|amethystate_get",
-            &GetArgs { key: path },
+            &GetArgs { key: path.as_str() },
         )
         .await?;
 
@@ -49,7 +50,7 @@ impl AmeBackendAsync for TauriBackend {
             .map_err(|e| e.to_string())
     }
 
-    async fn set<T>(&self, path: &str, value: &T) -> Result<(), Self::Error>
+    async fn set<T>(&self, path: &StorePath, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
     {
@@ -58,7 +59,7 @@ impl AmeBackendAsync for TauriBackend {
 
     async fn set_with_source<T: Serialize>(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &T,
         source: Option<Uuid>,
     ) -> Result<(), Self::Error> {
@@ -73,7 +74,7 @@ impl AmeBackendAsync for TauriBackend {
         core::invoke_result::<(), String>(
             "plugin:amethystate|amethystate_set",
             &SetArgs {
-                key: path,
+                key: path.as_str(),
                 value,
                 source,
             },
@@ -83,20 +84,20 @@ impl AmeBackendAsync for TauriBackend {
 
     async fn set_owned_with_source<T: Serialize>(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &T,
         source: Option<Uuid>,
     ) -> Result<(), Self::Error> {
         self.set_with_source(&path, value, source).await
     }
 
-    async fn delete(&self, path: &str) -> Result<(), Self::Error> {
+    async fn delete(&self, path: &StorePath) -> Result<(), Self::Error> {
         self.delete_with_source(path, None).await
     }
 
     async fn delete_with_source(
         &self,
-        path: &str,
+        path: &StorePath,
         source: Option<Uuid>,
     ) -> Result<(), Self::Error> {
         #[derive(Serialize)]
@@ -107,12 +108,18 @@ impl AmeBackendAsync for TauriBackend {
 
         core::invoke_result::<(), String>(
             "plugin:amethystate|amethystate_delete",
-            &DeleteArgs { key: path, source },
+            &DeleteArgs {
+                key: path.as_str(),
+                source,
+            },
         )
         .await
     }
 
-    async fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, Self::Raw)>, Self::Error> {
+    async fn scan_prefix(
+        &self,
+        prefix: &StorePath,
+    ) -> Result<Vec<(String, Self::Raw)>, Self::Error> {
         #[derive(Serialize)]
         struct PrefixArgs<'a> {
             prefix: &'a str,
@@ -121,7 +128,9 @@ impl AmeBackendAsync for TauriBackend {
         let raw: std::collections::HashMap<String, serde_json::Value> =
             core::invoke_result::<_, Self::Error>(
                 "plugin:amethystate|amethystate_get_prefix",
-                &PrefixArgs { prefix },
+                &PrefixArgs {
+                    prefix: prefix.as_str(),
+                },
             )
             .await?;
 
@@ -137,11 +146,11 @@ impl AmeBackendAsync for TauriBackend {
 }
 
 impl AsyncSubscriptionBackend for TauriBackend {
-    fn subscribe_field<T>(&self, path: Arc<str>, core: FieldCore<T>) -> SubscriptionHandle
+    fn subscribe_field<T>(&self, path: StorePath, core: FieldCore<T>) -> SubscriptionHandle
     where
         T: DeserializeOwned + Clone + Send + Sync + 'static,
     {
-        let event_channel = format!("amethystate://{}", path.replace('.', ":"));
+        let event_channel = format!("amethystate://{}", path.as_str().replace('.', ":"));
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -152,7 +161,7 @@ impl AsyncSubscriptionBackend for TauriBackend {
 
             let _ = core::invoke_result::<(), String>(
                 "plugin:amethystate|amethystate_subscribe",
-                &SubArgs { key: &path },
+                &SubArgs { key: path.as_str() },
             )
             .await;
 
@@ -168,12 +177,16 @@ impl AsyncSubscriptionBackend for TauriBackend {
         SubscriptionHandle::new(move || abort_handle.abort())
     }
 
-    fn subscribe_map<K, V>(&self, path: Arc<str>, core: ReactiveMapCore<K, V>) -> SubscriptionHandle
+    fn subscribe_map<K, V>(
+        &self,
+        path: StorePath,
+        core: ReactiveMapCore<K, V>,
+    ) -> SubscriptionHandle
     where
         K: ReactiveMapKey + for<'de> Deserialize<'de>,
         V: ReactiveMapValue,
     {
-        let event_channel = format!("amethystate://{}", path.replace('.', ":"));
+        let event_channel = format!("amethystate://{}", path.as_str().replace('.', ":"));
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -184,7 +197,7 @@ impl AsyncSubscriptionBackend for TauriBackend {
 
             let _ = core::invoke_result::<(), Self::Error>(
                 "plugin:amethystate|amethystate_subscribe",
-                &SubArgs { key: &path },
+                &SubArgs { key: path.as_str() },
             )
             .await;
 

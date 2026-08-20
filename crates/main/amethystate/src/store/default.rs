@@ -18,6 +18,7 @@ pub use backend::text::RonStore;
 use crate::MigrationReport;
 use crate::store::config::StoreConfig;
 use crate::store::{StorageResult, StoreBackend};
+use amethystate_core::path::{IntoStorePath, StorePath};
 use std::sync::Arc;
 
 /// A handle on an open store.
@@ -83,15 +84,26 @@ impl Store {
     /// you ask for and nothing remembers it - [`Kv::cell`](crate::store::Kv::cell)
     /// is the variant that does.
     ///
+    /// The levels are given as a list, and a string is not one of them - a name
+    /// holding a separator is a name, and nesting is spelled out:
+    ///
     /// ```
     /// # use amethystate::StoreBuilder;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// store.set("ui.width", &1280u32).unwrap();
-    /// assert_eq!(store.get::<u32>("ui.width").unwrap(), Some(1280));
-    /// assert_eq!(store.get::<u32>("ui.height").unwrap(), None);
+    /// store.set(["ui", "width"], &1280u32).unwrap();
+    ///
+    /// assert_eq!(store.get::<u32>(["ui", "width"]).unwrap(), Some(1280));
+    /// assert_eq!(store.get::<u32>(["ui", "height"]).unwrap(), None);
+    ///
+    /// // One level called `ui.width`, which is somewhere else entirely.
+    /// store.set(["ui.width"], &7u32).unwrap();
+    /// assert_eq!(store.get::<u32>(["ui", "width"]).unwrap(), Some(1280));
     /// ```
-    pub fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> StorageResult<Option<T>> {
+    pub fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        path: impl IntoStorePath,
+    ) -> StorageResult<Option<T>> {
         crate::store::StoreExt::get(self, path)
     }
     /// Writes a value at `path`, creating it or replacing what was there.
@@ -100,12 +112,16 @@ impl Store {
     /// commits it later. Nothing here carries provenance, so a subscription
     /// cannot tell this apart from its own write - use
     /// [`Store::set_with_source`] when it must.
-    pub fn set<T: serde::Serialize>(&self, path: &str, value: &T) -> StorageResult<()> {
+    pub fn set<T: serde::Serialize>(
+        &self,
+        path: impl IntoStorePath,
+        value: &T,
+    ) -> StorageResult<()> {
         crate::store::StoreExt::set(self, path, value)
     }
-    /// [`Store::set`] for a path that is already an `Arc<str>`, saving the
-    /// copy the borrowed form would make.
-    pub fn set_owned<T: serde::Serialize>(&self, path: Arc<str>, value: &T) -> StorageResult<()> {
+    /// [`Store::set`] for a path already owned, saving the clone the borrowed
+    /// form would make.
+    pub fn set_owned<T: serde::Serialize>(&self, path: StorePath, value: &T) -> StorageResult<()> {
         crate::store::StoreExt::set_owned(self, path, value)
     }
     /// [`Store::set`] tagged with who made the write.
@@ -114,21 +130,46 @@ impl Store {
     /// of its own change instead of reacting to it.
     pub fn set_with_source<T: serde::Serialize>(
         &self,
-        path: &str,
+        path: impl IntoStorePath,
         value: &T,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         crate::store::StoreExt::set_with_source(self, path, value, source)
     }
-    /// [`Store::set_with_source`] for a path that is already an `Arc<str>`.
+    /// [`Store::set_with_source`] for a path already owned.
     pub fn set_owned_with_source<T: serde::Serialize>(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &T,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         crate::store::StoreExt::set_owned_with_source(self, path, value, source)
     }
+    /// Removes whatever is at `path`. Removing an absent path is not an error.
+    pub fn delete(&self, path: impl IntoStorePath) -> StorageResult<()> {
+        crate::store::StoreBackend::delete(self, &path.into_store_path()?)
+    }
+
+    /// Removes every level under `prefix`, and the value at `prefix` itself.
+    pub fn delete_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
+        crate::store::StoreBackend::delete_prefix(self, &prefix.into_store_path()?)
+    }
+
+    /// Commits what is buffered under `prefix`.
+    pub fn flush_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
+        crate::store::StoreBackend::flush_prefix(self, &prefix.into_store_path()?)
+    }
+
+    /// The keys under `prefix`, sorted, without reading their values.
+    pub fn scan_keys(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<String>> {
+        crate::store::StoreBackend::scan_keys(self, &prefix.into_store_path()?)
+    }
+
+    /// Every key under `prefix` with its bytes, sorted by key.
+    pub fn scan_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        crate::store::StoreBackend::scan_prefix(self, &prefix.into_store_path()?)
+    }
+
     /// Decodes bytes that arrived in a [`StoreEvent`](crate::StoreEvent),
     /// in whatever format this backend writes.
     ///
@@ -145,12 +186,12 @@ impl Store {
 }
 
 impl StoreBackend for Store {
-    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         self.0.get_raw(path)
     }
     fn set_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -158,7 +199,7 @@ impl StoreBackend for Store {
     }
     fn set_owned_erased(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -166,7 +207,7 @@ impl StoreBackend for Store {
     }
     fn get_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool> {
         self.0.get_erased(path, f)
@@ -178,23 +219,27 @@ impl StoreBackend for Store {
     ) -> StorageResult<()> {
         self.0.decode_erased(bytes, f)
     }
-    fn delete_with_source(&self, path: &str, source: Option<uuid::Uuid>) -> StorageResult<()> {
+    fn delete_with_source(
+        &self,
+        path: &StorePath,
+        source: Option<uuid::Uuid>,
+    ) -> StorageResult<()> {
         self.0.delete_with_source(path, source)
     }
-    fn delete(&self, path: &str) -> StorageResult<()> {
+    fn delete(&self, path: &StorePath) -> StorageResult<()> {
         self.0.delete(path)
     }
     fn delete_prefix_with_source(
         &self,
-        prefix: &str,
+        prefix: &StorePath,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.0.delete_prefix_with_source(prefix, source)
     }
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         self.0.scan_prefix(prefix)
     }
-    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
         self.0.scan_keys(prefix)
     }
     fn save_now(&self) -> StorageResult<()> {
@@ -210,7 +255,7 @@ impl StoreBackend for Store {
     fn unsubscribe(&self, id: crate::store::SubscriptionId) {
         self.0.unsubscribe(id)
     }
-    fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
+    fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         self.0.flush_prefix(prefix)
     }
     fn flush_async(&self) -> crate::store::durable::Commit {

@@ -634,24 +634,11 @@ impl UiState {
                     );
                 };
                 let parent_prefix = <NetworkState as ::amethystate::StateScope>::PREFIX;
-                let path = if parent_prefix == "." {
-                    "port".to_string()
-                } else {
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(
-                            format_args!("{0}.{1}", parent_prefix, "port"),
-                        )
-                    })
-                };
+                let path = ::amethystate::join_path(parent_prefix, "port");
                 ::amethystate::store::field_with_path::<
                     u16,
                     ::amethystate::ReadOnlyMode,
-                >(
-                    store,
-                    ::std::sync::Arc::from(path),
-                    ::std::default::Default::default(),
-                    instance_id,
-                )?
+                >(store, path, ::std::default::Default::default(), instance_id)?
             },
             proxy_host: {
                 const _: fn() = || {
@@ -668,24 +655,11 @@ impl UiState {
                     );
                 };
                 let parent_prefix = <NetworkState as ::amethystate::StateScope>::PREFIX;
-                let path = if parent_prefix == "." {
-                    "host".to_string()
-                } else {
-                    ::alloc::__export::must_use({
-                        ::alloc::fmt::format(
-                            format_args!("{0}.{1}", parent_prefix, "host"),
-                        )
-                    })
-                };
+                let path = ::amethystate::join_path(parent_prefix, "host");
                 ::amethystate::store::field_with_path::<
                     String,
                     ::amethystate::ReadOnlyMode,
-                >(
-                    store,
-                    ::std::sync::Arc::from(path),
-                    ::std::default::Default::default(),
-                    instance_id,
-                )?
+                >(store, path, ::std::default::Default::default(), instance_id)?
             },
         };
         store.mark_initialized(<Self as ::amethystate::StateScope>::PREFIX)?;

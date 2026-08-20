@@ -6,6 +6,7 @@ use crate::store::backend::utils;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::SqliteStore;
 use crate::{StorageResult, StoreBackend};
+use amethystate_core::path::StorePath;
 
 impl InspectorBackend for SqliteStore {
     fn format(&self) -> CodecFormat {
@@ -13,7 +14,7 @@ impl InspectorBackend for SqliteStore {
     }
 
     fn scan_all(&self) -> StorageResult<Vec<(String, Vec<u8>)>> {
-        self.scan_prefix("")
+        self.scan_prefix(&StorePath::root())
     }
 
     fn get_schema_snapshots(&self) -> StorageResult<Vec<(String, SchemaSnapshot)>> {

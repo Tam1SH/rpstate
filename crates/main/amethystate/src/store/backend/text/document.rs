@@ -1,5 +1,6 @@
 use crate::store::CodecFormat;
 use crate::store::StorageResult;
+use amethystate_core::path::StorePath;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -102,7 +103,7 @@ pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> Vec<(String, N)> 
     let parts = normalise_parts(parts);
 
     let mut results = Vec::new();
-    let prefix_str = parts.join(".");
+    let prefix = StorePath::from_segments(parts);
 
     let node = if parts.is_empty() {
         Some(root)
@@ -112,12 +113,10 @@ pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> Vec<(String, N)> 
 
     if let Some(node) = node {
         for (k, v) in node.scan_children() {
-            let full_key = if prefix_str.is_empty() {
-                k
-            } else {
-                format!("{}.{}", prefix_str, k)
+            let Ok(full) = prefix.try_push(&k) else {
+                continue;
             };
-            results.push((full_key, v));
+            results.push((full.as_str().to_string(), v));
         }
     }
     results

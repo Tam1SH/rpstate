@@ -1,4 +1,5 @@
 use amethystate::store::StoreBackend;
+use amethystate::store::StorePath;
 use amethystate::store::SubscriptionId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,8 @@ pub async fn amethystate_get(
     store: State<'_, PluginState>,
     key: String,
 ) -> Result<Option<serde_json::Value>, String> {
-    store.store.get(&key).map_err(|e| e.to_string())
+    let path = StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
+    store.store.get(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -23,7 +25,8 @@ pub async fn amethystate_set(
     key: String,
     value: serde_json::Value,
 ) -> Result<(), String> {
-    store.store.set(&key, &value).map_err(|e| e.to_string())
+    let path = StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
+    store.store.set(&path, &value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -31,6 +34,7 @@ pub async fn amethystate_get_prefix(
     store: State<'_, PluginState>,
     prefix: String,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
+    let prefix = StorePath::parse_joined(&prefix).map_err(|e| e.to_string())?;
     let raw =
         amethystate::StoreBackend::scan_prefix(&store.store, &prefix).map_err(|e| e.to_string())?;
 
@@ -48,6 +52,7 @@ pub async fn amethystate_flush(
     store: State<'_, PluginState>,
     prefix: String,
 ) -> Result<(), String> {
+    let prefix = StorePath::parse_joined(&prefix).map_err(|e| e.to_string())?;
     amethystate::StoreBackend::flush_prefix(&store.store, &prefix).map_err(|e| e.to_string())
 }
 
@@ -136,5 +141,6 @@ pub async fn amethystate_unsubscribe(
 }
 #[tauri::command]
 pub async fn amethystate_delete(store: State<'_, PluginState>, key: String) -> Result<(), String> {
-    store.store.delete(&key).map_err(|e| e.to_string())
+    let path = StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
+    store.store.delete(&path).map_err(|e| e.to_string())
 }

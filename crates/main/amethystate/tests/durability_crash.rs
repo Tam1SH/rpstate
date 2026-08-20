@@ -5,11 +5,12 @@
 //! reopened while the writer is alive - suppressing `Drop` is not enough. The
 //! writer here aborts instead, which skips destructors exactly like a crash.
 
+#![cfg(feature = "redb")]
+
 use amethystate::store::builder::Backend;
 use amethystate::store::field_with_path;
 use amethystate::{StoreBuilder, WritableMode};
 use amethystate_core::test_utils::unique_path;
-use std::sync::Arc;
 
 const CHILD: &str = "AME_DURABILITY_CHILD";
 
@@ -22,14 +23,14 @@ fn write_then_abort(path: &std::path::Path) -> ! {
 
     let plain = field_with_path::<u16, WritableMode>(
         &store,
-        Arc::from("n.plain"),
+        ["n", "plain"],
         1,
         amethystate::uuid::Uuid::new_v4(),
     )
     .unwrap();
     let durable = field_with_path::<u16, WritableMode>(
         &store,
-        Arc::from("n.durable"),
+        ["n", "durable"],
         1,
         amethystate::uuid::Uuid::new_v4(),
     )

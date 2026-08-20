@@ -1,4 +1,6 @@
 use crate::AmeBackendSync;
+use crate::path::StorePath;
+use crate::primitives::error::WriteError;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore};
@@ -7,21 +9,24 @@ use std::borrow::Borrow;
 use serde::de::DeserializeOwned;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::sync::Arc;
 use uuid::Uuid;
 
-pub fn map_get<B, K, V>(backend: &B, path: &str, key: &K) -> ReactiveMapResult<Option<V>, B::Error>
+pub fn map_get<B, K, V>(
+    backend: &B,
+    path: &StorePath,
+    key: &K,
+) -> ReactiveMapResult<Option<V>, B::Error>
 where
     B: AmeBackendSync,
     K: Display,
     V: DeserializeOwned,
 {
-    Ok(backend.get(&format!("{}.{}", path, key))?)
+    Ok(backend.get(&path.try_push(key.to_string()).map_err(WriteError::Path)?)?)
 }
 
 pub fn map_contains_key<B, K, V>(
     backend: &B,
-    path: &str,
+    path: &StorePath,
     key: &K,
 ) -> ReactiveMapResult<bool, B::Error>
 where
@@ -32,20 +37,22 @@ where
     map_get::<B, K, V>(backend, path, key).map(|v| v.is_some())
 }
 
-pub fn map_entries<B, K, V>(backend: &B, path: &str) -> ReactiveMapResult<Vec<(K, V)>, B::Error>
+pub fn map_entries<B, K, V>(
+    backend: &B,
+    path: &StorePath,
+) -> ReactiveMapResult<Vec<(K, V)>, B::Error>
 where
     B: AmeBackendSync,
     K: FromStr,
     V: DeserializeOwned + Default,
 {
-    let prefix = format!("{}.", path);
-    let kvs = backend.scan_prefix(&prefix)?;
+    let kvs = backend.scan_prefix(path)?;
 
     let mut results = Vec::new();
 
     for (full_path, raw) in kvs {
-        if let Some(key_str) = full_path.strip_prefix(&prefix)
-            && let Ok(k) = K::from_str(key_str)
+        if let Some(key_str) = path.entry_name(&full_path)
+            && let Ok(k) = K::from_str(&key_str)
             && let Ok(v) = backend.decode::<V>(raw.borrow())
         {
             results.push((k, v));
@@ -55,13 +62,11 @@ where
     Ok(results)
 }
 
-pub fn map_len<B>(backend: &B, path: &str) -> ReactiveMapResult<usize, B::Error>
+pub fn map_len<B>(backend: &B, path: &StorePath) -> ReactiveMapResult<usize, B::Error>
 where
     B: AmeBackendSync,
 {
-    Ok(backend
-        .scan_prefix(&format!("{}.", path))
-        .map(|kvs| kvs.len())?)
+    Ok(backend.scan_prefix(path).map(|kvs| kvs.len())?)
 }
 
 /// Writes a key that already exists, and fails with
@@ -72,7 +77,7 @@ where
 pub fn map_update<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
-    path: Arc<str>,
+    path: StorePath,
     key: K,
     value: &V,
     source: Option<Uuid>,
@@ -82,7 +87,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let full_path = format!("{}.{}", path, key);
+    let full_path = path.try_push(key.to_string()).map_err(WriteError::Path)?;
     let old_value = match backend.get::<V>(&full_path)? {
         Some(old_value) => old_value,
         None => return Err(ReactiveMapError::KeyNotFound(key.to_string())),
@@ -103,7 +108,7 @@ where
 pub fn map_insert<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
-    path: Arc<str>,
+    path: StorePath,
     key: K,
     value: &V,
     source: Option<Uuid>,
@@ -113,7 +118,7 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let full_path = format!("{}.{}", path, key);
+    let full_path = path.try_push(key.to_string()).map_err(WriteError::Path)?;
     let old_value = backend.get::<V>(&full_path)?;
     let change = if let Some(old_value) = old_value {
         MapChange::Update {
@@ -136,7 +141,7 @@ where
 pub fn map_remove<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
-    path: Arc<str>,
+    path: StorePath,
     key: K,
     source: Option<Uuid>,
 ) -> ReactiveMapResult<Option<V>, B::Error>
@@ -150,7 +155,7 @@ where
         return Ok(None);
     }
 
-    let full_path = format!("{}.{}", path, key);
+    let full_path = path.try_push(key.to_string()).map_err(WriteError::Path)?;
     let old_value = backend.get::<V>(&full_path)?;
     if let Some(old_value) = old_value {
         let change = MapChange::Remove {
@@ -169,7 +174,7 @@ where
 pub fn map_clear<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
-    path: Arc<str>,
+    path: StorePath,
     source: Option<Uuid>,
 ) -> ReactiveMapResult<(), B::Error>
 where
@@ -183,7 +188,7 @@ where
 pub fn map_apply_change<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
-    path: Arc<str>,
+    path: StorePath,
     change: MapChange<K, V>,
 ) -> ReactiveMapResult<(), B::Error>
 where
@@ -191,8 +196,8 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let context_path: Arc<str> = match change.key() {
-        Some(key) => format!("{}.{}", path, key).into(),
+    let context_path = match change.key() {
+        Some(key) => path.try_push(key.to_string()).map_err(WriteError::Path)?,
         None => path.clone(),
     };
 
@@ -207,13 +212,20 @@ where
             new_value: value,
             ..
         } => {
-            backend.set_with_source(&format!("{}.{}", path, key), value, processed.source())?;
+            backend.set_with_source(
+                &path.try_push(key.to_string()).map_err(WriteError::Path)?,
+                value,
+                processed.source(),
+            )?;
         }
         MapChange::Remove { key, .. } => {
-            backend.delete_with_source(&format!("{}.{}", path, key), processed.source())?;
+            backend.delete_with_source(
+                &path.try_push(key.to_string()).map_err(WriteError::Path)?,
+                processed.source(),
+            )?;
         }
         MapChange::Clear { .. } => {
-            backend.delete_prefix(&format!("{}.", path), processed.source())?;
+            backend.delete_prefix(&path, processed.source())?;
         }
     }
 

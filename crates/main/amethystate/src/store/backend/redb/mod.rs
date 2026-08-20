@@ -2,6 +2,7 @@ use crate::store::{
     SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
     SubscriptionId, SubscriptionKind,
 };
+use amethystate_core::path::StorePath;
 use error::RedbStoreError;
 use migration::RedbMigrationBackend;
 use redb::{Database, ReadableDatabase};
@@ -61,15 +62,15 @@ impl RedbStoreInner {
     }
 
     pub fn save_now(&self) -> StorageResult<()> {
-        self.flush_prefix("")
+        self.flush_prefix(&StorePath::root())
     }
 
-    pub fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
+    pub fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         let _write_guard = self.write_lock.lock();
 
         let changes = {
             let lock = self.pending.lock();
-            utils::pending_prefix(&lock, prefix)
+            utils::pending_prefix(&lock, prefix.as_str())
         };
         let txn = self.db.begin_write().map_err(RedbStoreError::from)?;
         {
@@ -242,7 +243,8 @@ impl RedbStore {
     /// The buffer wins where it has the key, since it holds the newer value;
     /// otherwise the committed one. Reading the buffer alone reported no old
     /// value once a flush had emptied it, though the key was on disk.
-    fn committed_or_buffered(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn committed_or_buffered(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
+        let path = path.as_str();
         if let Some(op) = self.inner.pending.lock().get(path).filter(|o| o.is_data()) {
             return Ok(op.value().map(Vec::from));
         }
@@ -289,7 +291,8 @@ impl SchemaAwareStore for RedbStore {
 }
 
 impl StoreBackend for RedbStore {
-    fn get_raw(&self, path: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
+        let path = path.as_str();
         {
             let lock = self.inner.pending.lock();
             if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
@@ -309,9 +312,10 @@ impl StoreBackend for RedbStore {
 
     fn get_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool> {
+        let path = path.as_str();
         {
             let lock = self.inner.pending.lock();
             if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
@@ -350,16 +354,16 @@ impl StoreBackend for RedbStore {
 
     fn set_erased(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.set_owned_erased(Arc::from(path), value, source)
+        self.set_owned_erased(path.clone(), value, source)
     }
 
     fn set_owned_erased(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
@@ -377,13 +381,16 @@ impl StoreBackend for RedbStore {
 
         {
             let mut lock = self.inner.pending.lock();
-            lock.insert(path.clone(), utils::PendingOp::Set(bytes.clone()));
+            lock.insert(
+                Arc::from(path.as_str()),
+                utils::PendingOp::Set(bytes.clone()),
+            );
         }
 
         utils::emit_events(
             &self.inner.subscriptions,
             StoreEvent {
-                path: path.clone(),
+                path: Arc::from(path.as_str()),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(bytes),
@@ -399,7 +406,9 @@ impl StoreBackend for RedbStore {
         self.inner.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        let bound = utils::subtree_bound(prefix);
+        let prefix = prefix.as_str();
         let mut results = Vec::new();
 
         let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
@@ -411,9 +420,9 @@ impl StoreBackend for RedbStore {
         for result in table.range(range).map_err(RedbStoreError::from)? {
             let (k, v) = result.map_err(RedbStoreError::from)?;
             let key_str = k.value();
-            if key_str.starts_with(prefix) {
+            if utils::is_under(key_str, prefix, &bound) {
                 results.push((key_str.to_string(), Vec::from(&v.value()[..])));
-            } else {
+            } else if !key_str.starts_with(prefix) {
                 break;
             }
         }
@@ -422,7 +431,7 @@ impl StoreBackend for RedbStore {
         {
             let lock = self.inner.pending.lock();
             for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if k.starts_with(prefix) {
+                if utils::is_under(k, prefix, &bound) {
                     pending_map.insert(k.to_string(), op.value().map(Vec::from));
                 }
             }
@@ -444,7 +453,9 @@ impl StoreBackend for RedbStore {
         Ok(results)
     }
 
-    fn scan_keys(&self, prefix: &str) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+        let bound = utils::subtree_bound(prefix);
+        let prefix = prefix.as_str();
         let mut keys = Vec::new();
 
         let read_txn = self.inner.db.begin_read().map_err(RedbStoreError::from)?;
@@ -455,8 +466,11 @@ impl StoreBackend for RedbStore {
         for result in table.range(prefix..).map_err(RedbStoreError::from)? {
             let (k, _) = result.map_err(RedbStoreError::from)?;
             let key = k.value();
-            if !key.starts_with(prefix) {
-                break;
+            if !utils::is_under(key, prefix, &bound) {
+                if !key.starts_with(prefix) {
+                    break;
+                }
+                continue;
             }
             keys.push(key.to_string());
         }
@@ -464,7 +478,7 @@ impl StoreBackend for RedbStore {
         {
             let lock = self.inner.pending.lock();
             for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if !k.starts_with(prefix) {
+                if !utils::is_under(k, prefix, &bound) {
                     continue;
                 }
                 match op.value() {
@@ -481,9 +495,9 @@ impl StoreBackend for RedbStore {
         Ok(keys)
     }
 
-    fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> StorageResult<()> {
+    fn delete_with_source(&self, path: &StorePath, source: Option<Uuid>) -> StorageResult<()> {
         self.inner.check_debouncer();
-        let path_arc: Arc<str> = Arc::from(path);
+        let path_arc: Arc<str> = Arc::from(path.as_str());
 
         let old_bytes = self.committed_or_buffered(path)?;
 
@@ -507,10 +521,15 @@ impl StoreBackend for RedbStore {
         Ok(())
     }
 
-    fn delete_prefix_with_source(&self, prefix: &str, source: Option<Uuid>) -> StorageResult<()> {
+    fn delete_prefix_with_source(
+        &self,
+        prefix: &StorePath,
+        source: Option<Uuid>,
+    ) -> StorageResult<()> {
         self.inner.check_debouncer();
 
         let keys = self.scan_prefix(prefix)?;
+        let prefix = prefix.as_str();
 
         {
             let mut lock = self.inner.pending.lock();
@@ -534,7 +553,7 @@ impl StoreBackend for RedbStore {
         Ok(())
     }
 
-    fn delete(&self, path: &str) -> StorageResult<()> {
+    fn delete(&self, path: &StorePath) -> StorageResult<()> {
         self.delete_with_source(path, None)
     }
 
@@ -551,7 +570,7 @@ impl StoreBackend for RedbStore {
         self.inner.subscriptions.write().retain(|s| s.id != id);
     }
 
-    fn flush_prefix(&self, prefix: &str) -> StorageResult<()> {
+    fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         self.inner.flush_prefix(prefix)
     }
 
@@ -602,6 +621,7 @@ impl StoreBackend for RedbStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::migration::fields::FieldDescriptor;
     use crate::migration::{MigrationError, MigrationPlan};
     use crate::store::StoreExt;
@@ -617,9 +637,9 @@ mod tests {
         let path = unique_path("immediate");
         let (store, _) = RedbStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
 
-        store.set("user.name", &"Alice".to_string()).unwrap();
+        store.set(["user", "name"], &"Alice".to_string()).unwrap();
 
-        let val: Option<String> = store.get("user.name").unwrap();
+        let val: Option<String> = store.get(["user", "name"]).unwrap();
         assert_eq!(val, Some("Alice".to_string()));
     }
 
@@ -633,7 +653,7 @@ mod tests {
 
         let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
 
-        store.set("config.port", &8080u16).unwrap();
+        store.set(["config", "port"], &8080u16).unwrap();
 
         {
             let read_txn = store.inner.db.begin_read().unwrap();
@@ -666,7 +686,7 @@ mod tests {
             }),
         );
 
-        store.set("ui.theme", &"dark".to_string()).unwrap();
+        store.set(["ui", "theme"], &"dark".to_string()).unwrap();
 
         assert!(*hit.lock());
     }
@@ -676,11 +696,13 @@ mod tests {
         let path = unique_path("delete");
         let (store, _) = RedbStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
 
-        store.set("temp.key", &1).unwrap();
+        store.set(["temp", "key"], &1).unwrap();
 
         store.save_now().unwrap();
-        store.delete("temp.key").unwrap();
-        assert_eq!(store.get::<i32>("temp.key").unwrap(), None);
+        store
+            .delete(&StorePath::from_segments(["temp", "key"]))
+            .unwrap();
+        assert_eq!(store.get::<i32>(["temp", "key"]).unwrap(), None);
 
         store.save_now().unwrap();
 
@@ -705,14 +727,14 @@ mod tests {
         {
             let (store, _) =
                 RedbStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-            store.set("test.key", &"hello".to_string()).unwrap();
+            store.set(["test", "key"], &"hello".to_string()).unwrap();
             store.close().expect("Explicit close failed");
         }
 
         let (store_reopened, _) = RedbStore::open(StoreConfig::new(&path), MigrationSet::default())
             .expect("Database should be available immediately after close");
 
-        let val: Option<String> = store_reopened.get("test.key").unwrap();
+        let val: Option<String> = store_reopened.get(["test", "key"]).unwrap();
         assert_eq!(val, Some("hello".to_string()));
     }
 
@@ -722,13 +744,16 @@ mod tests {
         {
             let (store, _) =
                 RedbStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-            store.set("drop.test", &42u32).unwrap();
+            store.set(["drop", "test"], &42u32).unwrap();
         }
 
         let (store_reopened, _) = RedbStore::open(StoreConfig::new(&path), MigrationSet::default())
             .expect("Drop must release file lock deterministically");
 
-        assert_eq!(store_reopened.get::<u32>("drop.test").unwrap(), Some(42));
+        assert_eq!(
+            store_reopened.get::<u32>(["drop", "test"]).unwrap(),
+            Some(42)
+        );
     }
 
     #[test]
@@ -739,12 +764,12 @@ mod tests {
 
         {
             let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
-            store.set("urgent.data", &true).unwrap();
+            store.set(["urgent", "data"], &true).unwrap();
             store.close().unwrap();
         }
 
         let (store, _) = RedbStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
-        assert_eq!(store.get::<bool>("urgent.data").unwrap(), Some(true));
+        assert_eq!(store.get::<bool>(["urgent", "data"]).unwrap(), Some(true));
     }
 
     #[test]
@@ -756,9 +781,11 @@ mod tests {
 
         let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
 
-        store.set("net.host", &"127.0.0.1".to_string()).unwrap();
-        store.set("net.port", &8080u16).unwrap();
-        store.set("ui.theme", &"dark".to_string()).unwrap();
+        store
+            .set(["net", "host"], &"127.0.0.1".to_string())
+            .unwrap();
+        store.set(["net", "port"], &8080u16).unwrap();
+        store.set(["ui", "theme"], &"dark".to_string()).unwrap();
 
         {
             let pending = store.inner.pending.lock();
@@ -771,7 +798,9 @@ mod tests {
             assert!(table.get("ui.theme").unwrap().is_none());
         }
 
-        store.flush_prefix("net").unwrap();
+        store
+            .flush_prefix(&StorePath::from_segments(["net"]))
+            .unwrap();
 
         {
             let read_txn = store.inner.db.begin_read().unwrap();
@@ -806,7 +835,7 @@ mod tests {
             assert!(!pending.contains_key("net.port"));
         }
 
-        store.flush_prefix("").unwrap();
+        store.flush_prefix(&StorePath::root()).unwrap();
         {
             let pending = store.inner.pending.lock();
             assert!(
@@ -856,7 +885,7 @@ mod tests {
         cfg.save_debounce = Duration::from_millis(50);
         {
             let (store, _) = RedbStore::open(cfg, MigrationSet::default()).unwrap();
-            store.set("net.ip", &"1.1.1.1".to_string()).unwrap();
+            store.set(["net", "ip"], &"1.1.1.1".to_string()).unwrap();
             store.save_now().unwrap();
         }
 
@@ -881,7 +910,7 @@ mod tests {
         let (store, report) = RedbStore::open(StoreConfig::new(&path), mset).unwrap();
         assert!(report.has_failures());
 
-        let val: String = store.get("net.ip").unwrap().unwrap();
+        let val: String = store.get(["net", "ip"]).unwrap().unwrap();
         assert_eq!(val, "1.1.1.1");
     }
     #[test]
@@ -896,13 +925,13 @@ mod tests {
 
         let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
 
-        let test_key = "system.critical_update";
+        let test_key = StorePath::from_segments(["system", "critical_update"]);
         let test_value = "payload_data".to_string();
-        store.set(test_key, &test_value).unwrap();
+        store.set(&test_key, &test_value).unwrap();
 
         {
             let pending = store.inner.pending.lock();
-            assert!(pending.contains_key(test_key));
+            assert!(pending.contains_key(test_key.as_str()));
         }
 
         thread::sleep(Duration::from_millis(150));
@@ -912,12 +941,12 @@ mod tests {
         {
             let pending = store.inner.pending.lock();
             assert!(
-                pending.contains_key(test_key),
+                pending.contains_key(test_key.as_str()),
                 "The pending changes buffer should not be cleared when a transaction fails!"
             );
         }
 
-        let retrieved: Option<String> = store.get(test_key).unwrap();
+        let retrieved: Option<String> = store.get(&test_key).unwrap();
         assert_eq!(retrieved, Some(test_value));
     }
 }

@@ -148,25 +148,15 @@ pub(crate) fn data_impl(
             quote! {
                 #fname: <#data_ty>::__amethystate_load_from(
                     store,
-                    &#crate_name::join_path(prefix, #key),
+                    #crate_name::join_path(prefix, #key).as_str(),
                 )?
             }
         } else if let Some((k, v)) = e.get_map_types() {
             quote! {
-                #fname: {
-                    let path = #crate_name::join_path(prefix, #key);
-                    let raw = <#crate_name::Store as #crate_name::StoreBackend>::scan_prefix(store, &format!("{}.", path))?;
-                    let mut map = ::std::collections::HashMap::<#k, #v>::new();
-                    for (stored_path, bytes) in raw {
-                        if let Some(k_str) = stored_path.strip_prefix(&format!("{}.", path))
-                            && let Ok(kv) = <#k as ::std::str::FromStr>::from_str(k_str)
-                        {
-                            let vv = <#crate_name::Store as #crate_name::StoreExt>::decode::<#v>(store, &bytes)?;
-                            map.insert(kv, vv);
-                        }
-                    }
-                    map
-                }
+                #fname: #crate_name::store::load_map::<#k, #v>(
+                    store,
+                    &#crate_name::join_path(prefix, #key),
+                )?
             }
         } else {
             let fallback = e
@@ -186,14 +176,14 @@ pub(crate) fn data_impl(
 
         if e.nested {
             quote! {
-                self.#fname.__amethystate_save_to(store, &#crate_name::join_path(prefix, #key))?;
+                self.#fname.__amethystate_save_to(store, #crate_name::join_path(prefix, #key).as_str())?;
             }
         } else if e.get_map_types().is_some() {
             quote! {
                 {
                     let path = #crate_name::join_path(prefix, #key);
                     for (k, v) in &self.#fname {
-                        let full_path = format!("{}.{}", path, k);
+                        let full_path = path.try_push(k.to_string())?;
                         <#crate_name::Store as #crate_name::StoreExt>::set(store, &full_path, v)?;
                     }
                 }
@@ -235,7 +225,7 @@ pub(crate) fn data_impl(
                 #(#attrs)* #vis struct #name {
                     inner: #data_struct_name,
                     store: #crate_name::Store,
-                    prefix: ::std::sync::Arc<str>,
+                    prefix: #crate_name::store::StorePath,
                 }
 
                 impl ::std::ops::Deref for #name {
@@ -254,7 +244,8 @@ pub(crate) fn data_impl(
 
                 impl #name {
                     pub fn save_lazy(&self) -> #crate_name::StorageResult<()> {
-                        self.inner.__amethystate_save_to(&self.store, &self.prefix)
+                        self.inner
+                            .__amethystate_save_to(&self.store, self.prefix.as_str())
                     }
 
                     pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
@@ -276,7 +267,7 @@ pub(crate) fn data_impl(
                         Ok(Self {
                             inner: #data_struct_name::__amethystate_load_from(store, #prefix_expr)?,
                             store: store.clone(),
-                            prefix: ::std::sync::Arc::from(#prefix_expr),
+                            prefix: #crate_name::join_path("", #prefix_expr),
                         })
                     }
                 }
@@ -298,7 +289,7 @@ pub(crate) fn data_impl(
                 pub struct #persisted_struct_name {
                     inner: #data_struct_name,
                     store: #crate_name::Store,
-                    prefix: ::std::sync::Arc<str>,
+                    prefix: #crate_name::store::StorePath,
                 }
 
                 impl ::std::ops::Deref for #persisted_struct_name {
@@ -317,7 +308,8 @@ pub(crate) fn data_impl(
 
                 impl #persisted_struct_name {
                     pub fn save_lazy(&self) -> #crate_name::StorageResult<()> {
-                        self.inner.__amethystate_save_to(&self.store, &self.prefix)
+                        self.inner
+                            .__amethystate_save_to(&self.store, self.prefix.as_str())
                     }
 
                     pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
@@ -341,7 +333,7 @@ pub(crate) fn data_impl(
                         Ok(#persisted_struct_name {
                             inner: #data_struct_name::__amethystate_load_from(store, #prefix_expr)?,
                             store: store.clone(),
-                            prefix: ::std::sync::Arc::from(#prefix_expr),
+                            prefix: #crate_name::join_path("", #prefix_expr),
                         })
                     }
                 }

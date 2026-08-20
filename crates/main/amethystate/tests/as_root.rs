@@ -18,17 +18,17 @@ fn test_as_root_global_namespace() {
     let config = AppConfig::new_with(&store).unwrap();
 
     assert_eq!(
-        store.get::<String>("name").unwrap(),
+        store.get::<String>(["name"]).unwrap(),
         Some("legacy".to_string())
     );
-    assert_eq!(store.get::<bool>("comfy").unwrap(), Some(false));
+    assert_eq!(store.get::<bool>(["comfy"]).unwrap(), Some(false));
 
     config.name().set("updated_name".to_string()).unwrap();
     config.comfy().set(true).unwrap();
 
     assert_eq!(
-        store.get::<String>("name").unwrap(),
+        store.get::<String>(["name"]).unwrap(),
         Some("updated_name".to_string())
     );
-    assert_eq!(store.get::<bool>("comfy").unwrap(), Some(true));
+    assert_eq!(store.get::<bool>(["comfy"]).unwrap(), Some(true));
 }

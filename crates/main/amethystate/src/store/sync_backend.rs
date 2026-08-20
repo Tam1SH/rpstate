@@ -1,11 +1,11 @@
 use crate::Store;
 use crate::StoreBackend;
+use amethystate_core::path::StorePath;
 
 use crate::store::StorageError;
 use amethystate_core::AmeBackendSync;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) struct SyncBridge {
@@ -23,7 +23,7 @@ impl AmeBackendSync for SyncBridge {
     type Raw = Vec<u8>;
     type Borrowed = [u8];
 
-    fn get<T>(&self, path: &str) -> Result<Option<T>, Self::Error>
+    fn get<T>(&self, path: &StorePath) -> Result<Option<T>, Self::Error>
     where
         T: DeserializeOwned,
     {
@@ -32,7 +32,7 @@ impl AmeBackendSync for SyncBridge {
 
     fn set_with_source<T: Serialize>(
         &self,
-        path: &str,
+        path: &StorePath,
         value: &T,
         source: Option<Uuid>,
     ) -> Result<(), Self::Error> {
@@ -41,37 +41,41 @@ impl AmeBackendSync for SyncBridge {
 
     fn set_owned_with_source<T: Serialize>(
         &self,
-        path: Arc<str>,
+        path: StorePath,
         value: &T,
         source: Option<Uuid>,
     ) -> Result<(), Self::Error> {
         self.store.set_owned_with_source(path, value, source)
     }
 
-    fn set<T>(&self, path: &str, value: &T) -> Result<(), Self::Error>
+    fn set<T>(&self, path: &StorePath, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
     {
         self.store.set(path, value)
     }
 
-    fn delete(&self, path: &str) -> Result<(), Self::Error> {
+    fn delete(&self, path: &StorePath) -> Result<(), Self::Error> {
         self.store.delete(path)
     }
 
-    fn delete_with_source(&self, path: &str, source: Option<Uuid>) -> Result<(), Self::Error> {
+    fn delete_with_source(
+        &self,
+        path: &StorePath,
+        source: Option<Uuid>,
+    ) -> Result<(), Self::Error> {
         self.store.delete_with_source(path, source)
     }
 
-    fn delete_prefix(&self, prefix: &str, source: Option<Uuid>) -> Result<(), Self::Error> {
+    fn delete_prefix(&self, prefix: &StorePath, source: Option<Uuid>) -> Result<(), Self::Error> {
         self.store.delete_prefix_with_source(prefix, source)
     }
 
-    fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, Self::Raw)>, Self::Error> {
+    fn scan_prefix(&self, prefix: &StorePath) -> Result<Vec<(String, Self::Raw)>, Self::Error> {
         self.store.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &str) -> Result<Vec<String>, Self::Error> {
+    fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<String>, Self::Error> {
         self.store.scan_keys(prefix)
     }
 

@@ -445,47 +445,65 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback() {
     assert!(telemetry.enabled().get());
     assert_eq!(telemetry.sample_rate_per_mille().get(), 70);
 
-    assert_eq!(store.get::<String>("complex_identity.login").unwrap(), None);
+    assert_eq!(
+        store.get::<String>(["complex_identity", "login"]).unwrap(),
+        None
+    );
     assert_eq!(
         store
-            .get::<String>("complex_identity.legacy_token")
+            .get::<String>(["complex_identity", "legacy_token"])
             .unwrap(),
         None
     );
     assert_eq!(
-        store.get::<String>("complex_profile.full_name").unwrap(),
-        None
-    );
-    assert_eq!(
-        store.get::<String>("complex_profile.age_text").unwrap(),
-        None
-    );
-    assert_eq!(
-        store.get::<String>("complex_workspace.title").unwrap(),
-        None
-    );
-    assert_eq!(
-        store.get::<String>("complex_workspace.stale_flag").unwrap(),
-        None
-    );
-    assert_eq!(store.get::<u16>("complex_ui.sidebar_px").unwrap(), None);
-    assert_eq!(
         store
-            .get::<Vec<String>>("complex_shortcuts.legacy_bindings")
+            .get::<String>(["complex_profile", "full_name"])
             .unwrap(),
         None
     );
     assert_eq!(
-        store.get::<u16>("complex_telemetry.sample_rate").unwrap(),
+        store
+            .get::<String>(["complex_profile", "age_text"])
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store.get::<String>(["complex_workspace", "title"]).unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .get::<String>(["complex_workspace", "stale_flag"])
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store.get::<u16>(["complex_ui", "sidebar_px"]).unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .get::<Vec<String>>(["complex_shortcuts", "legacy_bindings"])
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .get::<u16>(["complex_telemetry", "sample_rate"])
+            .unwrap(),
         None
     );
 
     assert_eq!(
-        store.get::<String>("complex_broken_root.original").unwrap(),
+        store
+            .get::<String>(["complex_broken_root", "original"])
+            .unwrap(),
         Some("stable".to_string())
     );
     assert_eq!(
-        store.get::<bool>("complex_broken_root.staged").unwrap(),
+        store
+            .get::<bool>(["complex_broken_root", "staged"])
+            .unwrap(),
         None
     );
 }

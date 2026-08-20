@@ -48,7 +48,7 @@ fn a_cell_is_an_ordinary_reactive_cell() {
     ui.drain();
 
     assert_eq!(*seen.borrow(), vec![1024]);
-    assert_eq!(store.get::<u32>("ui.width").unwrap(), Some(1024));
+    assert_eq!(store.get::<u32>(["ui", "width"]).unwrap(), Some(1024));
 }
 
 #[test]

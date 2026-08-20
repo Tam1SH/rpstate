@@ -1,9 +1,46 @@
 use crate::SubscriptionKind;
 use crate::store::{StoreEvent, SubscriptionEntry};
+use amethystate_core::path::StorePath;
 use parking_lot::RwLock;
 
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 pub use buffered::*;
+
+/// Where a subtree stops, for engines that store a key whole.
+///
+/// A key belongs to `prefix` when it is `prefix` itself or begins with it
+/// followed by a separator - comparing the strings alone puts `uix.width` under
+/// `ui`. At the root there is no bound to spell, since no key can begin with a
+/// separator, and everything is under it.
+pub fn subtree_bound(prefix: &StorePath) -> Option<String> {
+    (!prefix.is_root()).then(|| format!("{}.", prefix.as_str()))
+}
+
+/// The half-open key range a subtree occupies, for an engine that queries by
+/// comparison rather than by iterating.
+///
+/// A pattern would have to escape whatever the pattern language treats as
+/// special, and a name is allowed to hold any of it - `panel[0]` is a name.
+/// Comparison has no such vocabulary, and an index can serve it.
+#[cfg(feature = "sqlite")]
+pub fn key_range(prefix: &StorePath) -> (String, String) {
+    if prefix.is_root() {
+        return (String::new(), "\u{10FFFF}".to_string());
+    }
+
+    let low = prefix.as_str().to_string();
+    let mut high = low.clone();
+    high.push('.');
+    high.push('\u{10FFFF}');
+    (low, high)
+}
+
+pub fn is_under(key: &str, prefix: &str, bound: &Option<String>) -> bool {
+    match bound {
+        Some(bound) => key == prefix || key.starts_with(bound.as_str()),
+        None => true,
+    }
+}
 
 pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent) {
     let callbacks = {

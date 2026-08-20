@@ -53,12 +53,12 @@ fn test_decentralized_codegen_migration() {
 
     assert_eq!(config.port().get(), 9090);
 
-    let old_val: Option<String> = store.get("app.host").unwrap();
+    let old_val: Option<String> = store.get(["app", "host"]).unwrap();
     assert!(
         old_val.is_none(),
         "Old key 'app.host' should be deleted after migration"
     );
 
-    let new_val: Option<String> = store.get("app.address").unwrap();
+    let new_val: Option<String> = store.get(["app", "address"]).unwrap();
     assert_eq!(new_val, Some("10.0.0.1".to_string()));
 }

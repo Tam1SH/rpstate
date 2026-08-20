@@ -1,4 +1,3 @@
-use amethystate::StoreBackend;
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::TempPath;
 use std::sync::Arc;
@@ -26,7 +25,6 @@ fn clearing_a_map_notifies_its_subscribers() {
 /// the event carries the path without the trailing separator, which the map's
 /// subscription compares against the dotted form - so nothing is notified.
 #[test]
-#[ignore = "known: a prefix delete on a map's path notifies nobody - see TODO.md"]
 fn deleting_a_maps_prefix_notifies_its_subscribers() {
     let path = TempPath::new("map_delete_prefix_notify");
     let store = StoreBuilder::new(path.path()).build().unwrap();
@@ -39,7 +37,7 @@ fn deleting_a_maps_prefix_notifies_its_subscribers() {
         seen.fetch_add(1, Ordering::SeqCst);
     });
 
-    store.delete_prefix("columns").unwrap();
+    store.delete_prefix(["columns"]).unwrap();
 
     assert_eq!(map.len().unwrap(), 0, "the entries are gone");
     assert_eq!(

@@ -21,6 +21,9 @@ pub enum StorageError {
     #[error(transparent)]
     Migration(#[from] MigrationError),
 
+    #[error(transparent)]
+    Path(#[from] amethystate_core::path::StorePathError),
+
     #[error("the flush this commit was waiting on did not complete")]
     CommitFailed,
 }

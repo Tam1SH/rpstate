@@ -1,5 +1,6 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
 use crate::error::FieldError;
+use crate::path::StorePath;
 use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
 use crate::{Change, FieldCore, InterceptDisposer, SignalSubscription};
@@ -10,7 +11,7 @@ use uuid::Uuid;
 
 pub struct Field<T, B> {
     pub core: FieldCore<T>,
-    pub path: Arc<str>,
+    pub path: StorePath,
     pub instance_id: Uuid,
     _subscription: Arc<Mutex<SubscriptionHandle>>,
     backend: B,
@@ -72,24 +73,24 @@ where
         }
     }
 
-    pub fn new(key: impl Into<Arc<str>>, initial_value: T) -> Self
+    pub fn new(key: StorePath, initial_value: T) -> Self
     where
         B: Default,
     {
         Self::new_with_backend(key, initial_value, B::default())
     }
 
-    pub fn new_with_backend(key: impl Into<Arc<str>>, initial_value: T, backend: B) -> Self {
+    pub fn new_with_backend(key: StorePath, initial_value: T, backend: B) -> Self {
         Self::new_with_backend_and_id(key, initial_value, backend, Uuid::new_v4())
     }
 
     pub fn new_with_backend_and_id(
-        key: impl Into<Arc<str>>,
+        key: StorePath,
         initial_value: T,
         backend: B,
         instance_id: Uuid,
     ) -> Self {
-        let path = key.into();
+        let path = key;
         let core = FieldCore::new(initial_value);
         let subscription = backend.subscribe_field(path.clone(), core.clone());
 
