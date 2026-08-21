@@ -1,7 +1,7 @@
 use crate::store::CodecFormat;
 use crate::store::{Occupied, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
-use error_stack::{Report, ResultExt};
+use error_stack::Report;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -162,13 +162,16 @@ pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> StorageResult<Vec
 
     if let Some(node) = node {
         for (k, v) in node.scan_children() {
-            let full = prefix
-                .try_push(&k)
-                .change_context(StorageError::Scan)
-                .attach_with(|| format!("under: {prefix}"))
-                .attach_with(|| format!("child: {k:?}"))
-                .attach("the document holds a child whose name cannot be a level")?;
-            results.push((full.as_str().to_string(), v));
+            match prefix.try_push(&k) {
+                Ok(full) => results.push((full.as_str().to_string(), v)),
+                Err(_) => tracing::warn!(
+                    target: "amethystate",
+                    under = %prefix,
+                    child = ?k,
+                    "a scan passed over a name no path can hold; it stays in the file, \
+                     and nothing addressed by a path reaches it",
+                ),
+            }
         }
     }
 

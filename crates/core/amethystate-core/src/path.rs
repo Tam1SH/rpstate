@@ -437,6 +437,26 @@ const fn joins_to(segments: &[&str], joined: &str) -> bool {
     i == key.len()
 }
 
+/// Orders two names the way the store orders the keys they become.
+///
+/// A flat engine sorts by the joined key, where a name is escaped, and escaping
+/// does not preserve order: `.` and `\` both become a pair starting with `\`,
+/// while everything between them keeps its own byte. So `"a.b"` sorts before
+/// `"aAb"` by name and after it by key, and anything listing names in the
+/// store's order has to compare them as the store will.
+///
+/// Compared without writing either escaped form out.
+pub fn cmp_names(a: &str, b: &str) -> std::cmp::Ordering {
+    escaped(a).cmp(escaped(b))
+}
+
+fn escaped(name: &str) -> impl Iterator<Item = char> + '_ {
+    name.chars().flat_map(|ch| {
+        let lead = (ch == SEPARATOR || ch == ESCAPE).then_some(ESCAPE);
+        lead.into_iter().chain(std::iter::once(ch))
+    })
+}
+
 fn join(segments: &[Arc<str>]) -> Arc<str> {
     let mut out = String::new();
 
@@ -828,6 +848,27 @@ mod tests {
                 prop_assert_eq!(&rebuilt, &path);
                 prop_assert_eq!(rebuilt.as_str(), path.as_str());
             }
+        }
+
+        /// `cmp_names` answers what comparing the joined keys answers, without
+        /// writing them out. It is a second encoding of the escaping rule -
+        /// `join` allocates, so a comparator cannot call it - and this is what
+        /// keeps the two in step.
+        #[test]
+        fn comparing_names_answers_what_comparing_their_keys_answers(
+            a in segment_strategy(),
+            b in segment_strategy()
+        ) {
+            let under = StorePath::segment("m");
+            let ka = under.push(&a);
+            let kb = under.push(&b);
+
+            prop_assert_eq!(
+                cmp_names(&a, &b),
+                ka.as_str().cmp(kb.as_str()),
+                "names {:?} and {:?} became keys {:?} and {:?}",
+                a, b, ka.as_str(), kb.as_str()
+            );
         }
 
         /// Equality, hashing and the key never disagree, over paths built every

@@ -706,23 +706,27 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
         prop_assert_eq!(map.keys().unwrap().len(), distinct.len(), "keys");
         prop_assert_eq!(map.entries().unwrap().count(), distinct.len(), "entries");
 
-        let mut from_keys = map.keys().unwrap();
-        from_keys.sort();
-        prop_assert_eq!(&from_keys, &distinct);
-
-        let mut from_entries: Vec<String> =
-            map.entries().unwrap().map(|(k, _)| k).collect();
-        from_entries.sort();
-        prop_assert_eq!(&from_entries, &distinct);
-
-        let mut from_scan: Vec<String> = store
+        let from_scan: Vec<String> = store
             .scan_keys(&at)
             .unwrap()
             .iter()
             .filter_map(|k| at.entry_name(k))
             .collect();
-        from_scan.sort();
-        prop_assert_eq!(&from_scan, &distinct, "the scan disagrees with the map");
+
+        let mut membership = from_scan.clone();
+        membership.sort();
+        prop_assert_eq!(&membership, &distinct, "the scan disagrees with the map");
+
+        prop_assert_eq!(
+            &map.keys().unwrap(),
+            &from_scan,
+            "keys came back in an order the scan does not use"
+        );
+        prop_assert_eq!(
+            &map.entries().unwrap().map(|(k, _)| k).collect::<Vec<_>>(),
+            &from_scan,
+            "entries came back in an order the scan does not use"
+        );
     });
 }
 

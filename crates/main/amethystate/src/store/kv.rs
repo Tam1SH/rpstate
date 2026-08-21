@@ -222,6 +222,7 @@ impl Kv {
     ///
     /// assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.width"]);
     /// ```
+    #[doc = include_str!("scan_contract.md")]
     pub fn keys(&self) -> StorageResult<Vec<String>> {
         match &self.prefix {
             Some(prefix) => self.store.scan_keys(prefix),

@@ -1188,9 +1188,29 @@ then deleted. The corruption this should cause is masked by `Drop` running
 `save_now` afterwards - an ordering accident, not a defence.
 `tamper_broken_file.rs`.
 
-**A key with no name is invisible to every scan.** `generic_scan` skips a child
-it cannot push (`document.rs:116`). The entry survives a round trip but cannot
-be listed or deleted.
+**A key with no name is invisible to every scan.** Decided: it stays that way,
+and now says so. A document may hold `{"": 1}` and a level with no name is not a
+path, so the scan passes over it and logs at `warn` - listing it would hand back
+a key that does not read back as a path, and refusing would let one name nobody
+meant to write stop the store from listing anything else. The value keeps its
+place in the file and survives a save; nothing addressed by a path reaches it.
+Written up on `scan_keys` and `Kv::keys` through `store/scan_contract.md`.
+
+Making it addressable was weighed and dropped. Only one case is genuinely
+ambiguous - `["cfg", ""]` already joins to `"cfg."` and is merely refused, while
+`[""]` collides with the root - so a marker pair such as `\0` would settle it.
+That means changing `join`, `parse_joined` and `joins_to` together, in the one
+function that has no right to be wrong, to address a key that nothing in the
+library can write and nobody writes on purpose.
+
+**Duplicate keys diverge, and every engine is already right.** `{"a":1,"a":2}`
+opens on json and ron with the last value winning and the first gone at the next
+save; toml refuses to open, naming the line. Neither is a defect of ours: the
+TOML spec forbids a key defined twice, and RFC 8259 leaves it undefined, so
+last-wins is what every other json tool does with the same file. Unifying them
+would make each engine behave unlike every tool a person edits that format with,
+which is the more surprising answer. The parsers resolve it before the document
+reaches us, so there is nothing to report even if we wanted to.
 
 Held up under the same tampering, worth knowing: wrong scalar types at a
 declared field fail loudly on all three; undeclared keys survive a rewrite; a

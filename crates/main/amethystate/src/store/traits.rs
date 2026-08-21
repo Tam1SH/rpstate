@@ -102,6 +102,8 @@ pub trait StoreBackend: Send + Sync + 'static {
     }
 
     /// Every key under `prefix`, sorted by key on every backend.
+    ///
+    /// Lists what [`StoreBackend::scan_keys`] lists.
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
     /// The keys under `prefix`, sorted, without reading their values.
@@ -109,6 +111,8 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// `scan_prefix` copies every value out of the backend, which is wasted
     /// work when only the keys are wanted - and grows with the data rather
     /// than with the answer.
+    ///
+    #[doc = include_str!("scan_contract.md")]
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>>;
 
     fn save_now(&self) -> StorageResult<()>;

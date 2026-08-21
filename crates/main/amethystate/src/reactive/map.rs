@@ -3,7 +3,7 @@ use crate::store::Durable;
 use crate::store::StoreBackend;
 use crate::store::sync_backend::SyncBridge;
 use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
-use amethystate_core::path::StorePath;
+use amethystate_core::path::{StorePath, cmp_names};
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::{Report, ResultExt};
 use std::marker::PhantomData;
@@ -30,6 +30,24 @@ pub(crate) struct MapInner<K, V> {
 /// That residency is the trade this type makes, and it sets the size it is for:
 /// thousands of entries, not millions. A map that will not fit in memory wants
 /// the database directly.
+///
+/// # What the opening scan takes
+///
+/// A map's entries are the level below its path, so the depth a scan reaches
+/// never matters here - but what the store holds under that path was not
+/// necessarily written by a map:
+///
+/// | what is stored under the path | what the map does |
+/// | --- | --- |
+/// | an entry the map wrote | held |
+/// | the map's own path, left behind by a `clear` | passed over |
+/// | a name no path can hold, on json, toml or ron | never reaches the map; see [`StoreBackend::scan_keys`](crate::store::StoreBackend::scan_keys) |
+/// | a name that is not a `K` | opening the map fails, naming the entry |
+/// | a value that is not a `V` | opening the map fails, naming the entry |
+///
+/// The last two are how a hand-edited file stops a struct from being built at
+/// all, which is worth knowing before putting a map behind a config a person
+/// edits.
 pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
     pub(crate) inner: Arc<MapInner<K, V>>,
     pub(crate) _mode: PhantomData<M>,
@@ -155,23 +173,24 @@ where
     /// not touched, but the whole map is cloned and sorted before the iterator
     /// is handed over.
     pub fn entries(&self) -> ReactiveMapResult<impl Iterator<Item = (K, V)>> {
-        let mut entries: Vec<(K, V)> = self
+        let mut entries: Vec<(String, K, V)> = self
             .inner
             .core
             .cache
             .iter()
-            .map(|e| (e.key().clone(), e.value().clone()))
+            .map(|e| (e.key().to_string(), e.key().clone(), e.value().clone()))
             .collect();
-        entries.sort_by_cached_key(|(k, _)| k.to_string());
-        Ok(entries.into_iter())
+        entries.sort_by(|(a, ..), (b, ..)| cmp_names(a, b));
+        Ok(entries.into_iter().map(|(_, k, v)| (k, v)))
     }
 
     /// Every key, sorted. Values are neither read nor deserialized.
     ///
-    /// Sorted by the key's string form, not by the key type's own `Ord` - the
-    /// store orders keys that way, and the two agree so that a reopen does not
-    /// reshuffle anything. For `String` keys the difference does not show; for
-    /// numbers it does - `"10"` sorts before `"9"`.
+    /// Sorted the way the store orders the keys these names become, not by the
+    /// key type's own `Ord`, so a scan and a map list their entries alike. For
+    /// numbers that shows as text order - `"10"` before `"9"` - and for a name
+    /// holding the separator it shows as the escape: the store sorts `a.b`
+    /// after `a1b`, because the key it writes begins `a\.`.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -192,17 +211,24 @@ where
     /// ports.insert(10, &true).unwrap();
     /// ports.insert(100, &true).unwrap();
     /// assert_eq!(ports.keys().unwrap(), [10, 100, 9]);
+    ///
+    /// // A name holding the separator sorts by the key it becomes, so it lands
+    /// // where a scan puts it rather than where the bare name would.
+    /// let odd = store.kv().map::<String, u8>("odd").unwrap();
+    /// odd.insert("a.b".into(), &1).unwrap();
+    /// odd.insert("a1b".into(), &2).unwrap();
+    /// assert_eq!(odd.keys().unwrap(), ["a1b", "a.b"]);
     /// ```
     pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
-        let mut keys: Vec<K> = self
+        let mut keys: Vec<(String, K)> = self
             .inner
             .core
             .cache
             .iter()
-            .map(|e| e.key().clone())
+            .map(|e| (e.key().to_string(), e.key().clone()))
             .collect();
-        keys.sort_by_cached_key(|k| k.to_string());
-        Ok(keys)
+        keys.sort_by(|(a, _), (b, _)| cmp_names(a, b));
+        Ok(keys.into_iter().map(|(_, k)| k).collect())
     }
 
     /// How many entries the map holds.

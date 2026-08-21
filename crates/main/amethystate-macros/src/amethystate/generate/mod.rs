@@ -50,11 +50,7 @@ pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
     (segments, dotted.to_string())
 }
 
-pub(crate) fn check_written_path(
-    what: &str,
-    written: &str,
-    root_hint: &str,
-) -> Result<(), String> {
+pub(crate) fn check_written_path(what: &str, written: &str, root_hint: &str) -> Result<(), String> {
     if written.is_empty() {
         return Err(format!("an empty {what} names no level{root_hint}"));
     }
@@ -69,11 +65,15 @@ pub(crate) fn check_written_path(
     for (at, level) in levels.iter().enumerate() {
         if level.is_empty() {
             return Err(match at {
-                0 => format!("the {what} starts with `{SEPARATOR}`, so its first level has no name"),
+                0 => {
+                    format!("the {what} starts with `{SEPARATOR}`, so its first level has no name")
+                }
                 _ if at == last => {
                     format!("the {what} ends with `{SEPARATOR}`, so its last level has no name")
                 }
-                _ => format!("the {what} has two `{SEPARATOR}` in a row, with no level between them"),
+                _ => {
+                    format!("the {what} has two `{SEPARATOR}` in a row, with no level between them")
+                }
             });
         }
 
