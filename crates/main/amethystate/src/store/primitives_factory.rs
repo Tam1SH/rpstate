@@ -49,7 +49,7 @@ where
     );
 
     if store.get::<TValue>(&path)?.is_none() {
-        store.set(&path, &default)?;
+        seed(store, &path, &default)?;
     }
 
     let current = store
@@ -120,6 +120,25 @@ where
     M: AccessMode,
 {
     reactive_map_with_path_only(store, path, defaults, instance_id)
+}
+
+fn seed<TValue>(store: &Store, path: &StorePath, default: &TValue) -> StorageResult<()>
+where
+    TValue: Serialize,
+{
+    match store.set(path, default) {
+        Err(report) if report.contains::<crate::store::Occupied>() => {
+            tracing::warn!(
+                target: "amethystate",
+                path = %path,
+                error = %crate::store::one_line(&report),
+                "the field starts on its default: the store already holds something in the way, \
+                 and seeding over it would destroy it",
+            );
+            Ok(())
+        }
+        other => other,
+    }
 }
 
 /// Every entry stored under `path`, keyed by the level below it.

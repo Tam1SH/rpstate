@@ -1,7 +1,8 @@
 use crate::StorageResult;
 use crate::codec::CodecError;
 use crate::store::backend::text::document::{
-    Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
+    Navigable, TextDocument, generic_delete, generic_delete_subtree, generic_get, generic_scan,
+    generic_set,
 };
 use crate::store::backend::text::error::TextStoreError;
 use crate::store::{CodecFormat, StorageError};
@@ -22,14 +23,16 @@ impl Navigable for serde_json::Value {
     fn get_child_mut(&mut self, key: &str) -> Option<&mut Self> {
         self.get_mut(key)
     }
-    fn ensure_map(&mut self) {
-        if !self.is_object() {
-            *self = Self::make_empty_map();
-        }
+    fn is_map(&self) -> bool {
+        self.is_object()
+    }
+    fn has_children(&self) -> bool {
+        self.as_object().is_some_and(|m| !m.is_empty())
     }
     fn insert_child(&mut self, key: &str, val: Self) {
-        self.ensure_map();
-        self.as_object_mut().unwrap().insert(key.to_string(), val);
+        if let Some(map) = self.as_object_mut() {
+            map.insert(key.to_string(), val);
+        }
     }
     fn remove_child(&mut self, key: &str) -> Option<Self> {
         self.as_object_mut().and_then(|m| m.remove(key))
@@ -57,7 +60,7 @@ impl TextDocument for JsonDocument {
     }
 
     fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()> {
-        let is_root = parts.is_empty() || parts == ["."];
+        let is_root = parts.is_empty();
         if is_root {
             if !node.is_object() {
                 return Err(Report::new(TextStoreError::RootMustBeObject)
@@ -72,6 +75,10 @@ impl TextDocument for JsonDocument {
 
     fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>> {
         generic_delete(&mut self.0, parts)
+    }
+
+    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()> {
+        generic_delete_subtree(&mut self.0, parts)
     }
 
     fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>> {

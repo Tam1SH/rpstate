@@ -1,7 +1,8 @@
 use crate::StorageResult;
 use crate::codec::CodecError;
 use crate::store::backend::text::document::{
-    Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
+    Navigable, TextDocument, generic_delete, generic_delete_subtree, generic_get, generic_scan,
+    generic_set,
 };
 use crate::store::backend::text::error::TextStoreError;
 use crate::store::{CodecFormat, StorageError};
@@ -30,13 +31,13 @@ impl Navigable for ::ron::value::Value {
             None
         }
     }
-    fn ensure_map(&mut self) {
-        if !matches!(self, ::ron::value::Value::Map(_)) {
-            *self = Self::make_empty_map();
-        }
+    fn is_map(&self) -> bool {
+        matches!(self, ::ron::value::Value::Map(_))
+    }
+    fn has_children(&self) -> bool {
+        matches!(self, ::ron::value::Value::Map(map) if !map.is_empty())
     }
     fn insert_child(&mut self, key: &str, val: Self) {
-        self.ensure_map();
         if let ::ron::value::Value::Map(map) = self {
             map.insert(::ron::value::Value::String(key.to_string()), val);
         }
@@ -73,7 +74,7 @@ impl TextDocument for RonDocument {
     }
 
     fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()> {
-        let is_root = parts.is_empty() || parts == ["."];
+        let is_root = parts.is_empty();
         if is_root {
             if !matches!(node, ::ron::value::Value::Map(_)) {
                 return Err(Report::new(TextStoreError::RootMustBeObject)
@@ -88,6 +89,10 @@ impl TextDocument for RonDocument {
 
     fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>> {
         generic_delete(&mut self.0, parts)
+    }
+
+    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()> {
+        generic_delete_subtree(&mut self.0, parts)
     }
 
     fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>> {

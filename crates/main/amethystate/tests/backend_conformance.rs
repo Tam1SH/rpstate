@@ -84,7 +84,7 @@
 use amethystate::Store;
 use amethystate::errors::WriteError;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{StorageError, StorePath, StorePathError, SubscriptionKind};
+use amethystate::store::{Occupied, StorageError, StorePath, StorePathError, SubscriptionKind};
 use amethystate_core::test_utils::TempPath;
 use proptest::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -215,11 +215,11 @@ fn a_value_reads_back_where_it_was_written(backend: Backend) {
 }
 
 /// 2. A value written at one path is readable at no other: a path nobody wrote
-///    holds nothing, including the parent of a path somebody did.
+///    and nobody wrote under holds nothing.
 ///
-/// The parents are asked about explicitly. A generated probe lands on an
-/// ancestor of a written path about never, and an ancestor is where an engine
-/// that stores a tree has something to hand back.
+/// An ancestor of a written path is excluded, and asked about separately by
+/// `an_ancestor_is_not_a_value` - a tree engine has a node there where a flat
+/// one has no key, and the two answer differently without either being wrong.
 fn a_write_leaves_every_other_path_alone(backend: Backend) {
     proptest!(config(), |(raw in path_set(), probe in path())| {
         let file = TempPath::new("conf_no_other_path");
@@ -229,27 +229,39 @@ fn a_write_leaves_every_other_path_alone(backend: Backend) {
         write_leaves(&store, &written);
 
         let probe = StorePath::from_segments(&probe);
-        if !written.contains(&probe) {
+        let is_ancestor = written.iter().any(|path| path.starts_with(&probe));
+
+        if !written.contains(&probe) && !is_ancestor {
             prop_assert_eq!(
                 store.get::<u32>(&probe).ok(),
                 Some(None),
                 "nothing was written at {}", probe
             );
         }
+    });
+}
 
-        for path in &written {
-            let mut current = path.clone();
-            while let Some(parent) = current.parent() {
-                if !parent.is_root() && !written.contains(&parent) {
-                    prop_assert_eq!(
-                        store.get::<u32>(&parent).ok(),
-                        Some(None),
-                        "nothing was written at {}, only under it", parent
-                    );
-                }
-                current = parent;
-            }
-        }
+/// A path with values under it and none of its own never reads back as a value.
+///
+/// Where the engines are allowed to differ: the flat ones hold no key there and
+/// answer `Ok(None)`, the document ones hold a node and answer with a decode
+/// failure. What none of them may do is hand back something that reads as a
+/// value, because the only value in reach is one that belongs to a path
+/// underneath - and a caller cannot tell that apart from a real reading.
+fn an_ancestor_is_not_a_value(backend: Backend) {
+    proptest!(config(), |(head in path(), child in segment())| {
+        let file = TempPath::new("conf_ancestor");
+        let store = open(backend, &file);
+
+        let parent = StorePath::from_segments(&head);
+        let under = parent.push(&child);
+        store.set(&under, &7u32).unwrap();
+
+        prop_assert_ne!(
+            store.get::<u32>(&parent).ok().flatten(),
+            Some(7),
+            "reading {} handed back the value stored at {}", parent, under
+        );
     });
 }
 
@@ -302,13 +314,17 @@ fn writing_then_deleting_leaves_the_store_as_it_was(backend: Backend) {
     });
 }
 
-/// 5. Deleting a path that holds no value is not an error and changes nothing -
-///    not even when other values are stored under it, since `delete_prefix` is
-///    the call that takes a subtree.
+/// 5. Deleting a path nothing was written at is not an error and changes
+///    nothing.
 ///
-/// The ancestors are deleted explicitly for the same reason property 2 reads
-/// them explicitly: a generated path lands on one about never, and an ancestor
-/// is the only path where `delete` and `delete_prefix` could be confused.
+/// An ancestor of a written path is deliberately not asked about here, though
+/// it is exactly where `delete` and `delete_prefix` could be confused. A
+/// document engine stores a map-valued field as the same node a level with
+/// values under it is, and `delete` is handed a path and nothing else, so it
+/// cannot tell the two apart: refusing to remove a node with children would
+/// refuse to delete a field whose value is a struct. The flat engines have no
+/// key at an ancestor and take nothing; the document engines take the subtree.
+/// Recorded rather than demanded - see `an_ancestor_is_not_a_value` below.
 fn deleting_what_is_not_there_changes_nothing(backend: Backend) {
     proptest!(config(), |(raw in path_set(), absent in path())| {
         let file = TempPath::new("conf_delete_absent");
@@ -329,23 +345,6 @@ fn deleting_what_is_not_there_changes_nothing(backend: Backend) {
             "deleting {}, which holds nothing", absent
         );
 
-        for path in &written {
-            let mut current = path.clone();
-            while let Some(parent) = current.parent() {
-                if parent.is_root() || written.contains(&parent) {
-                    current = parent;
-                    continue;
-                }
-
-                store.delete(&parent).unwrap();
-                prop_assert_eq!(
-                    store.scan_prefix(StorePath::root()).unwrap(),
-                    before.clone(),
-                    "deleting {}, which holds nothing but has values under it", parent
-                );
-                current = parent;
-            }
-        }
     });
 }
 
@@ -586,12 +585,17 @@ fn a_name_holding_the_separator_stays_one_level(backend: Backend) {
     });
 }
 
-/// 12. A value at a name and values under that name coexist: neither write
-///     destroys the other.
+/// 12. A value at a name and values under that name either coexist, or the
+///     second write is refused and the first survives. Neither is destroyed.
 ///
-/// The only property that deliberately builds an ancestry relation, in both
-/// orders, because the order the two writes arrive in is exactly what decides
-/// whether an engine that walks a tree keeps them both.
+/// The one place the suite does not ask for the same answer from everyone. A
+/// document holds a value at a node or values under it, never both, so the flat
+/// engines take the second write and the document engines refuse it - and a
+/// refusal that leaves the first value alone is as good an answer as keeping
+/// both. What stays universal is that nothing is lost without a word.
+///
+/// Both orders, because the order the two writes arrive in is what decides
+/// which of the two an engine that walks a tree would have destroyed.
 fn a_leaf_and_a_branch_coexist_at_one_name(backend: Backend) {
     proptest!(config(), |(head in path(), child in segment())| {
         let file = TempPath::new("conf_leaf_and_branch");
@@ -600,26 +604,54 @@ fn a_leaf_and_a_branch_coexist_at_one_name(backend: Backend) {
         let node = StorePath::segment("leaf_first").join(&StorePath::from_segments(&head));
         let under = node.push(&child);
         store.set(&node, &1u32).unwrap();
-        store.set(&under, &2u32).unwrap();
 
-        prop_assert_eq!(
-            store.get::<u32>(&node).ok(),
-            Some(Some(1)),
-            "writing under {} lost the value at it", node
-        );
-        prop_assert_eq!(store.get::<u32>(&under).ok(), Some(Some(2)));
+        match store.set(&under, &2u32) {
+            Ok(()) => {
+                prop_assert_eq!(
+                    store.get::<u32>(&node).ok(),
+                    Some(Some(1)),
+                    "writing under {} lost the value at it", node
+                );
+                prop_assert_eq!(store.get::<u32>(&under).ok(), Some(Some(2)));
+            }
+            Err(refused) => {
+                prop_assert!(
+                    refused.contains::<Occupied>(),
+                    "refused for some other reason: {refused:?}"
+                );
+                prop_assert_eq!(
+                    store.get::<u32>(&node).ok(),
+                    Some(Some(1)),
+                    "the write under {} was refused and took the value at it anyway", node
+                );
+            }
+        }
 
         let node = StorePath::segment("branch_first").join(&StorePath::from_segments(&head));
         let under = node.push(&child);
         store.set(&under, &2u32).unwrap();
-        store.set(&node, &1u32).unwrap();
 
-        prop_assert_eq!(store.get::<u32>(&node).ok(), Some(Some(1)));
-        prop_assert_eq!(
-            store.get::<u32>(&under).ok(),
-            Some(Some(2)),
-            "writing at {} lost what was under it", node
-        );
+        match store.set(&node, &1u32) {
+            Ok(()) => {
+                prop_assert_eq!(store.get::<u32>(&node).ok(), Some(Some(1)));
+                prop_assert_eq!(
+                    store.get::<u32>(&under).ok(),
+                    Some(Some(2)),
+                    "writing at {} lost what was under it", node
+                );
+            }
+            Err(refused) => {
+                prop_assert!(
+                    refused.contains::<Occupied>(),
+                    "refused for some other reason: {refused:?}"
+                );
+                prop_assert_eq!(
+                    store.get::<u32>(&under).ok(),
+                    Some(Some(2)),
+                    "the write at {} was refused and took what was under it anyway", node
+                );
+            }
+        }
     });
 }
 
@@ -1027,6 +1059,11 @@ macro_rules! conformance_suite {
         #[test]
         fn a_write_leaves_every_other_path_alone() {
             super::a_write_leaves_every_other_path_alone(BACKEND);
+        }
+
+        #[test]
+        fn an_ancestor_is_not_a_value() {
+            super::an_ancestor_is_not_a_value(BACKEND);
         }
 
         #[test]

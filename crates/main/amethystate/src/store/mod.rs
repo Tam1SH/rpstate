@@ -15,7 +15,7 @@ pub mod util;
 
 pub use amethystate_core::path::{IntoStorePath, StorePath, StorePathError};
 pub use durable::{Commit, Durable};
-pub use error::{IntoStorageReport, StorageError, StorageResult};
+pub use error::{IntoStorageReport, Occupied, StorageError, StorageResult, one_line};
 pub use kv::Kv;
 pub use primitives_factory::*;
 pub use state_slice::*;

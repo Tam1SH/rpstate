@@ -67,6 +67,65 @@ impl std::error::Error for StorageError {}
 
 pub type StorageResult<T> = Result<T, Report<StorageError>>;
 
+/// A write a document engine cannot represent, refused rather than carried out.
+///
+/// A tree holds a value at a node or values under it, never both, so one of the
+/// two writes has to lose. Refusing the second is the only answer that does not
+/// destroy the first. The flat engines have no such limit and never report
+/// this.
+///
+/// Sits below [`StorageError::Write`] so that a caller who has to tell this
+/// apart - a seeding write, which nobody asked for, backs off where a real one
+/// propagates - can do it without knowing which engine is underneath.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Occupied {
+    /// A value is stored at a level the write needs as a branch.
+    Value { level: String },
+
+    /// Values are stored under the level a plain value would replace.
+    ///
+    /// Only a value that is not itself a map is refused here. A serialized
+    /// struct is a map with children, indistinguishable in a document from a
+    /// level with values under it, so writing one over another is taken as the
+    /// update it almost always is.
+    Branch { level: String },
+}
+
+impl fmt::Display for Occupied {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Occupied::Value { level } => {
+                write!(
+                    f,
+                    "`{level}` holds a value, so nothing can be stored under it"
+                )
+            }
+            Occupied::Branch { level } => write!(
+                f,
+                "`{level}` holds values under it, so a value cannot be stored at it"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Occupied {}
+
+/// A report's chain of contexts on one line, for a log record.
+///
+/// A report's `Display` shows only the outermost context, which is the one that
+/// says least: "the store could not write" without what refused it. This keeps
+/// the causes and drops the attachments, so the line stays greppable.
+pub fn one_line<C: fmt::Display + Send + Sync + 'static>(report: &Report<C>) -> String {
+    report
+        .frames()
+        .filter_map(|frame| match frame.kind() {
+            error_stack::FrameKind::Context(context) => Some(context.to_string()),
+            error_stack::FrameKind::Attachment(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" <- ")
+}
+
 /// What a migration step returns when it decides to fail.
 ///
 /// A step is written by whoever uses the library, and the frames around it -

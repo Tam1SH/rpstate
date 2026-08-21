@@ -2,7 +2,8 @@ use crate::StorageResult;
 use crate::codec::CodecError;
 use crate::store::backend::text::TextStoreError;
 use crate::store::backend::text::document::{
-    Navigable, TextDocument, generic_delete, generic_get, generic_scan, generic_set,
+    Navigable, TextDocument, generic_delete, generic_delete_subtree, generic_get, generic_scan,
+    generic_set,
 };
 use crate::store::{CodecFormat, StorageError};
 use error_stack::{Report, ResultExt};
@@ -22,17 +23,19 @@ impl Navigable for toml_edit::Item {
     fn get_child_mut(&mut self, key: &str) -> Option<&mut Self> {
         self.get_mut(key)
     }
-    fn ensure_map(&mut self) {
-        if !self.is_table() {
-            *self = Self::make_empty_map();
-        }
+    fn is_map(&self) -> bool {
+        self.as_table_like().is_some()
+    }
+    fn has_children(&self) -> bool {
+        self.as_table_like().is_some_and(|t| !t.is_empty())
     }
     fn insert_child(&mut self, key: &str, val: Self) {
-        self.ensure_map();
-        self.as_table_mut().unwrap().insert(key, val);
+        if let Some(table) = self.as_table_like_mut() {
+            table.insert(key, val);
+        }
     }
     fn remove_child(&mut self, key: &str) -> Option<Self> {
-        self.as_table_mut().and_then(|t| t.remove(key))
+        self.as_table_like_mut().and_then(|t| t.remove(key))
     }
     fn scan_children(&self) -> Vec<(String, Self)> {
         let mut results = Vec::new();
@@ -57,7 +60,7 @@ impl TextDocument for TomlDocument {
     }
 
     fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()> {
-        let is_root = parts.is_empty() || parts == ["."];
+        let is_root = parts.is_empty();
         if is_root {
             let table = match node.into_table() {
                 Ok(t) => t,
@@ -78,6 +81,10 @@ impl TextDocument for TomlDocument {
             return Ok(None);
         }
         generic_delete(self.0.as_item_mut(), parts)
+    }
+
+    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()> {
+        generic_delete_subtree(self.0.as_item_mut(), parts)
     }
 
     fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>> {

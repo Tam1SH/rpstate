@@ -11,20 +11,9 @@ pub mod registry;
 pub mod set;
 pub mod types;
 
-use crate::store::{StorageError, StorageResult, meta};
+use crate::store::{StorageError, StorageResult, meta, one_line};
 pub use context::MigrationContext;
 pub use error::MigrationError;
-
-fn one_line(report: &error_stack::Report<StorageError>) -> String {
-    report
-        .frames()
-        .filter_map(|frame| match frame.kind() {
-            error_stack::FrameKind::Context(context) => Some(context.to_string()),
-            error_stack::FrameKind::Attachment(_) => None,
-        })
-        .collect::<Vec<_>>()
-        .join(" <- ")
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaDiff {

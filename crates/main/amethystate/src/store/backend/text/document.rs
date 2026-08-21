@@ -1,7 +1,7 @@
 use crate::store::CodecFormat;
-use crate::store::{StorageError, StorageResult};
+use crate::store::{Occupied, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
-use error_stack::ResultExt;
+use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -13,6 +13,7 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     fn get(&self, parts: &[&str]) -> Option<&Self::Node>;
     fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()>;
     fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>>;
+    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()>;
     fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>>;
     fn parse(src: &str) -> StorageResult<Self>;
     fn serialize(&self) -> StorageResult<String>;
@@ -33,23 +34,14 @@ pub trait Navigable: Sized + Clone {
     fn make_empty_map() -> Self;
     fn get_child(&self, key: &str) -> Option<&Self>;
     fn get_child_mut(&mut self, key: &str) -> Option<&mut Self>;
-    fn ensure_map(&mut self);
+    fn is_map(&self) -> bool;
+    fn has_children(&self) -> bool;
     fn insert_child(&mut self, key: &str, val: Self);
     fn remove_child(&mut self, key: &str) -> Option<Self>;
     fn scan_children(&self) -> Vec<(String, Self)>;
 }
 
-/// Normalises `parts` so that `["."]` (the global-namespace sentinel produced
-/// by `split_path(".")`) is treated identically to `[]` (the empty path that
-/// means "the whole document root").
-#[inline]
-fn normalise_parts<'a>(parts: &'a [&'a str]) -> &'a [&'a str] {
-    if parts == ["."] { &[] } else { parts }
-}
-
 pub fn generic_get<'a, N: Navigable>(root: &'a N, parts: &[&str]) -> Option<&'a N> {
-    let parts = normalise_parts(parts);
-
     if parts.is_empty() {
         return Some(root);
     }
@@ -62,29 +54,67 @@ pub fn generic_get<'a, N: Navigable>(root: &'a N, parts: &[&str]) -> Option<&'a 
 }
 
 pub fn generic_set<N: Navigable>(root: &mut N, parts: &[&str], node: N) -> StorageResult<()> {
-    let parts = normalise_parts(parts);
-
     if parts.is_empty() {
         *root = node;
         return Ok(());
     }
     let (last, heads) = parts.split_last().unwrap();
     let mut current = root;
-    for &part in heads {
-        current.ensure_map();
+    for (at, &part) in heads.iter().enumerate() {
+        if !current.is_map() {
+            return Err(refused(
+                Occupied::Value {
+                    level: level(parts, at),
+                },
+                parts,
+            ));
+        }
         if current.get_child(part).is_none() {
             current.insert_child(part, N::make_empty_map());
         }
         current = current.get_child_mut(part).unwrap();
     }
-    current.ensure_map();
+
+    if !current.is_map() {
+        return Err(refused(
+            Occupied::Value {
+                level: level(parts, heads.len()),
+            },
+            parts,
+        ));
+    }
+    if !node.is_map()
+        && let Some(existing) = current.get_child(last)
+        && existing.is_map()
+        && existing.has_children()
+    {
+        return Err(refused(
+            Occupied::Branch {
+                level: level(parts, parts.len()),
+            },
+            parts,
+        ));
+    }
+
     current.insert_child(last, node);
     Ok(())
 }
 
-pub fn generic_delete<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResult<Option<N>> {
-    let parts = normalise_parts(parts);
+fn level(parts: &[&str], upto: usize) -> String {
+    StorePath::from_segments(&parts[..upto])
+        .as_str()
+        .to_string()
+}
 
+fn refused(occupied: Occupied, parts: &[&str]) -> Report<StorageError> {
+    let writing = StorePath::from_segments(parts);
+    Report::new(occupied)
+        .change_context(StorageError::Write)
+        .attach(format!("writing: {writing}"))
+        .attach("a document holds a value at a level or values under it, never both")
+}
+
+pub fn generic_delete<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResult<Option<N>> {
     if parts.is_empty() {
         return Ok(None);
     }
@@ -97,12 +127,30 @@ pub fn generic_delete<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResu
             return Ok(None);
         }
     }
+
     Ok(current.remove_child(last))
 }
 
-pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> StorageResult<Vec<(String, N)>> {
-    let parts = normalise_parts(parts);
+pub fn generic_delete_subtree<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResult<()> {
+    if parts.is_empty() {
+        *root = N::make_empty_map();
+        return Ok(());
+    }
 
+    let (last, heads) = parts.split_last().unwrap();
+    let mut current = root;
+    for &part in heads {
+        match current.get_child_mut(part) {
+            Some(next) => current = next,
+            None => return Ok(()),
+        }
+    }
+
+    current.remove_child(last);
+    Ok(())
+}
+
+pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> StorageResult<Vec<(String, N)>> {
     let mut results = Vec::new();
     let prefix = StorePath::from_segments(parts);
 

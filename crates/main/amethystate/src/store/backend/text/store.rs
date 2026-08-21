@@ -515,26 +515,14 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.pull_external_changes();
 
         {
-            let mut guard = self.files.data.doc.write();
-            let keys: Vec<String> = scan_prefix_impl(&*guard, prefix)
+            let parts: Vec<&str> = prefix.segments().collect();
+            self.files
+                .data
+                .doc
+                .write()
+                .delete_subtree(&parts)
                 .doing(StorageError::Delete, &self.files.data.path)
-                .attach_with(|| format!("prefix: {prefix}"))?
-                .into_iter()
-                .map(|(path, _)| path)
-                .collect();
-
-            for key in keys {
-                let path = StorePath::parse_joined(&key)
-                    .change_context(StorageError::Delete)
-                    .attach_with(|| format!("prefix: {prefix}"))
-                    .attach_with(|| format!("stored key: {key}"))?;
-                let parts: Vec<&str> = path.segments().collect();
-                guard
-                    .delete(&parts)
-                    .doing(StorageError::Delete, &self.files.data.path)
-                    .attach_with(|| format!("prefix: {prefix}"))
-                    .attach_with(|| format!("node: {key}"))?;
-            }
+                .attach_with(|| format!("prefix: {prefix}"))?;
         }
 
         self.writes.fetch_add(1, Ordering::Release);
