@@ -6,7 +6,7 @@ use syn::{Expr, GenericArgument, Ident, PathArguments, Type, TypePath, Visibilit
 #[derive(Debug, darling::FromMeta, Clone)]
 pub struct MacroArgs {
     #[darling(default)]
-    pub prefix: Option<String>,
+    pub prefix: Option<SpannedValue<String>>,
     #[darling(default)]
     pub version: Option<u32>,
     #[darling(default)]
@@ -22,7 +22,7 @@ pub struct StoreFieldEntry {
     pub ident: Option<Ident>,
     pub vis: Visibility,
     pub ty: Type,
-    pub key: Option<String>,
+    pub key: Option<SpannedValue<String>>,
     pub default: Option<TokenStream2>,
     pub nested: bool,
     pub lookup: Option<SpannedValue<String>>,
@@ -30,6 +30,20 @@ pub struct StoreFieldEntry {
     pub parent: Option<Expr>,
     pub export_mut: bool,
     pub volatile: bool,
+}
+
+impl StoreFieldEntry {
+    /// The name this field is stored under: what `key` says, or the field's own.
+    pub fn stored_name(&self) -> String {
+        match &self.key {
+            Some(key) => key.as_ref().clone(),
+            None => self
+                .ident
+                .as_ref()
+                .map(|ident| ident.to_string())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 impl FromField for StoreFieldEntry {
@@ -99,7 +113,7 @@ fn split_top_level_commas(tokens: TokenStream2) -> Vec<TokenStream2> {
 #[allow(clippy::too_many_arguments)]
 fn parse_state_tokens(
     tokens: TokenStream2,
-    key: &mut Option<String>,
+    key: &mut Option<SpannedValue<String>>,
     default: &mut Option<TokenStream2>,
     nested: &mut bool,
     lookup: &mut Option<SpannedValue<String>>,
@@ -132,7 +146,7 @@ fn parse_state_tokens(
                 "default" => *default = Some(value),
                 "key" => {
                     let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
-                    *key = Some(lit.value());
+                    *key = Some(SpannedValue::new(lit.value(), lit.span()));
                 }
                 "lookup" => {
                     let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;

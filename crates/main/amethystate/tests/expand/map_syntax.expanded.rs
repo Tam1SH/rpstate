@@ -697,7 +697,12 @@ impl DatabaseConfig {
                 store,
                 namespace
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["host"], "host"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["host"],
+                                "host",
+                            )
+                        },
                     ),
                 "localhost".to_string(),
                 instance_id,
@@ -1030,10 +1035,12 @@ impl DatabaseConfig_Data {
                     store,
                     &prefix
                         .join(
-                            &::amethystate::store::StorePath::from_static(
-                                &["host"],
-                                "host",
-                            ),
+                            &const {
+                                ::amethystate::store::StorePath::from_static(
+                                    &["host"],
+                                    "host",
+                                )
+                            },
                         ),
                 )?
                 .unwrap_or_else(|| "localhost".to_string()),
@@ -1048,7 +1055,11 @@ impl DatabaseConfig_Data {
         <::amethystate::Store as ::amethystate::StoreExt>::set(
             &store,
             &prefix
-                .join(&::amethystate::store::StorePath::from_static(&["host"], "host")),
+                .join(
+                    &const {
+                        ::amethystate::store::StorePath::from_static(&["host"], "host")
+                    },
+                ),
             &self.host,
         )?;
         Ok(())
@@ -1201,7 +1212,9 @@ impl SystemSettings {
                     store,
                     <Self as ::amethystate::StateScope>::PATH
                         .join(
-                            &::amethystate::store::StorePath::from_static(&["db"], "db"),
+                            &const {
+                                ::amethystate::store::StorePath::from_static(&["db"], "db")
+                            },
                         ),
                     instance_id,
                 )?,
@@ -1210,10 +1223,12 @@ impl SystemSettings {
                 store,
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(
-                            &["monitoring"],
-                            "monitoring",
-                        ),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["monitoring"],
+                                "monitoring",
+                            )
+                        },
                     ),
                 MonitoringConfig {
                     enabled: true,
@@ -1232,10 +1247,12 @@ impl SystemSettings {
                 store,
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(
-                            &["limits"],
-                            "limits",
-                        ),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["limits"],
+                                "limits",
+                            )
+                        },
                     ),
                 {
                     let mut __map = ::std::collections::HashMap::default();
@@ -1263,10 +1280,12 @@ impl SystemSettings {
                 store,
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(
-                            &["presets"],
-                            "presets",
-                        ),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["presets"],
+                                "presets",
+                            )
+                        },
                     ),
                 <[_]>::into_vec(
                     ::alloc::boxed::box_new([
@@ -1947,9 +1966,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some(
-                    ::amethystate::store::StorePath::from_static(&["sys"], "sys"),
-                ),
+                prefix: Some(const {
+                    ::amethystate::store::StorePath::from_static(&["sys"], "sys")
+                }),
                 struct_name: "SystemSettings",
                 version: 0u32,
                 schema_hash: <SystemSettings_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

@@ -10,11 +10,11 @@ fn scanning_a_prefix_stops_at_a_segment_boundary() {
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let kv = store.kv();
 
-    kv.namespace("ui").unwrap().set("width", &1280u32).unwrap();
-    kv.namespace("uix").unwrap().set("width", &640u32).unwrap();
+    kv.namespace("ui").set("width", &1280u32).unwrap();
+    kv.namespace("uix").set("width", &640u32).unwrap();
 
     assert_eq!(
-        kv.namespace("ui").unwrap().keys().unwrap(),
+        kv.namespace("ui").keys().unwrap(),
         ["ui.width"],
         "uix is a different subtree"
     );
@@ -28,17 +28,14 @@ fn deleting_a_prefix_leaves_a_sibling_with_a_shared_leading_string() {
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let kv = store.kv();
 
-    kv.namespace("ui").unwrap().set("width", &1280u32).unwrap();
-    kv.namespace("uix").unwrap().set("width", &640u32).unwrap();
+    kv.namespace("ui").set("width", &1280u32).unwrap();
+    kv.namespace("uix").set("width", &640u32).unwrap();
 
     store.delete_prefix(["ui"]).unwrap();
 
+    assert_eq!(kv.namespace("ui").get::<u32>("width").unwrap(), None);
     assert_eq!(
-        kv.namespace("ui").unwrap().get::<u32>("width").unwrap(),
-        None
-    );
-    assert_eq!(
-        kv.namespace("uix").unwrap().get::<u32>("width").unwrap(),
+        kv.namespace("uix").get::<u32>("width").unwrap(),
         Some(640),
         "a sibling subtree survives"
     );
@@ -53,19 +50,13 @@ fn a_path_segment_with_glob_metacharacters_scans_as_a_literal() {
     let store = StoreBuilder::new(path.path()).build().unwrap();
     let kv = store.kv();
 
-    kv.namespace("cfg[a]").unwrap().set("width", &1u32).unwrap();
-    kv.namespace("cfg[a]")
-        .unwrap()
-        .set("height", &2u32)
-        .unwrap();
+    kv.namespace("cfg[a]").set("width", &1u32).unwrap();
+    kv.namespace("cfg[a]").set("height", &2u32).unwrap();
     store.flush_prefix(StorePath::root()).unwrap();
 
-    assert_eq!(
-        kv.namespace("cfg[a]").unwrap().get::<u32>("width").unwrap(),
-        Some(1)
-    );
+    assert_eq!(kv.namespace("cfg[a]").get::<u32>("width").unwrap(), Some(1));
 
-    let mut keys = kv.namespace("cfg[a]").unwrap().keys().unwrap();
+    let mut keys = kv.namespace("cfg[a]").keys().unwrap();
     keys.sort();
     assert_eq!(
         keys,
@@ -82,7 +73,6 @@ fn a_map_at_a_path_with_glob_metacharacters_reports_its_entries() {
     let map = store
         .kv()
         .namespace("panel[0]")
-        .unwrap()
         .map::<String, u32>("widths")
         .unwrap();
 
@@ -110,7 +100,6 @@ fn a_map_at_a_plain_path_reports_its_entries() {
     let map = store
         .kv()
         .namespace("panel0")
-        .unwrap()
         .map::<String, u32>("widths")
         .unwrap();
 

@@ -74,10 +74,12 @@ impl ConnectionPool {
                 store,
                 namespace
                     .join(
-                        &::amethystate::store::StorePath::from_static(
-                            &["max_connections"],
-                            "max_connections",
-                        ),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["max_connections"],
+                                "max_connections",
+                            )
+                        },
                     ),
                 10,
                 instance_id,
@@ -86,10 +88,12 @@ impl ConnectionPool {
                 store,
                 namespace
                     .join(
-                        &::amethystate::store::StorePath::from_static(
-                            &["timeout_secs"],
-                            "timeout_secs",
-                        ),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["timeout_secs"],
+                                "timeout_secs",
+                            )
+                        },
                     ),
                 30,
                 instance_id,
@@ -497,10 +501,12 @@ impl ConnectionPool_Data {
                     store,
                     &prefix
                         .join(
-                            &::amethystate::store::StorePath::from_static(
-                                &["max_connections"],
-                                "max_connections",
-                            ),
+                            &const {
+                                ::amethystate::store::StorePath::from_static(
+                                    &["max_connections"],
+                                    "max_connections",
+                                )
+                            },
                         ),
                 )?
                 .unwrap_or_else(|| 10),
@@ -510,10 +516,12 @@ impl ConnectionPool_Data {
                     store,
                     &prefix
                         .join(
-                            &::amethystate::store::StorePath::from_static(
-                                &["timeout_secs"],
-                                "timeout_secs",
-                            ),
+                            &const {
+                                ::amethystate::store::StorePath::from_static(
+                                    &["timeout_secs"],
+                                    "timeout_secs",
+                                )
+                            },
                         ),
                 )?
                 .unwrap_or_else(|| 30),
@@ -529,10 +537,12 @@ impl ConnectionPool_Data {
             &store,
             &prefix
                 .join(
-                    &::amethystate::store::StorePath::from_static(
-                        &["max_connections"],
-                        "max_connections",
-                    ),
+                    &const {
+                        ::amethystate::store::StorePath::from_static(
+                            &["max_connections"],
+                            "max_connections",
+                        )
+                    },
                 ),
             &self.max_connections,
         )?;
@@ -540,10 +550,12 @@ impl ConnectionPool_Data {
             &store,
             &prefix
                 .join(
-                    &::amethystate::store::StorePath::from_static(
-                        &["timeout_secs"],
-                        "timeout_secs",
-                    ),
+                    &const {
+                        ::amethystate::store::StorePath::from_static(
+                            &["timeout_secs"],
+                            "timeout_secs",
+                        )
+                    },
                 ),
             &self.timeout_secs,
         )?;
@@ -693,10 +705,12 @@ impl DatabaseState {
                     store,
                     <Self as ::amethystate::StateScope>::PATH
                         .join(
-                            &::amethystate::store::StorePath::from_static(
-                                &["pool"],
-                                "pool",
-                            ),
+                            &const {
+                                ::amethystate::store::StorePath::from_static(
+                                    &["pool"],
+                                    "pool",
+                                )
+                            },
                         ),
                     instance_id,
                 )?,
@@ -1070,12 +1084,12 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some(
+                prefix: Some(const {
                     ::amethystate::store::StorePath::from_static(
                         &["sys", "database"],
                         "sys.database",
-                    ),
-                ),
+                    )
+                }),
                 struct_name: "DatabaseState",
                 version: 0u32,
                 schema_hash: <DatabaseState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
@@ -1192,7 +1206,12 @@ impl InspectorState {
                 };
                 let path = <DatabaseState as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["pool"], "pool"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["pool"],
+                                "pool",
+                            )
+                        },
                     );
                 ::std::sync::Arc::new(
                     <ConnectionPool as ::amethystate::AmeStateNode>::new_node_with_id(
@@ -1505,12 +1524,12 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some(
+                prefix: Some(const {
                     ::amethystate::store::StorePath::from_static(
                         &["ui", "inspector"],
                         "ui.inspector",
-                    ),
-                ),
+                    )
+                }),
                 struct_name: "InspectorState",
                 version: 0u32,
                 schema_hash: <InspectorState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

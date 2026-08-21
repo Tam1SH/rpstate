@@ -113,7 +113,7 @@ impl<T: Clone + 'static> FieldCore<T> {
             // Letting the change through unchecked would turn a validating
             // interceptor off exactly where recursion is deepest, and the value
             // it exists to reject would reach the backend.
-            return Err("Maximum intercept depth reached".to_string());
+            return Err("interceptors nested too deep".to_string());
         };
 
         let interceptors = { self.interceptors.lock().unwrap().clone() };
@@ -121,7 +121,7 @@ impl<T: Clone + 'static> FieldCore<T> {
             if let Some(new_change) = interceptor(change.clone()) {
                 change = new_change;
             } else {
-                return Err("Change intercepted by core filter".to_string());
+                return Err("refused by an interceptor on the field".to_string());
             }
         }
 

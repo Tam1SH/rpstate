@@ -60,6 +60,18 @@ impl fmt::Display for WriteError {
 
 impl std::error::Error for WriteError {}
 
+impl WriteError {
+    /// The refusal an interceptor gave, kept as the frame below
+    /// [`WriteError::Intercepted`].
+    ///
+    /// A filter turning a value down and interceptors recursing past the depth
+    /// guard both end here, and only that sentence tells them apart - the
+    /// second is a bug in the code that installed them.
+    pub fn intercepted(why: String) -> error_stack::Report<Self> {
+        error_stack::Report::new(WriteError::Intercepted).attach(why)
+    }
+}
+
 pub type WriteResult<T> = Result<T, error_stack::Report<WriteError>>;
 
 pub type FieldError = WriteError;

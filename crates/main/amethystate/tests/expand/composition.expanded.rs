@@ -76,7 +76,12 @@ impl NetworkState {
                 store,
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["port"], "port"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["port"],
+                                "port",
+                            )
+                        },
                     ),
                 8080,
                 instance_id,
@@ -85,7 +90,12 @@ impl NetworkState {
                 store,
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["host"], "host"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["host"],
+                                "host",
+                            )
+                        },
                     ),
                 "127.0.0.1".to_string(),
                 instance_id,
@@ -529,9 +539,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some(
-                    ::amethystate::store::StorePath::from_static(&["net"], "net"),
-                ),
+                prefix: Some(const {
+                    ::amethystate::store::StorePath::from_static(&["net"], "net")
+                }),
                 struct_name: "NetworkState",
                 version: 0u32,
                 schema_hash: <NetworkState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
@@ -655,7 +665,12 @@ impl UiState {
                 };
                 let path = <NetworkState as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["port"], "port"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["port"],
+                                "port",
+                            )
+                        },
                     );
                 ::amethystate::store::field_with_path::<
                     u16,
@@ -678,7 +693,12 @@ impl UiState {
                 };
                 let path = <NetworkState as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["host"], "host"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["host"],
+                                "host",
+                            )
+                        },
                     );
                 ::amethystate::store::field_with_path::<
                     String,
@@ -1016,9 +1036,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some(
-                    ::amethystate::store::StorePath::from_static(&["ui"], "ui"),
-                ),
+                prefix: Some(const {
+                    ::amethystate::store::StorePath::from_static(&["ui"], "ui")
+                }),
                 struct_name: "UiState",
                 version: 0u32,
                 schema_hash: <UiState_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

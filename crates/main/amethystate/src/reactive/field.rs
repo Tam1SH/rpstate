@@ -188,7 +188,7 @@ where
     /// assert_eq!(port.path().as_str(), "net.port");
     ///
     /// // The same path addresses it through `Kv`, one segment at a time.
-    /// let net = store.kv().namespace("net").unwrap();
+    /// let net = store.kv().namespace("net");
     /// assert_eq!(net.get::<u16>("port").unwrap(), Some(8080));
     /// ```
     pub fn path(&self) -> StorePath {
@@ -449,7 +449,9 @@ where
                 .inner
                 .core
                 .run_interceptors(self.inner.path.clone(), value, Some(self.inner.instance_id))
-                .map_err(|_| FieldError::Intercepted)?;
+                .map_err(FieldError::intercepted)
+                .attach_with(|| format!("field: {}", self.inner.path))
+                .attach("a volatile field: nothing was going to be stored either way")?;
             self.inner
                 .core
                 .signal
@@ -543,7 +545,7 @@ where
     /// assert_eq!(session.get(), "alice");
     ///
     /// // The store never heard about any of it.
-    /// let app = store.kv().namespace("app").unwrap();
+    /// let app = store.kv().namespace("app");
     /// assert_eq!(app.get::<String>("session").unwrap(), None);
     /// ```
     pub fn new_volatile(path: StorePath, default: TValue) -> Self {

@@ -162,7 +162,6 @@ mod on_disk {
         let kv = store.kv();
 
         kv.namespace("scratch")
-            .unwrap()
             .durable()
             .set("answer", &42u8)
             .unwrap();

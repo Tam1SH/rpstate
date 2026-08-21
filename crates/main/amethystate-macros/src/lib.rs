@@ -29,10 +29,11 @@ mod ts_mapping;
 ///
 /// # How a storage path is built
 ///
-/// A value's path is the struct's prefix and the field's key joined by a dot.
-/// The prefix goes in as written - it is a literal, not a name that gets
-/// derived or mangled - and joining trims a trailing dot from the prefix and a
-/// leading one from the key, so neither side has to know what the other did.
+/// A value's path is the struct's levels followed by the field's. Both sides
+/// are written as a dotted string and taken apart at the dots, so `prefix =
+/// "sys.db"` is two levels rather than one name holding a dot. The names go in
+/// as written - nothing is derived or mangled - and one that holds the
+/// separator or a backslash is escaped when the path is written out as a key.
 ///
 /// | Declaration | Path |
 /// | :--- | :--- |
@@ -42,7 +43,13 @@ mod ts_mapping;
 /// | `#[amethystate(as_root)]`, field `port` | `port` |
 ///
 /// `as_root` gives the struct no levels of its own, so a field's key is the
-/// whole path. An empty prefix behaves the same way.
+/// whole path.
+///
+/// Every level has to have a name, so `prefix = ""`, `prefix = "."`, `prefix =
+/// "a..b"` and `prefix = "a."` are refused where they are written. Dropping the
+/// nameless level instead would turn a mistyped prefix into a struct scoped to
+/// the root, which is a thing a struct is allowed to be: write `as_root` when
+/// that is what was meant.
 ///
 /// The levels are taken apart here, at expansion, and the struct carries them
 /// as `StateScope::PATH`; nothing splits a string at startup. A field reports

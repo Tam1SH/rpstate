@@ -28,7 +28,6 @@ fn kv_refuses_a_path_owned_by_a_prefixed_struct() {
     let err = store
         .kv()
         .namespace("guarded")
-        .unwrap()
         .set("width", &"oops".to_string())
         .unwrap_err();
 

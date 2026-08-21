@@ -63,12 +63,26 @@ impl StorePath {
 
     /// A path whose levels are known when the code is compiled.
     ///
-    /// Both forms are handed over ready, so this allocates nothing and cannot
-    /// fail: whoever writes them - the macro, in practice - is the one that
-    /// checks them, and does it at expansion time rather than at startup.
+    /// Both forms are handed over ready, so this allocates nothing: no level may
+    /// be empty, and `joined` must be exactly what [`StorePath::as_str`] would
+    /// produce for `segments`.
     ///
-    /// `joined` must be what [`StorePath::as_str`] would produce for `segments`.
+    /// Both are checked here rather than trusted. The check is a `const fn`, so
+    /// a path written into a `const` - `StateScope::PATH`, which is where these
+    /// come from - fails to compile when the halves disagree, whether a macro or
+    /// a hand-written impl wrote them. A const panic carries no formatting, so
+    /// it names the invariant and not the level; the `#[amethystate(prefix =
+    /// ...)]` macro checks the same two things first and points at the
+    /// attribute.
+    ///
+    /// # Panics
+    ///
+    /// If any level is empty, or if `joined` is not the joined form of
+    /// `segments`. At compile time when the call is in a const context, which is
+    /// the only place it is meant to be.
     pub const fn from_static(segments: &'static [&'static str], joined: &'static str) -> Self {
+        check_static(segments, joined);
+
         Self {
             segments: Segments::Static(segments),
             joined: Joined::Static(joined),
@@ -81,6 +95,7 @@ impl StorePath {
     ///
     /// If `name` is empty. Use [`StorePath::try_segment`] for a name that comes
     /// from data rather than from the source.
+    #[track_caller]
     pub fn segment(name: impl AsRef<str>) -> Self {
         Self::from_segments([name])
     }
@@ -100,6 +115,7 @@ impl StorePath {
     /// [`StorePath::try_from_segments`] instead, and every call that builds a
     /// path out of a caller's strings - [`IntoStorePath`], and so `Store::get`,
     /// `Kv::set`, `ReactiveMap::insert` - already does.
+    #[track_caller]
     pub fn from_segments<I, S>(segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -142,6 +158,7 @@ impl StorePath {
     ///
     /// If `name` is empty. Use [`StorePath::try_push`] for a name that comes
     /// from data.
+    #[track_caller]
     pub fn push(&self, name: impl AsRef<str>) -> Self {
         self.try_push(name).expect("a path segment cannot be empty")
     }
@@ -351,6 +368,73 @@ impl<S: AsRef<str>> IntoStorePath for Vec<S> {
     fn into_store_path(self) -> Result<StorePath, StorePathError> {
         StorePath::try_from_segments(self)
     }
+}
+
+const SEPARATOR_BYTE: u8 = SEPARATOR as u8;
+const ESCAPE_BYTE: u8 = ESCAPE as u8;
+
+const fn check_static(segments: &[&str], joined: &str) {
+    if has_empty_segment(segments) {
+        panic!("a path segment cannot be empty");
+    }
+
+    if !joins_to(segments, joined) {
+        panic!(
+            "the joined form of a static path must be what StorePath::as_str writes for its segments"
+        );
+    }
+}
+
+const fn has_empty_segment(segments: &[&str]) -> bool {
+    let mut at = 0;
+
+    while at < segments.len() {
+        if segments[at].is_empty() {
+            return true;
+        }
+        at += 1;
+    }
+
+    false
+}
+
+const fn joins_to(segments: &[&str], joined: &str) -> bool {
+    let key = joined.as_bytes();
+    let mut at = 0;
+    let mut i = 0;
+
+    while at < segments.len() {
+        if at > 0 {
+            if i >= key.len() || key[i] != SEPARATOR_BYTE {
+                return false;
+            }
+            i += 1;
+        }
+
+        let segment = segments[at].as_bytes();
+        let mut j = 0;
+
+        while j < segment.len() {
+            let byte = segment[j];
+
+            if byte == SEPARATOR_BYTE || byte == ESCAPE_BYTE {
+                if i >= key.len() || key[i] != ESCAPE_BYTE {
+                    return false;
+                }
+                i += 1;
+            }
+
+            if i >= key.len() || key[i] != byte {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+
+        at += 1;
+    }
+
+    i == key.len()
 }
 
 fn join(segments: &[Arc<str>]) -> Arc<str> {
@@ -766,6 +850,42 @@ mod tests {
                 }
             }
         }
+
+        /// The const check and the join it checks are two writings of one rule,
+        /// and they cannot be reduced to one: const evaluation has no
+        /// allocator, so the verifier cannot call the join. This is the only
+        /// thing keeping them in step, and without it they drift silently -
+        /// which is how a second path parser went unnoticed once already.
+        #[test]
+        fn the_const_check_accepts_what_the_join_writes(segments in path_strategy()) {
+            let path = StorePath::from_segments(&segments);
+            let levels: Vec<&str> = segments.iter().map(String::as_str).collect();
+
+            prop_assert!(
+                joins_to(&levels, path.as_str()),
+                "refused its own join: {:?}", path.as_str()
+            );
+
+            let joined = path.as_str();
+            let perturbed = [
+                format!("{joined}{SEPARATOR}"),
+                format!("{SEPARATOR}{joined}"),
+                format!("{joined}{ESCAPE}"),
+                format!("{joined}x"),
+            ];
+
+            for candidate in perturbed {
+                prop_assert!(
+                    !joins_to(&levels, &candidate),
+                    "accepted {:?} as the join of {:?}", candidate, levels
+                );
+            }
+
+            if levels.len() > 1 {
+                let shorter = StorePath::from_segments(&segments[..segments.len() - 1]);
+                prop_assert!(!joins_to(&levels, shorter.as_str()));
+            }
+        }
     }
 
     /// A golden for one decision, not for a rule: that separators inside a name
@@ -896,8 +1016,8 @@ mod tests {
         assert_eq!(path.segment_at(3), None);
     }
 
-    /// A path the compiler knows costs nothing to build and cannot be wrong,
-    /// because whoever wrote the levels checked them where they were written.
+    /// A path the compiler knows costs nothing to build, and the two halves it
+    /// is handed are checked against each other where they are written.
     #[test]
     fn a_static_path_is_the_same_path() {
         static UI_WIDTH: StorePath = StorePath::from_static(&["ui", "width"], "ui.width");
@@ -906,5 +1026,23 @@ mod tests {
         assert_eq!(UI_WIDTH.as_str(), "ui.width");
         assert_eq!(UI_WIDTH.name(), Some("width"));
         assert!(UI_WIDTH.starts_with(&StorePath::from_static(&["ui"], "ui")));
+    }
+
+    /// The check is the join, so a name holding the separator or the escape
+    /// still writes a static path - it only has to be spelled escaped, the way
+    /// `as_str` would write it. The pairs that do not agree are refused during
+    /// const evaluation, which is a compile error; `tests/fails` pins those.
+    #[test]
+    fn a_static_path_carries_what_a_name_holds() {
+        static ODD: StorePath =
+            StorePath::from_static(&["dark.mode", "a\\b"], "dark\\.mode.a\\\\b");
+        static NOTHING: StorePath = StorePath::from_static(&[], "");
+
+        assert_eq!(ODD, StorePath::from_segments(["dark.mode", "a\\b"]));
+        assert_eq!(
+            ODD.as_str(),
+            StorePath::from_segments(["dark.mode", "a\\b"]).as_str()
+        );
+        assert_eq!(NOTHING, StorePath::root());
     }
 }

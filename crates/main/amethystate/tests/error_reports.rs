@@ -10,6 +10,7 @@
 //! Adding a frame, dropping an attachment or reordering the chain all change
 //! the snapshot, which is the point.
 
+use amethystate::Field;
 use amethystate::store::StoreBackend;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
@@ -21,6 +22,12 @@ use uuid::Uuid;
 
 mod common;
 use common::{per_engine, shape};
+
+#[amethystate::amethystate(prefix = "panel")]
+pub struct Panel {
+    #[amestate(default = 800u32)]
+    pub width: u32,
+}
 
 fn store(name: &str) -> (TempPath, amethystate::Store) {
     let path = TempPath::new(name);
@@ -181,6 +188,34 @@ fn a_clear_an_interceptor_turned_down() {
     insta::assert_snapshot!("map_clear_an_interceptor_refused", shape(&err));
 }
 
+/// A field write an interceptor turned down.
+#[test]
+fn a_field_write_an_interceptor_turned_down() {
+    let (_dir, store) = store("report_field_intercepted");
+    let panel = Panel::new_with(&store).unwrap();
+    let width = panel.width();
+    let _guard = width.intercept(|_| None);
+
+    let err = width.set(9).unwrap_err();
+
+    insta::assert_snapshot!("field_an_interceptor_refused", shape(&err));
+}
+
+/// The same on a volatile field, which has no store behind it. The refusal is
+/// the whole of what happens, so the report is the only thing the caller gets.
+#[test]
+fn a_volatile_field_write_an_interceptor_turned_down() {
+    let session: Field<String, WritableMode> = Field::new_volatile(
+        StorePath::from_segments(["app", "session"]),
+        "anonymous".to_string(),
+    );
+    let _guard = session.intercept(|_| None);
+
+    let err = session.set("alice".to_string()).unwrap_err();
+
+    insta::assert_snapshot!("volatile_field_an_interceptor_refused", shape(&err));
+}
+
 /// A `Kv` write at a name that cannot be a level.
 #[test]
 fn a_kv_name_that_cannot_be_a_level() {
@@ -196,12 +231,7 @@ fn a_kv_name_that_cannot_be_a_level() {
 fn a_kv_name_under_a_namespace() {
     let (_dir, store) = store("report_kv_namespace");
 
-    let err = store
-        .kv()
-        .namespace("ui")
-        .unwrap()
-        .set("", &1u32)
-        .unwrap_err();
+    let err = store.kv().namespace("ui").set("", &1u32).unwrap_err();
 
     insta::assert_snapshot!("kv_empty_name_in_namespace", shape(&err));
 }

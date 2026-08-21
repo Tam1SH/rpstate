@@ -3,7 +3,7 @@ use crate::FieldCore;
 use crate::path::StorePath;
 use crate::primitives::error::{FieldError, ReactiveFieldResult};
 use crate::primitives::field_core::FieldValue;
-use error_stack::{Report, ResultExt};
+use error_stack::ResultExt;
 use uuid::Uuid;
 
 pub fn field_set<B, T>(
@@ -19,7 +19,7 @@ where
 {
     let change = core
         .run_interceptors(path.clone(), value, source)
-        .map_err(|_| Report::new(FieldError::Intercepted))
+        .map_err(FieldError::intercepted)
         .attach_with(|| format!("field: {path}"))?;
 
     backend

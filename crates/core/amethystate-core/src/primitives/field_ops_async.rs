@@ -2,7 +2,7 @@ use crate::path::StorePath;
 use crate::primitives::error::{FieldError, ReactiveFieldResult};
 use crate::primitives::field_core::FieldValue;
 use crate::{AmeBackendAsync, FieldCore};
-use error_stack::{Report, ResultExt};
+use error_stack::ResultExt;
 use uuid::Uuid;
 
 pub async fn field_set_async<B, T>(
@@ -18,7 +18,7 @@ where
 {
     let change = core
         .run_interceptors(path.clone(), value, source)
-        .map_err(|_| Report::new(FieldError::Intercepted))
+        .map_err(FieldError::intercepted)
         .attach_with(|| format!("field: {path}"))?;
 
     // The cache is left to the backend's subscription, as in the sync path.

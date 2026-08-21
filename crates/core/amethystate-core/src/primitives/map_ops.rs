@@ -228,7 +228,7 @@ where
 
     let processed = core
         .run_interceptors(context_path, change)
-        .map_err(|why| Report::new(ReactiveMapError::Intercepted).attach(why))
+        .map_err(ReactiveMapError::intercepted)
         .attach_with(|| format!("map: {path}"))
         .attach_with(|| match &subject {
             Some(entry) => format!("affects: {entry}"),

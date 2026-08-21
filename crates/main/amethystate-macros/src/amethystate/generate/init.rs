@@ -18,7 +18,7 @@ pub(crate) fn init_fields(
 fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> TokenStream2 {
     let fname = e.ident.as_ref().unwrap();
     let ty = &e.ty;
-    let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+    let key = e.stored_name();
     let key_path = path_literal(crate_name, &key);
 
     if let Some(target) = &e.lookup_node {

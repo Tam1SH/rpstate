@@ -52,7 +52,7 @@ pub fn generate_wasm_code(
         let fname = e.ident.as_ref().unwrap();
         let key_suffix = if let Some(lookup) = &e.lookup { lookup.to_string() }
         else if let Some(lookup_node) = &e.lookup_node { lookup_node.to_string() }
-        else { e.key.as_deref().unwrap_or(&fname.to_string()).to_string() };
+        else { e.stored_name() };
 
         let has_lookup = e.lookup.is_some() || e.lookup_node.is_some();
 
@@ -129,7 +129,7 @@ pub fn generate_wasm_code(
     } else {
         let nested_init_fields = entries.iter().map(|e| {
             let fname = e.ident.as_ref().unwrap();
-            let key_str = e.key.as_deref().unwrap_or(&fname.to_string()).to_string();
+            let key_str = e.stored_name();
             let ty = &e.ty;
             let fallback = e.default.as_ref().map(parse_default).unwrap_or_else(|| quote! { ::std::default::Default::default() });
 

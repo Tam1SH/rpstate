@@ -46,30 +46,51 @@ impl Kv {
     /// Nesting is spelled here rather than punched into a string, so a name
     /// stays a name: `namespace("ui")` then `set("dark.mode", ..)` addresses one
     /// value called `dark.mode`, where a single `"ui.dark.mode"` would have been
-    /// three levels. A name carrying the separator is refused for the same
-    /// reason.
+    /// three levels. The namespace's own name is read the same way: a separator
+    /// in it is part of it.
     ///
     /// Writes through a namespace carry the same provenance as the handle it
     /// came from - it is a view on the same `Kv`, not a second writer.
+    ///
+    /// # Panics
+    ///
+    /// If `name` is empty, which is not a level and so cannot be a namespace.
+    /// A namespace is written out in the source, where an empty one is a typo
+    /// rather than a condition to handle; [`Kv::try_namespace`] is for a name
+    /// that comes from data.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let ui = store.kv().namespace("ui").unwrap();
+    /// let ui = store.kv().namespace("ui");
     ///
     /// ui.set("width", &1280u32).unwrap();
     /// assert_eq!(ui.get::<u32>("width").unwrap(), Some(1280));
     ///
     /// // The same value, spelled out from the root.
-    /// assert_eq!(store.kv().namespace("ui").unwrap().get::<u32>("width").unwrap(), Some(1280));
+    /// assert_eq!(store.kv().namespace("ui").get::<u32>("width").unwrap(), Some(1280));
     ///
     /// // Namespaces nest.
-    /// let panels = ui.namespace("panels").unwrap();
+    /// let panels = ui.namespace("panels");
     /// panels.set("left", &true).unwrap();
-    /// assert_eq!(ui.namespace("panels").unwrap().get::<bool>("left").unwrap(), Some(true));
+    /// assert_eq!(ui.namespace("panels").get::<bool>("left").unwrap(), Some(true));
+    ///
+    /// // A separator in the namespace's name is part of the name, so this is
+    /// // one level called `a.b` rather than a level `b` under a level `a`.
+    /// let odd = store.kv().namespace("a.b");
+    /// odd.set("x", &1u32).unwrap();
+    /// assert_eq!(odd.get::<u32>("x").unwrap(), Some(1));
+    /// assert_eq!(store.kv().namespace("a").get::<u32>("x").unwrap(), None);
     /// ```
-    pub fn namespace(&self, name: &str) -> WriteResult<Self> {
+    #[track_caller]
+    pub fn namespace(&self, name: &str) -> Self {
+        self.try_namespace(name)
+            .expect("a namespace name cannot be empty")
+    }
+
+    /// [`Kv::namespace`] for a name that can turn out to be empty.
+    pub fn try_namespace(&self, name: &str) -> WriteResult<Self> {
         Ok(Self {
             store: self.store.clone(),
             instance_id: self.instance_id,
@@ -143,7 +164,7 @@ impl Kv {
     /// // asked for through `namespace` rather than punctuated into a string.
     /// kv.set("ui.theme", &"solarized".to_string()).unwrap();
     /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("solarized".into()));
-    /// assert_eq!(kv.namespace("ui").unwrap().get::<String>("theme").unwrap(), None);
+    /// assert_eq!(kv.namespace("ui").get::<String>("theme").unwrap(), None);
     /// ```
     pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         let path = self.resolve(name)?;
@@ -194,10 +215,10 @@ impl Kv {
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let kv = store.kv();
     ///
-    /// let ui = kv.namespace("ui").unwrap();
+    /// let ui = kv.namespace("ui");
     /// ui.set("theme", &"dark".to_string()).unwrap();
     /// ui.set("width", &1280u32).unwrap();
-    /// kv.namespace("net").unwrap().set("port", &8080u16).unwrap();
+    /// kv.namespace("net").set("port", &8080u16).unwrap();
     ///
     /// assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.width"]);
     /// ```
@@ -271,7 +292,7 @@ impl Kv {
     /// widths.insert("cpu".into(), &120).unwrap();
     ///
     /// // A map is a namespace with entries in it.
-    /// let columns = kv.namespace("columns").unwrap();
+    /// let columns = kv.namespace("columns");
     /// assert_eq!(columns.get::<u64>("cpu").unwrap(), Some(120));
     /// ```
     pub fn map<K, V>(&self, name: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>

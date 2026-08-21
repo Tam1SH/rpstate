@@ -82,7 +82,7 @@ fn crash_then_reopen(test_name: &str, backend: Backend, granularity: Granularity
         .build()
         .expect("the crashed writer left the store openable");
 
-    let n = store.kv().namespace("n").unwrap();
+    let n = store.kv().namespace("n");
 
     assert_eq!(
         n.get::<u16>("durable").unwrap(),

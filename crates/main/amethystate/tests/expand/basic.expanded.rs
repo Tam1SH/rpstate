@@ -76,7 +76,12 @@ impl AppConfig {
                 store,
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(&["port"], "port"),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["port"],
+                                "port",
+                            )
+                        },
                     ),
                 8080,
                 instance_id,
@@ -84,10 +89,12 @@ impl AppConfig {
             session_id: ::amethystate::Field::new_volatile_with_id(
                 <Self as ::amethystate::StateScope>::PATH
                     .join(
-                        &::amethystate::store::StorePath::from_static(
-                            &["session_id"],
-                            "session_id",
-                        ),
+                        &const {
+                            ::amethystate::store::StorePath::from_static(
+                                &["session_id"],
+                                "session_id",
+                            )
+                        },
                     ),
                 "localhost".to_string(),
                 instance_id,
@@ -476,9 +483,9 @@ const _: () = {
     static __INVENTORY: ::inventory::Node = ::inventory::Node {
         value: &{
             ::amethystate::observability::SchemaEntry {
-                prefix: Some(
-                    ::amethystate::store::StorePath::from_static(&["app"], "app"),
-                ),
+                prefix: Some(const {
+                    ::amethystate::store::StorePath::from_static(&["app"], "app")
+                }),
                 struct_name: "AppConfig",
                 version: 0u32,
                 schema_hash: <AppConfig_Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,

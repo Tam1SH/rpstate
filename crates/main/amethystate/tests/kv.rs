@@ -34,7 +34,7 @@ fn a_cell_is_an_ordinary_reactive_cell() {
     let store = store();
     let kv = store.kv();
 
-    let width = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
+    let width = kv.namespace("ui").cell("width", 800u32).unwrap();
     assert_eq!(width.get(), Some(800), "seeded with the default");
 
     let mut ui = LocalScope::new();
@@ -70,11 +70,10 @@ fn keys_are_sorted_and_scoped_to_the_prefix() {
     let store = store();
     let kv = store.kv();
 
-    let ui = kv.namespace("ui").unwrap();
+    let ui = kv.namespace("ui");
     ui.set("zoom", &2u8).unwrap();
     ui.set("theme", &"dark".to_string()).unwrap();
     kv.namespace("net")
-        .unwrap()
         .set("host", &"localhost".to_string())
         .unwrap();
 
@@ -91,18 +90,16 @@ fn writing_into_a_declared_prefix_is_refused() {
 
     let err = kv
         .namespace("typed")
-        .unwrap()
         .set("port", &"not a number".to_string())
         .unwrap_err();
     insta::assert_snapshot!("kv_write_over_a_declared_field", shape(&err));
 
     let refused = [
         kv.namespace("typed")
-            .unwrap()
             .cell("port", 1u16)
             .map(|_| ())
             .unwrap_err(),
-        kv.namespace("typed").unwrap().remove("port").unwrap_err(),
+        kv.namespace("typed").remove("port").unwrap_err(),
         kv.map::<String, u8>("typed").map(|_| ()).unwrap_err(),
     ];
 
@@ -116,15 +113,9 @@ fn a_path_next_to_a_declared_prefix_is_allowed() {
     let store = store();
     let kv = store.kv();
 
-    kv.namespace("typedish")
-        .unwrap()
-        .set("port", &1u16)
-        .unwrap();
+    kv.namespace("typedish").set("port", &1u16).unwrap();
     assert_eq!(
-        kv.namespace("typedish")
-            .unwrap()
-            .get::<u16>("port")
-            .unwrap(),
+        kv.namespace("typedish").get::<u16>("port").unwrap(),
         Some(1)
     );
 }
@@ -136,12 +127,8 @@ fn the_same_path_cannot_be_two_types() {
     let store = store();
     let kv = store.kv();
 
-    let _width = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
-    let err = kv
-        .namespace("ui")
-        .unwrap()
-        .cell("width", String::new())
-        .unwrap_err();
+    let _width = kv.namespace("ui").cell("width", 800u32).unwrap();
+    let err = kv.namespace("ui").cell("width", String::new()).unwrap_err();
 
     insta::assert_snapshot!("kv_asked_for_a_second_type", shape(&err));
 }
@@ -151,8 +138,8 @@ fn asking_for_the_same_path_and_type_twice_is_fine() {
     let store = store();
     let kv = store.kv();
 
-    let a = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
-    let b = kv.namespace("ui").unwrap().cell("width", 800u32).unwrap();
+    let a = kv.namespace("ui").cell("width", 800u32).unwrap();
+    let b = kv.namespace("ui").cell("width", 800u32).unwrap();
 
     a.set(42).unwrap();
     assert_eq!(b.get(), Some(42), "both are views on the same path");
@@ -167,7 +154,6 @@ fn values_survive_a_reopen() {
         store
             .kv()
             .namespace("ui")
-            .unwrap()
             .cell("width", 800u32)
             .unwrap()
             .set(1280)
@@ -180,7 +166,6 @@ fn values_survive_a_reopen() {
         store
             .kv()
             .namespace("ui")
-            .unwrap()
             .cell("width", 800u32)
             .unwrap()
             .get(),

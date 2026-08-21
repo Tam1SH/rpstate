@@ -23,4 +23,13 @@ fn test_macro_expansion_compilation() {
     t.compile_fail("tests/fails/lookup_deep_error.rs");
     t.compile_fail("tests/fails/lookup_node_not_struct.rs");
     t.compile_fail("tests/fails/local_scope_not_send.rs");
+
+    t.compile_fail("tests/fails/prefix_empty.rs");
+    t.compile_fail("tests/fails/prefix_root_dot.rs");
+    t.compile_fail("tests/fails/prefix_empty_level.rs");
+    t.compile_fail("tests/fails/prefix_trailing_separator.rs");
+    t.compile_fail("tests/fails/prefix_holds_the_escape.rs");
+    t.compile_fail("tests/fails/key_empty_level.rs");
+    t.compile_fail("tests/fails/static_path_empty_segment.rs");
+    t.compile_fail("tests/fails/static_path_halves_disagree.rs");
 }

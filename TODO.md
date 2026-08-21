@@ -577,6 +577,45 @@ The steps, each standing on its own:
    prevent a collision, they only stop one from happening by accident;
 7. a format version in the metadata.
 
+### Done: the static path checks itself
+
+Step 2 above left a hole. `StorePath` refuses an empty level and keeps its
+joined form in step with its segments, and property tests pin both - but only
+for paths built at runtime. `from_static`, which is where every path from
+`#[amethystate(prefix = ...)]` comes from, took both halves on trust, and the
+macro built them with `dotted.split('.').filter(|s| !s.is_empty())` and
+`Vec::join`. So an empty level was silently dropped rather than refused, and a
+level containing the escape character produced a joined form the runtime would
+never have written - the two halves of one path disagreeing, which is exactly
+what injectivity rests on.
+
+Both are now checked at compile time, in two places on purpose. The macro
+validates the prefix and points `compile_error!` at the attribute, which is
+where the readable message belongs. `from_static` re-checks in a `const fn`, so
+the halves disagreeing is a const-eval failure - which catches a wrong macro,
+and a hand-written `impl StateScope` too. Const panics carry no formatting, so
+that one names the invariant rather than the level; that is why both exist.
+
+Left open by it:
+
+- **Field keys are not validated.** `#[amestate(key = "a..b")]` used to collapse
+  to `a.b` in silence; it now panics at first use, because `path_literal` puts
+  `from_static` in a non-const position for field keys. Louder, but the wrong
+  shape - the macro should refuse it at the attribute like a prefix, which needs
+  `StoreFieldEntry::key` to carry a span instead of being a plain `String`.
+- **`"."` is still an untyped root sentinel**, special-cased by string
+  comparison in `path_parts`, in `wasm.rs` four times and in `data.rs`'s
+  `PARENT_PREFIX`. `Option<Vec<String>>` with `Some(vec![])` for the root would
+  delete the comparison rather than guard it.
+- **`PARENT_PREFIX` and the wasm codegen use the raw prefix**, unescaped, so a
+  prefix holding the escape character makes them disagree with
+  `StateScope::KEY`. Nothing tests that.
+
+And a divergence to decide rather than fix: `.` separates levels in the
+attribute (`prefix = "a.b"` is two levels, and `key` reads the same way) but is
+part of a single name in `Kv::namespace("a.b")` - which is deliberate on the
+`Kv` side, pinned by a doctest, and unmentioned on either.
+
 ## The error model: `error-stack`, and what it has to buy
 
 ### What is wrong now
@@ -1073,6 +1112,11 @@ tool would, and reopen. Every failing test asserts the behaviour that would be
 right, so its failure message is the finding. Worst first; six of these lose
 data with no error at all.
 
+The suite is red on purpose and stays red until the engines are fixed: 18
+failures on json, 28 on toml, 18 on ron. Every file but
+`tamper_engine_contrast.rs` is gated on a text feature, and that one is the
+control - on redb and sqlite it passes, which is the point of it.
+
 **A level named `.` is the whole document.** `normalise_parts` maps `["."]` to
 the root (`document.rs:45`), and `StorePath::segment(".")` is a legal one-level
 path, so `kv.set(".", &value)` replaces the entire document and `get_raw` on
@@ -1113,6 +1157,19 @@ snapshots and `__init` markers live in `path.with_extension("meta")`
 to 42, then to 84 - restores defaults the user deleted, and a forged marker
 suppresses the real ones. redb and sqlite keep this in the same transaction as
 the data, so it cannot come apart. `tamper_meta.rs`.
+
+Decided: bind the two files rather than merge them. Folding the metadata into
+the data document would make every save rewrite bookkeeping that can be large
+next to the data it describes. Instead the metadata carries a checksum of the
+data, which has to be *maintained* and not only checked - a checksum that goes
+stale on the first ordinary write reports a divergence on every startup - so it
+is written in the same save, data first and metadata second, and a crash between
+the two reads as a divergence rather than as quietly wrong state.
+
+What a divergence then means: the metadata is untrusted, so nothing is replayed
+and nothing is re-seeded from it. Versions cannot be recovered, so a migration
+does not run and says why. The `__init` markers can be recovered, through the
+empty node written up above.
 
 **An unrelated pending write rolls back a concurrent external edit.**
 `sync_external_changes` refuses to pull while `writes != persisted`
@@ -1156,6 +1213,104 @@ The six: `a_level_named_dot_is_an_ordinary_level`,
 `deleting_what_is_not_there_changes_nothing`,
 `writing_then_deleting_leaves_the_store_as_it_was`. The first two are written up
 above. The rest are new.
+
+### Decided: a document engine refuses where it cannot represent
+
+A tree cannot hold a value at a node and values under it at once, so property 12
+asks the text engines for a document that does not exist. Three ways out were
+weighed: make the flat engines enforce the same restriction (a range scan on
+every write, and it forbids what those engines can do perfectly well); give the
+document a reserved key for "the value of this node" (kills hand-editability,
+which is the reason the text engines exist, and collides with a real key of that
+name); or let the engines differ and replace destruction with refusal.
+
+The third. Property 12 becomes a disjunction - the two coexist, *or* the second
+write is refused and the first survives - which all five engines can satisfy and
+which still forbids the thing that actually hurts, silent destruction.
+
+That generalises: the suite states one contract for engines built on genuinely
+different substrates, and the parts of it a document cannot honour are better
+recorded per engine than demanded of everyone. What stays universal is the
+narrow surface the schema itself uses, because the generated code calls
+`field_with_path` without knowing the engine and is unsound if that surface
+differs.
+
+Two things the change has to get right. The destruction is one line, written
+three times - `ensure_map` replaces the node when it is not a map
+(`json_doc.rs:25`, `toml_doc.rs:25`, `ron_doc.rs:33`), and `insert_child` calls
+it, so both write orders destroy through it. And the refusal must not travel up
+through `field_with_path`'s seeding write, which nobody asked for: a field whose
+parent is occupied keeps its default in memory and leaves the file alone,
+rather than failing the whole struct.
+
+The collision is reachable from the schema, not only from `Kv` - `prefix =
+"root"` with a field `b` alongside `prefix = "root.b"`, as written up above - so
+the refusal has to name both declarations, not just the two paths.
+
+### What the refusal can and cannot see
+
+Half of it is undetectable, which the first attempt at the change proved by
+breaking every migration test on the text engines. A serialized struct is a map
+with children; so is a level with values under it. In a document the two are the
+same bytes. The store's own bookkeeping writes a struct at `schema.<prefix>` and
+also writes under it, so a rule of "refuse a write at a level that has children"
+refuses the library's own meta writes.
+
+So the two directions are not symmetric:
+
+- Writing *under* a level that holds a plain value is unambiguous - a scalar is
+  never a branch - and is refused.
+- Writing *at* a level that has children is refused only when the incoming value
+  is not itself a map. A map written over a map is taken as the update it almost
+  always is.
+
+What is left uncovered: a struct written over a level that had unrelated values
+under it. The flat engines keep both, a document engine cannot, and nothing in
+the bytes says which was meant. That is the residual divergence, and property 12
+is written to allow it rather than to pretend otherwise.
+
+It kills a third idea too, and this one is worth writing down because it looks
+harmless. Pruning a branch that a delete just emptied would fix
+`writing_then_deleting_leaves_the_store_as_it_was` - the byte-identity property -
+but a node that has just lost its last child is `{}`, and a field whose value is
+an empty map is stored as `{}` as well. Deleting inside a stored map would then
+delete the field. The property it buys is cosmetic and the failure it risks is
+not, so the empty node stays and the property stays recorded. `delete_prefix`
+removes the subtree node whole, and `load_map` skips a scanned key equal to the
+map's own path, which is where the leftover actually used to hurt.
+
+### The empty node is load-bearing, not litter
+
+There is a second and stronger reason not to prune it, found while working out
+what a lost metadata file can be recovered from. "This namespace was seeded" is
+one bit that no amount of reading the data reproduces - except that it does,
+through exactly this leftover:
+
+```
+{ "items": {} }        the map existed and was emptied  -> do not seed
+{ "unrelated": 1 }     the map never existed            -> seed
+```
+
+Without it the two are the same observable state, and `tamper_meta`'s
+`losing_the_metadata_file_does_not_resurrect_removed_defaults` and
+`a_forged_marker_does_not_suppress_the_defaults` demand opposite answers for it.
+So the byte-identity property is not a deferred fix, it is a permanent
+divergence: a document engine cannot both round-trip byte for byte and remember
+that a namespace was once written.
+
+The flat engines have no such node - there is no key at `items` - and need none:
+their metadata lives in the same transaction as the data and cannot be lost on
+its own. The recovery route exists exactly where it is needed.
+
+The same ambiguity kills the matching idea for `delete`, and there it cannot be
+worked around. `delete` refusing to remove a node with children looks right -
+`delete(["a"])` where only `a.b` exists should take nothing, which is what a
+flat engine holding no key at `a` answers - but a field whose value is a map or
+a struct is stored as exactly that node, so the rule refuses to delete it.
+`set` can tell the two apart by looking at the value being written; `delete` is
+handed nothing but a path. So it removes whatever is there, and property 5
+belongs in the same recorded-divergence bucket as property 12 rather than being
+demanded of everyone.
 
 **A scan on a text engine goes one level deep.** `scan_prefix_impl` and
 `scan_keys_impl` set `target_depth = parts.len() + 1` (`text/store.rs:825`,

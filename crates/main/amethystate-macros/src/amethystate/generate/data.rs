@@ -90,7 +90,7 @@ pub(crate) fn data_impl(
 
     let load_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+        let key = e.stored_name();
         let ty = &e.ty;
 
         if e.nested {
@@ -118,7 +118,7 @@ pub(crate) fn data_impl(
 
     let save_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+        let key = e.stored_name();
 
         if e.nested {
             quote! {
@@ -141,7 +141,7 @@ pub(crate) fn data_impl(
 
     let store_load_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+        let key = e.stored_name();
         let key_path = path_literal(crate_name, &key);
         let ty = &e.ty;
         if e.nested {
@@ -167,7 +167,7 @@ pub(crate) fn data_impl(
 
     let store_save_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        let key = e.key.clone().unwrap_or_else(|| fname.to_string());
+        let key = e.stored_name();
         let key_path = path_literal(crate_name, &key);
 
         if e.nested {

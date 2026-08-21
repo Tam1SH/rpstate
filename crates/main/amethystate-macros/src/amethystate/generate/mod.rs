@@ -12,17 +12,79 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, Ident, Token, Visibility};
 
+/// A written path, as a value the compiler has already checked.
+///
+/// The `const` block is what makes the check a check: `from_static` verifies
+/// its two halves in a `const fn`, which only runs at compile time where the
+/// call is in a const context. Emitted bare, a path built inside a function
+/// body would pay for that walk on every call and fail at first use instead of
+/// at the attribute.
 pub(crate) fn path_literal(crate_name: &TokenStream2, dotted: &str) -> TokenStream2 {
     let (segments, joined) = path_parts(dotted);
 
-    quote! { #crate_name::store::StorePath::from_static(&[#(#segments),*], #joined) }
+    quote! {
+        const { #crate_name::store::StorePath::from_static(&[#(#segments),*], #joined) }
+    }
 }
 
-pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
-    let segments: Vec<&str> = dotted.split('.').filter(|s| !s.is_empty()).collect();
-    let joined = segments.join(".");
+pub(crate) const SEPARATOR: char = '.';
+pub(crate) const ESCAPE: char = '\\';
+pub(crate) const ROOT: &str = ".";
 
-    (segments, joined)
+/// The levels a written path names, and the joined form `StorePath` keeps
+/// beside them.
+///
+/// Nothing here knows how a path is joined. Levels come from splitting on the
+/// separator, so no level holds one, and the only character the join would have
+/// escaped is the escape itself - which [`check_written_path`] refuses. What is
+/// left is the identity, so the source string is the joined form, and
+/// `StorePath::from_static` checks that claim in a const context rather than
+/// taking it.
+pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
+    if dotted.is_empty() || dotted == ROOT {
+        return (Vec::new(), String::new());
+    }
+
+    let segments: Vec<&str> = dotted.split(SEPARATOR).collect();
+
+    (segments, dotted.to_string())
+}
+
+pub(crate) fn check_written_path(
+    what: &str,
+    written: &str,
+    root_hint: &str,
+) -> Result<(), String> {
+    if written.is_empty() {
+        return Err(format!("an empty {what} names no level{root_hint}"));
+    }
+
+    if written == ROOT {
+        return Err(format!("a {what} of `{ROOT}` names no level{root_hint}"));
+    }
+
+    let levels: Vec<&str> = written.split(SEPARATOR).collect();
+    let last = levels.len() - 1;
+
+    for (at, level) in levels.iter().enumerate() {
+        if level.is_empty() {
+            return Err(match at {
+                0 => format!("the {what} starts with `{SEPARATOR}`, so its first level has no name"),
+                _ if at == last => {
+                    format!("the {what} ends with `{SEPARATOR}`, so its last level has no name")
+                }
+                _ => format!("the {what} has two `{SEPARATOR}` in a row, with no level between them"),
+            });
+        }
+
+        if level.contains(ESCAPE) {
+            return Err(format!(
+                "a {what} level cannot hold `{ESCAPE}`, which a path escapes"
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

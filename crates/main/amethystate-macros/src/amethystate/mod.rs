@@ -18,14 +18,30 @@ pub fn amethystate_impl(
         Err(e) => return darling::Error::from(e).write_errors().into(),
     };
 
-    let mut macro_args = match MacroArgs::from_list(&attr_args) {
+    let macro_args = match MacroArgs::from_list(&attr_args) {
         Ok(v) => v,
         Err(e) => return e.write_errors().into(),
     };
 
-    if macro_args.as_root {
-        macro_args.prefix = Some(".".to_string());
-    }
+    let prefix = if macro_args.as_root {
+        Some(generate::ROOT.to_string())
+    } else {
+        match &macro_args.prefix {
+            Some(prefix) => {
+                if let Err(message) = generate::check_written_path(
+                    "prefix",
+                    prefix,
+                    "; write `as_root` for a struct whose fields sit at the top of the store",
+                ) {
+                    return syn::Error::new(prefix.span(), message)
+                        .to_compile_error()
+                        .into();
+                }
+                Some(prefix.as_ref().clone())
+            }
+            None => None,
+        }
+    };
 
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
@@ -55,6 +71,14 @@ pub fn amethystate_impl(
             Err(e) => return e.write_errors().into(),
         };
 
+        if let Some(key) = &entry.key
+            && let Err(message) = generate::check_written_path("key", key, "")
+        {
+            return syn::Error::new(key.span(), message)
+                .to_compile_error()
+                .into();
+        }
+
         entries.push(entry);
     }
 
@@ -63,7 +87,7 @@ pub fn amethystate_impl(
         struct_vis,
         struct_name,
         attrs,
-        macro_args.prefix.clone(),
+        prefix,
         &entries,
         macro_args,
     );
