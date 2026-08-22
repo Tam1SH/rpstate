@@ -116,17 +116,28 @@ mod tests {
         let source = field(1);
         let calls = Arc::new(AtomicUsize::new(0));
 
-        let sub = {
+        let doubled = source.clone().pipe().map(|v| v * 2);
+        let _sub = {
             let calls = Arc::clone(&calls);
-            source.clone().pipe().map(|v| v * 2).subscribe(move |_| {
+            doubled.subscribe(move |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
             })
         };
 
         source.set(2).unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the pipeline never carried the write while it was alive"
+        );
 
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        drop(sub);
+        drop(doubled);
+        source.set(3).unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a write after the drop still reached the callback"
+        );
     }
 
     #[test]

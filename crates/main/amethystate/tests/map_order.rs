@@ -67,12 +67,9 @@ fn keys_sees_unflushed_writes() {
 
     let keys = cfg.items().keys().unwrap();
     assert!(keys.contains(&"zzz".to_string()));
-    assert_eq!(keys, {
-        let mut from_entries: Vec<String> =
-            cfg.items().entries().unwrap().map(|(k, _)| k).collect();
-        from_entries.sort();
-        from_entries
-    });
+
+    let from_entries: Vec<String> = cfg.items().entries().unwrap().map(|(k, _)| k).collect();
+    assert_eq!(keys, from_entries);
 }
 
 #[test]

@@ -46,10 +46,12 @@ fn a_map_added_later_still_gets_its_defaults() {
     assert_eq!(cfg.first().keys().unwrap(), ["a"]);
 }
 
-/// Upgrading must not undo removals: keys already on disk count as evidence the
-/// map was seeded before, so its defaults are not written again.
+/// Reopening must not undo removals: keys already on disk count as evidence the
+/// map was seeded before, so its defaults are not written again. Both halves
+/// build the same version - what is checked is the second construction, not a
+/// version change.
 #[test]
-fn upgrading_does_not_restore_a_removed_entry() {
+fn reopening_does_not_restore_a_removed_entry() {
     let path = unique_path("map_defaults_removed");
 
     {

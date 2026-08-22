@@ -10,11 +10,6 @@
 //!
 //! A test that fails only on some backends says so in its `ignore` reason;
 //! the reasons name the backend the failure was observed on.
-//!
-//! `src/confy/mod.rs` still addresses the store with the string `"."` and does
-//! not build since paths became segments, so nothing here compiles until it
-//! passes `StorePath::root()` instead. Every result recorded in an `ignore`
-//! reason was taken with that one substitution applied and nothing else.
 
 use amethystate::confy;
 use amethystate_core::test_utils::TempPath;
@@ -84,6 +79,11 @@ fn backend_speaks_confy() -> bool {
 
 fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Where the store puts the backup of `path`: the whole filename plus `.bak`.
+fn backup_of(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.bak", path.display()))
 }
 
 /// Text no text backend parses.
@@ -510,18 +510,16 @@ fn a_failed_load_leaves_no_backup_beside_the_config() {
 
     assert!(confy::load_path::<Simple>(&path).is_err());
 
-    let bak = path.with_extension("bak");
+    let bak = backup_of(&path);
     assert!(!bak.exists(), "left behind: {}", bak.display());
 }
 
-/// The backup taken of the config holds the config.
-///
-/// The data file and the metadata file derive their backup path the same way,
-/// `with_extension("bak")`, so for `x.toml` and `x.meta` it is one file and the
-/// second copy overwrites the first.
+/// The backup taken of the config holds the config, and not the metadata that
+/// sits beside it: a backup path is the whole filename plus `.bak`, so `x.toml`
+/// and `x.meta` back up to two files rather than one.
 #[test]
 #[cfg(feature = "text")]
-#[ignore = "known: the data and metadata backups collide on one path"]
+#[ignore = "unverified: the confy layer has not been run since backup paths stopped colliding"]
 fn the_backup_of_the_config_holds_the_config() {
     let temp = TempPath::new("confy-bak-collide");
     let path = seeded_store(&temp);
@@ -529,7 +527,7 @@ fn the_backup_of_the_config_holds_the_config() {
 
     let _ = confy::load_path::<Simple>(&path);
 
-    let bak = path.with_extension("bak");
+    let bak = backup_of(&path);
     assert!(
         read(&bak).contains("from-confy"),
         "the config's backup reads: {}",

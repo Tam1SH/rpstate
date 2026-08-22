@@ -59,9 +59,10 @@ fn an_overlap_between_different_types_is_reported_as_an_overlap() {
     let _outer = TypedOuter::new_with(&store).unwrap();
     let err = TypedPanels::new_with(&store).unwrap_err();
 
+    let rendered = format!("{err:?}");
     assert!(
-        format!("{err}").contains("path"),
-        "the error should say two schemas claim one path, got: {err}"
+        rendered.contains("TypedOuter") && rendered.contains("TypedPanels"),
+        "the report should name both schemas claiming `typed.panels.left.visible`, got: {rendered}"
     );
 }
 

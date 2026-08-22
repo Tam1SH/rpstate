@@ -30,9 +30,14 @@ fn migrate_dropmap_v1_to_v2(
 }
 
 /// A `ReactiveMap` field removed in v2: the generated cleanup deletes the
-/// map's own path, which holds nothing, so every entry survives.
+/// map's own path, and whether that takes the entries is the engine's answer,
+/// not the cleanup's. A document engine removes the subtree with the node; a
+/// flat engine has no key there and every entry survives.
 #[test]
-#[ignore = "known: migration cleanup deletes a map's node, not its entries - see TODO.md"]
+#[cfg_attr(
+    any(feature = "redb", feature = "sqlite"),
+    ignore = "known: on a flat engine the map's own path holds nothing, so deleting it leaves the entries - see TODO.md"
+)]
 fn dropping_a_reactive_map_field_removes_its_entries() {
     let path = TempPath::new("dropmap");
 
@@ -154,9 +159,13 @@ fn migrate_dropnested_v1_to_v2(
 }
 
 /// A `#[amestate(nested)]` field removed in v2: cleanup deletes the branch
-/// path, which on a flat backend holds nothing, so the sub-fields survive.
+/// path. A document engine takes the sub-fields with it; a flat one holds
+/// nothing at a branch, so they survive.
 #[test]
-#[ignore = "known: migration cleanup of a nested struct deletes the branch path only - see TODO.md"]
+#[cfg_attr(
+    any(feature = "redb", feature = "sqlite"),
+    ignore = "known: on a flat engine the branch path holds nothing, so deleting it leaves the leaves - see TODO.md"
+)]
 fn dropping_a_nested_struct_field_removes_its_leaves() {
     let path = TempPath::new("dropnested");
 

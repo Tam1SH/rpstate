@@ -19,9 +19,15 @@ fn cfg() -> (amethystate::Store, Cfg) {
     (store, cfg)
 }
 
-/// Past the depth limit the interceptor cannot run. Letting the change through
-/// used to mean a validator stopped being consulted exactly where recursion was
-/// deepest, and the value it exists to reject reached the store.
+/// A value the interceptor turns down: every level of the recursion tries to
+/// write it, so one attempt lands at whatever depth the guard stops at, without
+/// this test knowing what that depth is.
+const REJECTED: u64 = 999;
+
+/// Past the depth limit the interceptor cannot run, so the write is refused
+/// rather than let through. Letting it through means a validator stops being
+/// consulted exactly where recursion is deepest, and the value it exists to
+/// reject reaches the store.
 #[test]
 fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
     let (store, cfg) = cfg();
@@ -30,14 +36,11 @@ fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
     let nested = counter.clone();
 
     let _guard = counter.intercept(move |change| {
-        if change.new_value > 100 {
+        if change.new_value >= REJECTED {
             return None;
         }
-        if change.new_value < 10 {
-            let _ = nested.set(change.new_value + 1);
-        } else if change.new_value == 10 {
-            let _ = nested.set(999);
-        }
+        let _ = nested.set(REJECTED);
+        let _ = nested.set(change.new_value + 1);
         Some(change)
     });
 
@@ -48,11 +51,15 @@ fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
     let _ = counter.set(1);
 
     assert!(
-        !reached.lock().unwrap().contains(&999),
-        "saw {:?}",
+        !reached.lock().unwrap().contains(&REJECTED),
+        "a subscriber saw the rejected value: {:?}",
         reached.lock().unwrap()
     );
-    assert!(store.get::<u64>(["ic", "counter"]).unwrap().unwrap_or(0) <= 100);
+    assert_ne!(
+        store.get::<u64>(["ic", "counter"]).unwrap(),
+        Some(REJECTED),
+        "the rejected value reached the store"
+    );
 }
 
 /// A `Clear` is not about any one key, so key interceptors must not see it.

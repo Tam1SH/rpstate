@@ -28,6 +28,13 @@ fn a_mark_survives_a_flush_and_reopen() {
     assert!(store.is_initialized("settings").unwrap());
 }
 
+/// A mark and the values beside it come back together after a prefix flush.
+///
+/// Which of the two wrote them is not settled here: the store is dropped on
+/// the way out, and a drop flushes whatever is still buffered, so this holds
+/// whether the flush carried the mark or the drop did. Telling those apart
+/// needs a process that dies without running destructors, as
+/// `durability_crash.rs` does.
 #[test]
 fn a_prefix_flush_carries_the_mark_for_that_namespace() {
     let path = unique_path("prefix");

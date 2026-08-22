@@ -1,4 +1,11 @@
 #![cfg(any(feature = "confy-compat", feature = "confy-compat-0-6"))]
+//! The `confy` layer through the calls a `confy` user makes.
+//!
+//! These are the only tests in the suite that leave the temporary directory,
+//! and it is deliberate: where the configuration file lands is part of what
+//! `confy` compatibility means, so the path comes from
+//! `get_configuration_file_path` and the test removes it afterwards.
+
 use amethystate::confy;
 use amethystate_macros::amethystate;
 use serde::{Deserialize, Serialize};

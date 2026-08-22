@@ -272,8 +272,12 @@ mod stream {
         assert_eq!(block_on(changes.next()), Some(2));
     }
 
+    /// A stream yields what arrives after it exists, and nothing a stream
+    /// before it queued. That the drop also released the subscription is not
+    /// shown here and cannot be from outside: a dropped stream is not
+    /// observable, and nothing exposes how many subscribers a signal has.
     #[test]
-    fn dropping_the_stream_unsubscribes() {
+    fn a_stream_starts_empty_and_does_not_inherit_a_dropped_one() {
         let (_s, cfg) = cfg();
         let counter = cfg.counter();
 

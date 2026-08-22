@@ -22,6 +22,10 @@ pub struct Volatile {
     pub scratch: u8,
 }
 
+/// A volatile field has no store behind it, so the durable writes have nothing
+/// to commit and nothing to wait on. What is checked is that they still take
+/// the value and return - not that anything reached a disk, which is the one
+/// thing this field never does.
 #[test]
 fn a_volatile_field_is_already_durable() {
     let store = StoreBuilder::new(unique_path("durable_volatile"))
@@ -82,10 +86,14 @@ mod on_disk {
             .unwrap();
         let state = Settings::new_with(&store).unwrap();
 
+        state.port().durable().set(1).unwrap();
+
         state.port().set(8080).unwrap();
+        let buffered = contents(&path);
         assert!(
-            !contents(&path).contains("8080"),
-            "a plain set leaves it buffered, and the debouncer is a minute away"
+            buffered.contains("\"port\": 1") && !buffered.contains("8080"),
+            "a plain set leaves it buffered, and the debouncer is a minute away - \
+             the file still holds the committed value, got: {buffered}"
         );
 
         state.port().durable().set(9090).unwrap();
@@ -145,9 +153,14 @@ mod on_disk {
         state.limits().durable().insert("gpu".into(), &90).unwrap();
         state.limits().durable().remove("gpu".into()).unwrap();
 
+        let found = contents(&path);
         assert!(
-            !contents(&path).contains("gpu"),
-            "the removal is on disk too, not just the write that preceded it"
+            !found.is_empty(),
+            "the file was never written, so `gpu` being absent from it says nothing"
+        );
+        assert!(
+            !found.contains("gpu"),
+            "the removal is on disk too, not just the write that preceded it, got: {found}"
         );
     }
 
