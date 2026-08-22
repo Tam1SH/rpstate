@@ -189,6 +189,12 @@ need `T: AmeType`.
 that cannot see two fields swapping order or exchanging types is not a basis for
 deciding whether a path holds the same type as before.
 
+**Done: there is no type check.** `check_type` is gone rather than repaired -
+"Decided: the library guarantees paths, and says nothing about types" below is
+what it was traded for. What a path holds is the writer's business; what refuses
+a write is ownership of the path, and that is spelled out under "Done: ownership
+is by declared path".
+
 ## Reordering struct fields silently corrupts data on redb
 
 Two facts that are each defensible on their own, and together lose data.
@@ -418,6 +424,204 @@ already have most of the machinery for. The second inverts the residual failure
 from a missed migration to a spurious diff, which is the right direction when a
 missed migration silently misreads saved settings and a spurious diff costs one
 nag. It is also the option that wants the format version above.
+
+### Decided: the library guarantees paths, and says nothing about types
+
+Confirmed by running rather than by deriving - `Vec<Vec<u32>>` and `u32` print
+the same number, so do `Vec<Vec<Vec<u32>>>` and `Vec<u32>`,
+`HashMap<String, u32>` and `HashMap<u32, String>`, and two structs whose field
+names are swapped between the same two types.
+
+Widening or reseeding is not enough, and neither is replacing the number with a
+description. The route was walked and abandoned, which is worth recording so it
+is not walked again:
+
+- a *shape* composed bottom-up through the trait fixes the cancellation, and has
+  to be a function rather than a constant, because only a function can carry the
+  visited set that cuts a recursive type - const evaluation has no memory
+  between calls, which is why `#[derive(AmeType)]` on `Tree { children:
+  Vec<Tree> }` does not compile today even though the recursion terminates;
+- the orphan rule then bites for any type from another crate, answerable with
+  autoref fallback to an opaque case, feature-gated impls, or both;
+- and *none of it works anyway*, because the stored form of a value is decided
+  by arbitrary code - `deserialize_with`, `untagged`, `flatten` - which a dozen
+  GUI projects use as a matter of course. A description of the Rust type is not
+  a description of what is on disk.
+
+**Drift in the value is inexpressible, not merely unimplemented.** A change that
+breaks decoding is caught by the read, which happens at the same moment the gate
+would have run - `field_with_path` decodes every declared field on
+construction - and reports the path, the type asked for and the codec's own
+sentence. A change that preserves the type and alters the meaning, seconds to
+milliseconds, is invisible to any type description whatever. That leaves the
+gate a narrow band where the read already answers, and the current hash does not
+even cover that: it cancels.
+
+So the contract narrows to what is exactly knowable, and the type layer goes:
+
+| goes | stays |
+| --- | --- |
+| `AmeType`, its derive, its bound on the eight `Kv` sites | `StorePath` and everything checking it |
+| `TYPE_HASH`, `SCHEMA_HASH`, `FieldDescriptor::type_hash`, `PrefixMeta::hash` | `MigrationContext` - already path-keyed, unchanged |
+| `calculate_drift`, `NaggingRecord`, the `target_hash != 0` gates | step ordering, `Gap`, `Downgrade`, per-prefix isolation, the log |
+| the orphan hole, recursion in const, `Shape`, serde tracing, a feature matrix | `AmeStateFields::FIELDS` - as the owned *path* set, not a shape |
+
+`AmeType::TYPE_NAME` is replaced by `std::any::type_name::<T>()`, which fixes a
+live bug on the way out: `TYPE_NAME` is `stringify!`, the field registry records
+`any::type_name`, and `check_type` compares the two - so asking for one path
+twice with the same type fails for anything but a primitive. Verified:
+``path `b` is already `alloc::string::String`, asked for `String` ``, and `Vec`
+loses its parameter entirely.
+
+### Decided: four layers, and none of them is a Rust type
+
+The dead end was trying to derive the stored shape from the declared type. The
+stored shape is on disk, in the format's own fundamental types, and every engine
+already knows it - a text node is a `serde_json::Value` or a `toml_edit::Item`,
+sqlite has a column type, redb has msgpack's tag. The codec even says it out
+loud today: `invalid type: integer 800, expected a string`.
+
+So the record is built from what is there, not from what the code says, and it
+falls into four layers with four different sources:
+
+| layer | known by | says |
+| --- | --- | --- |
+| path | the library, exactly | where a value lives |
+| role | the schema, exactly | `field` or `map` |
+| shape | the disk, exactly | integer, text, object, array |
+| meaning | the author | `version` |
+
+None needs a description of a Rust type, so `AmeType`, `Shape`-as-a-trait, serde
+tracing, the orphan rule, third-party impls and recursion in const evaluation
+all fall away together. A description read off data is finite by construction -
+there is no cycle to break - and `deserialize_with` or `untagged` cannot lie to
+it, because whatever they produced is what got written.
+
+### Done: ownership is by declared path
+
+`Kv::guard` refused anything under a declared prefix, so a struct with
+`prefix = "app"` took the whole subtree and `app.myplugin.enabled` was refused
+though nobody had declared it. Settings are extended from outside constantly - a
+plugin, a theme, a person editing the file - and none of that collides with a
+declared field.
+
+`FieldDescriptor` now carries `role` (`Field`, `Map`, `Node`) and, for a node,
+its children, so the set of declared paths is known without opening the store.
+A cycle in that reference is impossible: a construction cycle is already refused
+at compile time by `CONSTRUCTION_TERMINATES`.
+
+Two directions collide and both are refused. A path may lie inside a declared
+one - a field owns whatever is under it, since that is the inside of its value,
+and a map owns its entries. Or a declared path may lie under the one being
+written, where a value or a map would take the level those paths live on. A node
+owns neither; it collides only through its children. The three refusals now say
+which:
+
+```
+`typed.port` is declared by a schema
+`typed` holds `typed.port`, which a schema declares
+`typed.port.x` is inside `typed.port`, which a schema declares
+```
+
+**Unreviewed: `Collision` has not been read through by its owner.** The rule
+above is written down; the code implementing it is not yet understood well
+enough to be relied on, and that is a reason to go over it rather than a note to
+file away. Two things are already known about it.
+
+The two directions are spelled `declared.starts_with(path)` and
+`path.starts_with(&declared)` - the same call with the arguments swapped,
+meaning opposite things, and separated by the `match` on the role, so the
+mirror is not visible where it is read.
+
+The `Holds` check runs before the role is examined, so it can answer with a
+node. A schema declaring `app.panel.left` and a write to `app` gives
+`Holds(app.panel)`, naming a path the schema never declared - by this model a
+node is not a record. Answering with the declared leaf under it is both more
+precise and simpler: a node holds nothing itself, so it needs no check of its
+own and can always descend.
+
+`Kv::clear` follows from it: everything under the handle that no schema
+declared goes, the declared paths stay, and a level that merely *holds* a
+declared path is descended into rather than skipped - otherwise an extension
+writing beside a nested struct's field would be immortal. It returns what went
+and what stayed, so a settings screen can say what it reset. How deep those
+paths are follows the engine's scan, which is the divergence recorded below;
+what went is the same on all five.
+
+**The set it reads is the linked one, and that is wrong.** `schema_collision`
+walks `inventory::iter::<SchemaEntry>`, which is collected at link time and
+therefore holds exactly the structs this binary happens to link. Two programs
+over one store answer differently: a CLI that links a subset writes straight
+over paths the application declares, and a path the application leaves alone
+can look owned somewhere else. The same file, two answers, decided by a build
+configuration rather than by the store.
+
+What owns a path is a fact about the store, so it has to be read from the store
+- the schema snapshot in the metadata, which is already written per prefix. It
+records `fields` today and would need `role` and the nested children beside
+them, which is the same record the four-layer design above calls for, so the two
+converge rather than competing. The linked inventory stays what the *code*
+declares, and the two being compared is drift, which is the other half.
+
+Still to do on the same footing: `reset_to_defaults`, and migration cleanup
+deleting the declared path rather than the subtree.
+
+`reset_to_defaults` needs a backend method that does not exist. The trait has
+`is_initialized` and `mark_initialized` and no way to unmark, so dropping the
+declared paths without clearing their markers gives "restore defaults" that
+deletes the settings and never re-seeds them - the marker is exactly what tells
+a namespace it has been here before. That is a method on `StoreBackend` and five
+implementations, which is why it is not folded into this change.
+
+**Two roles recorded, a third derived.** A nested node exists - that is what
+`#[amestate(nested)]` declares - but it stores nothing, so it gets no record of
+its own: a path is a node exactly when some record's path lies under it.
+`app.panel` is never written down, `app.panel.left` is, and node-ness falls out.
+Recording it too would be a second source of truth that can disagree with the
+first.
+
+Deriving it buys something worth having. `store.get(["app", "panel"])` reads an
+ancestor of declared paths, where the engines answer three different ways today
+- `Ok(None)` on the flat ones, a decode failure on json and ron, the first
+child's value on toml. A declared node holds no value and cannot, so `Ok(None)`
+is the right answer everywhere, and `an_ancestor_is_not_a_value` can be
+tightened from "never hand back what is underneath" to that. Only for declared
+paths; elsewhere an ancestor stays indistinguishable from a struct-valued field.
+
+That also settles what children in a document mean, which is the ambiguity that
+broke three separate changes in one day:
+
+| the record says | children under the path are |
+| --- | --- |
+| `field` | the interior of one value |
+| `map` | entries |
+| nothing - the path is undeclared | unknowable, and honestly so |
+
+**Shape as a JSON Schema subset**, one notation for every engine, serialised
+into whatever the metadata file already is - a toml meta writes the same
+structure as tables, and serde does that part. `{"type": "integer"}` for a
+number field, `{"type": "object", "additionalProperties": {..}}` for a map.
+
+Two things to write down when it is built. JSON Schema is a validation
+language, not a shape record: it has `anyOf`, `not`, `pattern`, and "are these
+two schemas equal" is not well defined for one. Only a canonical subset is
+emitted and comparison is structural - that has to be stated, or a reader is
+entitled to expect semantics that are not there. And the record describes the
+*store*, not the code: an `f64` holding `1` is written down as whatever the
+format stored, which is exactly what makes two runs comparable.
+
+**What each layer catches, and none of them is redundant:**
+
+- a field renamed or removed - by the path set. Nothing else can: an absent
+  path is indistinguishable from a fresh install, so the read cannot tell, and
+  today the user's setting silently reverts to its default with the old value
+  orphaned;
+- a value whose kind changed - by the shape, before decoding, and reportable as
+  "the file has a number here, the code wants text" rather than a codec's
+  sentence;
+- a value that will not decode at all - by the read, which happens anyway;
+- the same kind meaning something else, seconds to milliseconds - only by
+  `version`, and that is the honest limit.
 
 ## The last write of a store's life can fail without a trace
 
@@ -769,6 +973,10 @@ missing is the other half - the registry has to record the same string, or the
 comparison has to be over `TYPE_HASH` rather than either name. The entry above
 about the two hashes covers what that costs.
 
+**Done: the check is gone.** Neither half was worth having - see the note under
+"`Kv::check_type` compares printed type names". `register_field` still records
+`std::any::type_name`, now as `value_type_name` and for display only.
+
 ## `build()` runs no generated migrations, and nothing at the call site says so
 
 `build_with_report` calls `collect_codegen` before opening; `build` does not.
@@ -877,6 +1085,12 @@ it, because both trait and type are foreign and the orphan rule forbids the
 impl. This is not a coverage gap that more impls close; it is a hole with no
 user-side patch, and it needs an escape hatch before the bound spreads further.
 `Kv::get` takes the bound and never uses it.
+
+A type the user writes is not locked out - `#[derive(AmeType)]` covers it. The
+hole is a type from another crate, where neither the trait nor the type is
+theirs. The way out is written up under the schema hash below: make the trait
+optional, with the shape falling back to the type's written name when no impl
+exists.
 
 ## Dead weight around the sync backend trait
 
@@ -1091,6 +1305,8 @@ are things a reader following the book cannot make work:
   snippets would not compile.
 - `Concepts/kv.md` predates namespaces: `keys` is shown with an argument, and
   every dotted example now addresses one name rather than the levels it means.
+  It also teaches the type check (`// Err(TypeMismatch)`), which is gone along
+  with the variant; what refuses a `Kv` write is ownership of the path.
 - The dioxus and leptos pages name the provider component `amethystateProvider`;
   it is `AmeStateProvider`. The dioxus page uses both.
 
@@ -1100,10 +1316,12 @@ store is already `Arc`-backed), and says `default` is required on leaf fields
 where the code falls back to `Default::default()`. `Kv::set` and `Kv::remove`
 open by promising the durability their `Durable` counterparts provide.
 
-`Concepts/observability.md` promises `location` is the caller's `file:line`.
-`#[track_caller]` is on the direct `subscribe` methods but on none of the
-`Watch` builder's, so every subscription made the way the subscriptions chapter
-teaches logs a line inside this library.
+`Concepts/observability.md` promises `location` is the caller's `file:line`,
+which it now is: `#[track_caller]` runs the whole way through the `Watch`
+builder - `register`, `register_with_source`, `stream`, the `watch_raw`
+declaration and its four implementations - so a subscription made the way the
+subscriptions chapter teaches records the call site rather than a line in this
+library.
 
 ## What tampering with a text document does, found by doing it
 
@@ -1112,10 +1330,22 @@ tool would, and reopen. Every failing test asserts the behaviour that would be
 right, so its failure message is the finding. Worst first; six of these lose
 data with no error at all.
 
-The suite is red on purpose and stays red until the engines are fixed: 18
-failures on json, 28 on toml, 18 on ron. Every file but
+The suite is ordinary tests now: what still fails carries an `#[ignore]` naming
+the finding, and everything else is green. Every file but
 `tamper_engine_contrast.rs` is gated on a text feature, and that one is the
 control - on redb and sqlite it passes, which is the point of it.
+
+**A gate is not a choice of engine.** `#![cfg(any(feature = "json", ...))]`
+decides whether a file is compiled; which engine it runs against is
+`default_backend()`, and that prefers redb. With `default = ["redb"]`, any
+build that has redb on runs these tests against redb, so the seeded document is
+a file the store never opens - which is the `--all-features` cell of CI. Under
+`--features json` the suite was 0 of 6 on `tamper_names`, and `watcher_race`
+was green while testing nothing, the file watcher being a text-engine part that
+redb does not have. Every store in the eight affected files now names its
+backend, through `common::text_backend()` where the format follows the build
+and `Backend::Toml` in the toml-only file. A test about documents that does not
+say which engine it wants is asserting about redb.
 
 **A level named `.` is the whole document.** `normalise_parts` maps `["."]` to
 the root (`document.rs:45`), and `StorePath::segment(".")` is a legal one-level
@@ -1181,12 +1411,12 @@ buffered write anywhere discards every hand edit, including to untouched keys.
 `D::parse` fails, `sync_external_changes` returns early (`store.rs:815`),
 nothing reaches the caller, and the next save replaces the half-written file.
 
-**The data and metadata share one backup path.** `with_extension("bak")`
-(`store.rs:47`) collides for `store.db` and `store.meta`, so the surviving
-`.bak` holds the metadata; a `store.bak` the user already had is overwritten and
-then deleted. The corruption this should cause is masked by `Drop` running
-`save_now` afterwards - an ordering accident, not a defence.
-`tamper_broken_file.rs`.
+**The data and metadata shared one backup path.** Fixed: the copy keeps the
+whole name and adds `.bak`, so `store.db.bak` and `store.meta.bak` are two
+files. `with_extension("bak")` gave `store.bak` for both, so the second copy
+landed on the first and the data had no backup left - and it named a file the
+store never created, a `store.bak` a person put there themselves, which it
+overwrote and then deleted. Both tests in `tamper_broken_file.rs` run now.
 
 **A key with no name is invisible to every scan.** Decided: it stays that way,
 and now says so. A document may hold `{"": 1}` and a level with no name is not a
@@ -1220,19 +1450,36 @@ engines.
 
 ## What the conformance suite says the engines disagree about
 
-`tests/backend_conformance.rs` states twenty-one properties about what a store
+`tests/backend_conformance.rs` states twenty-nine properties about what a store
 is and runs each against every engine compiled in. redb and sqlite pass all
-twenty-one. json, toml and ron fail the same six - which is itself the finding:
-the three formats share one implementation and diverge from the flat engines in
-exactly one place, the document walk.
+twenty-nine. What the three text formats fail is the finding: they share one
+implementation and diverge from the flat engines in exactly one place, the
+document walk.
 
-The six: `a_level_named_dot_is_an_ordinary_level`,
-`a_leaf_and_a_branch_coexist_at_one_name`,
-`a_scan_lists_exactly_what_is_under_the_prefix`,
-`a_write_leaves_every_other_path_alone`,
-`deleting_what_is_not_there_changes_nothing`,
-`writing_then_deleting_leaves_the_store_as_it_was`. The first two are written up
-above. The rest are new.
+json and ron fail two: `a_scan_lists_exactly_what_is_under_the_prefix` and
+`writing_then_deleting_leaves_the_store_as_it_was`. toml fails those and
+`an_ancestor_is_not_a_value`, through the `with_bytes_de` cut at the first `=`.
+
+Four that used to fail no longer do. `a_level_named_dot_is_an_ordinary_level`
+and `a_leaf_and_a_branch_coexist_at_one_name` are written up above.
+`a_write_leaves_every_other_path_alone` went with the second path parser.
+`deleting_what_is_not_there_changes_nothing` was toml alone, and its cause was
+`Navigable::get_child_mut` reaching a child through `Item`'s `Index`, which
+inserts the key it is asked for - so the walk to an absent path built the
+levels on the way. It now goes through `as_table_like_mut`, which is what
+`remove_child` beside it already did.
+
+Read those counts against the next paragraph: which inputs a property sees is
+not the same twice.
+
+**The failing set moves between runs, so it is not a gate.** `config()` sets
+`cases: 24` with `failure_persistence: None` and no seed, so every run draws
+different names. Two runs of the same tree gave json 2 and toml 4 one time and
+json 3 and toml 3 another - a genuine regression is indistinguishable from a
+different draw. Either pin the seed for the properties whose divergence is
+recorded, or `cfg_attr`-ignore them per engine so what is green is decided
+rather than drawn. The generated-input value is worth keeping somewhere; it is
+worth keeping away from the set that says whether the tree is broken.
 
 ### Decided: a document engine refuses where it cannot represent
 
@@ -1366,13 +1613,22 @@ is a frame below. A caller matching on `current_context()` cannot tell "the
 bytes are the wrong type" from "the file would not read". This is exactly what
 the error model was meant to make assertable.
 
-**Not covered, and the largest remaining gap: events.** Nothing asserts that one
-operation emits the same `StoreOp`, the same `old`/`new` bytes and the same
-count on every engine. `text/store.rs:426` already emits a `Delete` for a
-removal that did not happen, so that suite would find things. Also uncovered:
-concurrency between two handles, the async surface, `is_initialized`, and value
-shapes past `u32`/`String` - nested structs, enums and sequences are where the
-three text formats differ most from each other and from msgpack.
+**Events: covered now, and it found what it was written to find.** Properties
+22-24 state what one operation emits: a write is one `Set` carrying the value
+that landed and the one it replaced; a delete is one `Delete` carrying the value
+that went, and a delete that removed nothing says nothing; `delete_prefix` is
+one `DeletePrefix` at the prefix rather than a `Delete` per key.
+
+The middle one failed on **all five** engines, not only the text ones - each
+emitted a `Delete` with `old: None, new: None` for a path that held nothing, so
+a subscriber acted on a change that did not happen. Each engine now returns
+before the event, and before scheduling a flush for a document it did not
+change.
+
+Still uncovered: concurrency between two handles, the async surface,
+`is_initialized` across a failed flush, and value shapes past `u32`/`String` -
+nested structs, enums and sequences are where the three text formats differ most
+from each other and from msgpack.
 
 ## A cleared map leaves a node behind, and only on the text engines
 
@@ -1410,6 +1666,12 @@ identically. The field wants the same, and the ephemeral branch in
 `field.rs:452` wants a `Report` rather than a bare `FieldError`, which is
 separately why that one carries no path at all.
 
+**Done.** Both field call sites carry the reason through
+`FieldError::intercepted`, and the ephemeral branch builds a `Report` naming the
+field and saying that nothing was going to be stored either way. Both are pinned
+by snapshot in `tests/error_reports.rs`, so a refusal that collapses back to one
+sentence fails a test.
+
 ## The text engines take a path apart and put it back on every call
 
 `TextDocument` addresses a node by `&[&str]`, so every `get`, `set` and `delete`
@@ -1417,28 +1679,25 @@ allocates a `Vec<&str>` out of a `StorePath` that already holds the levels, and
 the scan walkers allocate one more per child. `generic_scan` then builds a
 `StorePath` back out of that slice to compose the child keys.
 
-`split_path` parses the joined form a third way - by `str::split('.')`, which
-knows nothing about the escape - and `delete_prefix` still goes through it
-(`store.rs:463`). A scanned key comes back escaped as `cfg.a\.b`, splits into
-`["cfg", "a\\", "b"]`, and addresses a level that is not there, so the delete
-removes nothing and returns `Ok(())`.
+The second parser is gone: `split_path` cut the joined form by
+`str::split('.')`, knew nothing about the escape, and sent `delete_prefix` at a
+level that was not there - so the delete removed nothing and returned `Ok(())`.
+`delete_prefix` now hands the whole subtree to `delete_subtree`, and the
+document walkers compose child keys through `StorePath::try_push`. The tamper
+suite that reproduced it is ordinary tests under `tests/`.
 
-`tests/tamper_names.rs` reproduces it. `tests/delete_prefix_dotted_keys.rs`
-passes only because its dotted key sits below the scan's depth cut-off; the bug
-bites when the name lands at the scanned depth. `text/migration.rs:22,30,37`
-route every migration read and write through the same `split_path`.
+The same family, found since and fixed: the scan walkers asked the joined
+prefix `!prefix_str.ends_with('.')` before listing the value at the prefix
+itself. A trailing dot in the joined form is an escaped one - `cfg.b\.` is a
+level called `b.` - so the value at any such path was missing from its own
+scan, on the text engines only. Pinned in
+`tests/delete_prefix_dotted_keys.rs`.
 
-Wider than a dot: the conformance suite's generator shrank this to a name that
-is a lone **backslash**, so any name holding the escape character triggers it
-too, not only one holding the separator.
-
-`normalise_parts` maps `["."]` to the root, left from when `"."` was the
-sentinel for the whole document. A level genuinely named `.` is a path now, and
-that mapping silently sends it to the root instead.
-
-The trait should take `&StorePath` and walk it by `segment_at`, `scan` should
-hand back the child's name rather than a joined string, and `split_path` should
-go. Nothing outside these three files sees the trait, so it costs the three
+What is left is the cost, not a defect: `TextDocument` addresses a node by
+`&[&str]`, so the levels are taken out of a `StorePath` that already holds them
+and put back again per call. The trait should take `&StorePath` and walk it by
+`segment_at`, and `scan` should hand back the child's name rather than a joined
+string. Nothing outside these three files sees the trait, so it costs the three
 document impls and the two walkers.
 
 ## One conformance suite for the backends, run against each
@@ -1469,6 +1728,40 @@ holding the separator stays one level through a write, a reopen and a scan.
 what happens when an operation fails - which error, for which cause - and today
 those are not distinguishable enough to assert. Written now it would test the
 successes and stay silent about the failures, which is the half that differs.
+
+### The suite draws different inputs every run
+
+`config()` sets `cases: 24`, `failure_persistence: None` and no seed, so which
+paths and names a property sees is fresh each time. The recorded divergences
+therefore move: two runs an hour apart gave json 2 failures and json 3, and a
+property that failed on json passed on toml in one run and the reverse in the
+other. A regression is indistinguishable from a different draw, which is the
+one thing a suite kept as a gate has to be able to say.
+
+Either pin the seed for the properties that record a divergence, or
+`cfg_attr`-ignore those per engine so what is green is green every run. The
+second says which engine fails which property in the source, where the reader
+is, rather than in whichever run they happen to read.
+
+### What the suite does not reach yet
+
+Ordered by what it costs. **Events**: `StoreOp` appears nowhere in the tests,
+and `StoreEvent`'s `old` and `new` bytes are asserted nowhere - one operation
+emitting a different op or different bytes per engine is unwatched, and
+`text/store.rs` emits a `Delete` for a removal that did not happen.
+**Concurrency between two handles**: two handles on one store exist in the
+tests but are only ever driven in sequence. **The async surface**: two files,
+both through `block_on`. **`is_initialized`**: the happy path only, never
+across a failed flush. **Value shapes**: the conformance suite writes `u32` and
+one `String`; enums, sequences and nested structs - where the formats differ
+most - are never round-tripped.
+
+### Two file-watch tests are load-sensitive
+
+`json_store::store_tests::file_watch_emits_set_for_external_change` and
+`..._delete_for_external_removal` fail when the machine is running several test
+binaries at once and pass on their own. They wait a fixed interval for the
+watcher, so what they measure is the machine as much as the store.
 
 ## Documentation
 
