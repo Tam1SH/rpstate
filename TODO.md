@@ -920,6 +920,12 @@ error carrying enough context to say which key and which file, which is what the
 `error-stack` move above is for - so it should be fixed as part of that rather
 than by bolting a `warn!` on now and leaving the shape behind.
 
+**Done, both halves.** The two scan walkers now carry the failure up with the
+key attached and a line saying the document holds a key this library could not
+have written; `generic_scan` logs the child it passed over at `warn`, naming
+the prefix and the name, which is what "Decided: a key with no name" below
+settles it as.
+
 ## Migration cleanup deletes one key, so a composite field survives being dropped
 
 The cleanup emitted by `migrate.rs` and the same loop in
@@ -955,6 +961,11 @@ owning `width: u32` returns `Ok`, and after a reopen the struct fails to
 construct - which is the failure `guard`'s own doc says it exists to prevent.
 All five backends. Reproduced in `tests/kv_guard_root.rs`, with a control
 showing the identical write against a prefixed struct is refused.
+
+**Done by ownership moving to the declared path.** A root struct's prefix is
+the root rather than nothing, so its fields are declared paths like any others
+and the walk reaches them without a special case. `` `width` is declared by a
+schema `` is what the write gets now, and both tests in `kv_guard_root.rs` run.
 
 ## `Kv` refuses the same type it just recorded
 
