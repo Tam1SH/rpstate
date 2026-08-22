@@ -41,7 +41,7 @@ pub(crate) struct MapInner<K, V> {
 /// | --- | --- |
 /// | an entry the map wrote | held |
 /// | the map's own path, left behind by a `clear` | passed over |
-/// | a name no path can hold, on json, toml or ron | never reaches the map; see [`StoreBackend::scan_keys`](crate::store::StoreBackend::scan_keys) |
+/// | a name no path can hold, on json, toml or ron | never reaches the map; see [`StoreBackend::scan_keys`] |
 /// | a name that is not a `K` | opening the map fails, naming the entry |
 /// | a value that is not a `V` | opening the map fails, naming the entry |
 ///
@@ -379,6 +379,7 @@ where
         self.map.inner.instance_id
     }
 
+    #[track_caller]
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&MapChange<K, V>, Option<Uuid>) + Send + Sync + 'static,
@@ -408,6 +409,7 @@ where
         self.inner.instance_id
     }
 
+    #[track_caller]
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&MapChange<K, V>, Option<Uuid>) + Send + Sync + 'static,

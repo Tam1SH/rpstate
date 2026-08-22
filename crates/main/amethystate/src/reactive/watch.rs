@@ -25,6 +25,9 @@ pub trait Watchable {
         true
     }
 
+    /// The location an implementation records is the one a trace shows, so it
+    /// is the caller's.
+    #[track_caller]
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&Self::Item, Option<Uuid>) + Send + Sync + 'static;
@@ -109,6 +112,7 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// port.set(9092).unwrap();
     /// assert_eq!(seen.lock().unwrap().len(), 2, "the handle is what kept it alive");
     /// ```
+    #[track_caller]
     pub fn register<F>(self, callback: F) -> SignalSubscription
     where
         F: Fn(&W::Item) + Send + Sync + 'static,
@@ -156,6 +160,7 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// assert_eq!(seen.len(), 2, "both arrived");
     /// assert_ne!(seen[0].1, seen[1].1, "each carries who wrote it");
     /// ```
+    #[track_caller]
     pub fn register_with_source<F>(self, callback: F) -> SignalSubscription
     where
         F: Fn(&W::Item, Option<Uuid>) + Send + Sync + 'static,
@@ -235,6 +240,7 @@ impl<W: Watchable> Watch<W, Local<'_>> {
     ///
     /// [`Watch::every`] has a worked example of both this and the queueing
     /// behind it.
+    #[track_caller]
     pub fn register<F>(self, mut callback: F)
     where
         F: FnMut(&W::Item) + 'static,
@@ -248,6 +254,7 @@ impl<W: Watchable> Watch<W, Local<'_>> {
     /// [`Watch::external`] drops those before they are queued at all, which is
     /// usually what you want; take the id when a write of your own needs
     /// different treatment rather than none.
+    #[track_caller]
     pub fn register_with_source<F>(self, mut callback: F)
     where
         F: FnMut(&W::Item, Option<Uuid>) + 'static,
@@ -295,6 +302,7 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// it.
     ///
     /// Dropping the stream ends the subscription.
+    #[track_caller]
     pub fn stream(self) -> ChangeStream<W::Item> {
         let mine = self.external.then(|| self.source.watch_id());
         let queue: Arc<Mutex<VecDeque<W::Item>>> = Arc::new(Mutex::new(VecDeque::new()));

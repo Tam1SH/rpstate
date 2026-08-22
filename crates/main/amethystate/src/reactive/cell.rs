@@ -235,6 +235,7 @@ where
         self.origin
     }
 
+    #[track_caller]
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&Option<T>, Option<Uuid>) + Send + Sync + 'static,

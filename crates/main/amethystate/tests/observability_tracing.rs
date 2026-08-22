@@ -105,6 +105,33 @@ fn subscription_fire_emits_trace_with_location() {
     );
 }
 
+/// A subscription built through [`Watch`] carries the same location a direct
+/// `subscribe` does. The builder is three calls deep, and each of them would
+/// otherwise put its own line in this library where the caller's belongs.
+#[test]
+#[traced_test]
+fn a_built_subscription_traces_the_call_site_and_not_the_builder() {
+    let path = unique_path("obs_watch_trace");
+    let store = StoreBuilder::new(&path).build().unwrap();
+    let state = ObsState::new_with(&store).unwrap();
+
+    let _sub = state.port().subscription_with().register(|_| {});
+    state.port().set(4321).unwrap();
+
+    assert!(
+        logs_contain("signal emit"),
+        "the subscription never fired, so there is no location to check"
+    );
+    assert!(
+        logs_contain("observability_tracing.rs"),
+        "expected the call site in the trace"
+    );
+    assert!(
+        !logs_contain("watch.rs"),
+        "the trace blamed the builder instead of the caller"
+    );
+}
+
 #[test]
 #[traced_test]
 fn named_subscription_appears_in_trace() {

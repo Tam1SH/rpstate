@@ -264,6 +264,7 @@ where
         self.inner.instance_id
     }
 
+    #[track_caller]
     fn watch_raw<F>(&self, callback: F) -> SignalSubscription
     where
         F: Fn(&TValue, Option<Uuid>) + Send + Sync + 'static,
