@@ -764,6 +764,7 @@ impl DatabaseConfig {
     }
 }
 impl ::amethystate::AmeStateNode for DatabaseConfig {
+    const CONSTRUCTION_TERMINATES: () = {};
     fn new_node(
         store: &::amethystate::Store,
         path: &::amethystate::store::StorePath,
@@ -778,6 +779,7 @@ impl ::amethystate::AmeStateNode for DatabaseConfig {
         Self::new_with_id(store, path, instance_id)
     }
 }
+const _: () = <DatabaseConfig as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
@@ -1077,6 +1079,8 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseConfig_Data {
             name: "host",
             type_hash: <String as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "String",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
     ];
     const VERSION: u32 = 0u32;
@@ -1442,6 +1446,9 @@ impl SystemSettings {
     }
 }
 impl ::amethystate::AmeStateNode for SystemSettings {
+    const CONSTRUCTION_TERMINATES: () = {
+        let _: () = <DatabaseConfig as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
+    };
     fn new_node(
         store: &::amethystate::Store,
         _path: &::amethystate::store::StorePath,
@@ -1456,6 +1463,7 @@ impl ::amethystate::AmeStateNode for SystemSettings {
         Self::new_with_id(store, instance_id)
     }
 }
+const _: () = <SystemSettings as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
@@ -1877,6 +1885,8 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
             type_hash: 0xDEADBEEF
                 ^ <<DatabaseConfig as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "DatabaseConfig",
+            role: ::amethystate::migration::fields::Role::Node,
+            children: <<DatabaseConfig as ::amethystate::AmeState>::Data as ::amethystate::migration::fields::AmeStateFields>::FIELDS,
         },
         ::amethystate::migration::fields::FieldDescriptor {
             name: "limits",
@@ -1885,11 +1895,15 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
                 AlertThresholds,
             > as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "ReactiveMap<String,AlertThresholds>",
+            role: ::amethystate::migration::fields::Role::Map,
+            children: &[],
         },
         ::amethystate::migration::fields::FieldDescriptor {
             name: "monitoring",
             type_hash: <MonitoringConfig as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "MonitoringConfig",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
         ::amethystate::migration::fields::FieldDescriptor {
             name: "presets",
@@ -1897,6 +1911,8 @@ impl ::amethystate::migration::fields::AmeStateFields for SystemSettings_Data {
                 AlertThresholds,
             > as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "Vec<AlertThresholds>",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
     ];
     const VERSION: u32 = 0u32;

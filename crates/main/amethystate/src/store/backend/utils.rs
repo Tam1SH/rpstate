@@ -97,14 +97,18 @@ mod buffered {
 
     /// One buffered write, waiting for the next flush.
     ///
-    /// `MarkInit` targets the metadata table rather than the data one; keeping it
+    /// `Init` targets the metadata table rather than the data one; keeping it
     /// in the same buffer is what makes a namespace flag land in the same
     /// transaction as the values it vouches for.
+    ///
+    /// It carries the flag rather than there being one variant per direction,
+    /// so setting and clearing it stay one branch wherever it is handled - and
+    /// there are four of those, two per flat engine.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum PendingOp {
         Set(Vec<u8>),
         Delete,
-        MarkInit,
+        Init(bool),
     }
 
     impl PendingOp {
@@ -112,7 +116,7 @@ mod buffered {
         pub fn value(&self) -> Option<&[u8]> {
             match self {
                 Self::Set(bytes) => Some(bytes),
-                Self::Delete | Self::MarkInit => None,
+                Self::Delete | Self::Init(_) => None,
             }
         }
 

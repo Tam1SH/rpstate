@@ -1,6 +1,6 @@
 use crate::store::{
-    SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
-    SubscriptionId, SubscriptionKind,
+    InitState, SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp,
+    SubscriptionEntry, SubscriptionId, SubscriptionKind,
 };
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -110,11 +110,16 @@ impl RedbStoreInner {
                             .attach_with(|| format!("table: {}", TABLE_DATA.name()))
                             .attach_with(|| format!("key: {path}"))?;
                     }
-                    utils::PendingOp::MarkInit => {
-                        meta.insert(format!("__init::{path}").as_str(), &[][..])
-                            .doing(StorageError::Flush, &self.path)
-                            .attach_with(|| format!("table: {}", TABLE_META.name()))
-                            .attach_with(|| format!("namespace: {path}"))?;
+                    utils::PendingOp::Init(seeded) => {
+                        let key = format!("__init::{path}");
+                        if *seeded {
+                            meta.insert(key.as_str(), &[][..]).map(|_| ())
+                        } else {
+                            meta.remove(key.as_str()).map(|_| ())
+                        }
+                        .doing(StorageError::Flush, &self.path)
+                        .attach_with(|| format!("table: {}", TABLE_META.name()))
+                        .attach_with(|| format!("namespace: {path}"))?;
                     }
                 }
             }
@@ -227,9 +232,13 @@ impl RedbStore {
                             utils::PendingOp::Delete => {
                                 table.remove(&**path).ok()?;
                             }
-                            utils::PendingOp::MarkInit => {
-                                meta.insert(format!("__init::{path}").as_str(), &[][..])
-                                    .ok()?;
+                            utils::PendingOp::Init(seeded) => {
+                                let key = format!("__init::{path}");
+                                if *seeded {
+                                    meta.insert(key.as_str(), &[][..]).ok()?;
+                                } else {
+                                    meta.remove(key.as_str()).ok()?;
+                                }
                             }
                         }
                     }
@@ -610,6 +619,10 @@ impl StoreBackend for RedbStore {
             .attach_with(|| format!("key: {path}"))
             .attach("reading the value a subscriber should see as the old one")?;
 
+        let Some(old_bytes) = old_bytes else {
+            return Ok(());
+        };
+
         {
             let mut lock = self.inner.pending.lock();
             lock.insert(path_arc.clone(), utils::PendingOp::Delete);
@@ -620,7 +633,7 @@ impl StoreBackend for RedbStore {
             StoreEvent {
                 path: path_arc,
                 op: StoreOp::Delete,
-                old: old_bytes,
+                old: Some(old_bytes),
                 new: None,
                 source,
             },
@@ -721,8 +734,8 @@ impl StoreBackend for RedbStore {
         Ok(found)
     }
 
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        if self.inner.initialized.lock().contains(namespace) {
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+        if self.inner.initialized.lock().contains(namespace) == state.is_seeded() {
             return Ok(());
         }
 
@@ -731,8 +744,16 @@ impl StoreBackend for RedbStore {
         self.inner
             .pending
             .lock()
-            .insert(Arc::clone(&key), utils::PendingOp::MarkInit);
-        self.inner.initialized.lock().insert(key);
+            .insert(Arc::clone(&key), utils::PendingOp::Init(state.is_seeded()));
+
+        let mut initialized = self.inner.initialized.lock();
+        if state.is_seeded() {
+            initialized.insert(key);
+        } else {
+            initialized.remove(&key);
+        }
+        drop(initialized);
+
         self.inner.debouncer.schedule();
         Ok(())
     }

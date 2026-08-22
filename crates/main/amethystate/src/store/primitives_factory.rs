@@ -42,11 +42,7 @@ where
 {
     let path = crate::store::to_path(path)?;
 
-    register_field(
-        Arc::from(path.as_str()),
-        instance_id,
-        std::any::type_name::<TValue>(),
-    );
+    register_field::<TValue>(Arc::from(path.as_str()), instance_id);
 
     if store.get::<TValue>(&path)?.is_none() {
         seed(store, &path, &default)?;

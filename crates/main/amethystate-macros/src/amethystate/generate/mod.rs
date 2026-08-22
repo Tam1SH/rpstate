@@ -50,6 +50,18 @@ pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
     (segments, dotted.to_string())
 }
 
+/// Whether `ty` is written as `name`, however it is qualified.
+pub(crate) fn names_type(ty: &syn::Type, name: &Ident) -> bool {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|last| &last.ident == name && last.arguments.is_empty()),
+        _ => false,
+    }
+}
+
 pub(crate) fn check_written_path(what: &str, written: &str, root_hint: &str) -> Result<(), String> {
     if written.is_empty() {
         return Err(format!("an empty {what} names no level{root_hint}"));
@@ -135,7 +147,7 @@ pub fn generate_code(
 
     let struct_fields = accessors::struct_fields(&crate_name, entries);
     let init_fields = init::init_fields(&crate_name, entries, is_root);
-    let node_impl = accessors::node_impl(&crate_name, name, is_root);
+    let node_impl = accessors::node_impl(&crate_name, name, is_root, entries);
     let methods = accessors::methods(&crate_name, entries);
     let scope = accessors::scope(&crate_name, name, prefix.clone());
     let constructor = accessors::constructor(&crate_name, is_root, &init_fields);

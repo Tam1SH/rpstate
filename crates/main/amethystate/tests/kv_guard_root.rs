@@ -34,11 +34,10 @@ fn kv_refuses_a_path_owned_by_a_prefixed_struct() {
     insta::assert_snapshot!("kv_write_under_a_declared_prefix", shape(&err));
 }
 
-/// A root struct's fields sit at bare paths, and the guard only compares
-/// against a declared prefix, so `Kv` writes straight over them - including
-/// with a type the field cannot decode.
+/// A root struct's fields sit at bare paths, one level below nothing. Ownership
+/// is by declared path rather than by prefix, so those paths are declared like
+/// any others and a `Kv` write is refused there too.
 #[test]
-#[ignore = "known: Kv::guard does not cover as_root fields - see TODO.md"]
 fn kv_refuses_a_path_owned_by_a_root_struct() {
     let path = TempPath::new("kv_guard_root");
     let store = StoreBuilder::new(path.path()).build().unwrap();
@@ -51,10 +50,10 @@ fn kv_refuses_a_path_owned_by_a_root_struct() {
     assert_eq!(cfg.width().get(), 1280);
 }
 
-/// What the missing guard costs: the overwritten path no longer decodes, and
-/// the next run fails to load the struct at all.
+/// What the refusal buys: a path written over with a type it cannot decode
+/// stops the struct loading on the next run, so the write has to be refused
+/// while the store is still open rather than found after a restart.
 #[test]
-#[ignore = "known: Kv::guard does not cover as_root fields - see TODO.md"]
 fn a_root_field_survives_a_kv_write_of_another_type() {
     let path = TempPath::new("kv_guard_root_reopen");
 

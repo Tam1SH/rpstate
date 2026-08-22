@@ -3,6 +3,7 @@ use amethystate_macros_core::StoreFieldEntry;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::Ident;
+use syn::spanned::Spanned;
 
 pub(crate) fn schema_methods<'a>(
     crate_name: &'a TokenStream2,
@@ -80,10 +81,43 @@ pub(crate) fn methods<'a>(
     })
 }
 
-pub(crate) fn node_impl(crate_name: &TokenStream2, name: &Ident, is_root: bool) -> TokenStream2 {
+/// The types this struct's constructor always constructs in turn.
+///
+/// A `nested` field and a `lookup_node` one are both built unconditionally, so
+/// they are the edges a cycle can run along. Nothing else is: a map recursing
+/// through its value type decodes those values rather than constructing them.
+fn construction_edges(crate_name: &TokenStream2, entries: &[StoreFieldEntry]) -> Vec<TokenStream2> {
+    entries
+        .iter()
+        .filter(|e| e.nested || e.lookup_node.is_some())
+        .map(|e| {
+            let ty = &e.ty;
+            quote_spanned! {ty.span()=>
+                let _: () = <#ty as #crate_name::AmeStateNode>::CONSTRUCTION_TERMINATES;
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn node_impl(
+    crate_name: &TokenStream2,
+    name: &Ident,
+    is_root: bool,
+    entries: &[StoreFieldEntry],
+) -> TokenStream2 {
+    let edges = construction_edges(crate_name, entries);
+    let terminates = quote! {
+        const CONSTRUCTION_TERMINATES: () = { #(#edges)* };
+    };
+    let force = quote! {
+        const _: () = <#name as #crate_name::AmeStateNode>::CONSTRUCTION_TERMINATES;
+    };
+
     if is_root {
         quote! {
             impl #crate_name::AmeStateNode for #name {
+                #terminates
+
                 fn new_node(store: &#crate_name::Store, _path: &#crate_name::store::StorePath) -> #crate_name::StorageResult<Self> {
                     Self::new_with(store)
                 }
@@ -92,10 +126,14 @@ pub(crate) fn node_impl(crate_name: &TokenStream2, name: &Ident, is_root: bool) 
                     Self::new_with_id(store, instance_id)
                 }
             }
+
+            #force
         }
     } else {
         quote! {
             impl #crate_name::AmeStateNode for #name {
+                #terminates
+
                 fn new_node(store: &#crate_name::Store, path: &#crate_name::store::StorePath) -> #crate_name::StorageResult<Self> {
                     Self::new(store, path)
                 }
@@ -104,6 +142,8 @@ pub(crate) fn node_impl(crate_name: &TokenStream2, name: &Ident, is_root: bool) 
                     Self::new_with_id(store, path, instance_id)
                 }
             }
+
+            #force
         }
     }
 }

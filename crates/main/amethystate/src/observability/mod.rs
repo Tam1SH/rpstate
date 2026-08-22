@@ -16,6 +16,9 @@ pub fn short_type_name(full: &str) -> &str {
 pub struct FieldMeta {
     pub struct_type_name: &'static str,
     pub field_name: Arc<str>,
+
+    /// What the value's type is, for an inspector to show. Nothing decides
+    /// anything by it.
     pub value_type_name: &'static str,
 }
 
@@ -68,7 +71,7 @@ pub fn resolve_instance_short(id: Uuid) -> Option<&'static str> {
     resolve_instance(id).map(short_type_name)
 }
 
-pub fn register_field(path: Arc<str>, instance_id: Uuid, value_type_name: &'static str) {
+pub fn register_field<T: 'static>(path: Arc<str>, instance_id: Uuid) {
     let struct_type_name = match resolve_instance(instance_id) {
         Some(n) => n,
         None => return,
@@ -78,7 +81,7 @@ pub fn register_field(path: Arc<str>, instance_id: Uuid, value_type_name: &'stat
         map.entry(Arc::clone(&path)).or_insert(FieldMeta {
             struct_type_name,
             field_name,
-            value_type_name,
+            value_type_name: std::any::type_name::<T>(),
         });
     }
 }

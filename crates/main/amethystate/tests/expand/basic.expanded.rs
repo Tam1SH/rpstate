@@ -187,6 +187,7 @@ impl AppConfig {
     }
 }
 impl ::amethystate::AmeStateNode for AppConfig {
+    const CONSTRUCTION_TERMINATES: () = {};
     fn new_node(
         store: &::amethystate::Store,
         _path: &::amethystate::store::StorePath,
@@ -201,6 +202,7 @@ impl ::amethystate::AmeStateNode for AppConfig {
         Self::new_with_id(store, instance_id)
     }
 }
+const _: () = <AppConfig as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
@@ -454,6 +456,8 @@ impl ::amethystate::migration::fields::AmeStateFields for AppConfig_Data {
             name: "port",
             type_hash: <u16 as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "u16",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
     ];
     const VERSION: u32 = 0u32;

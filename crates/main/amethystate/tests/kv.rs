@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 mod common;
-use common::shape;
+use common::{per_engine, shape};
 
 #[amethystate(prefix = "typed")]
 pub struct Typed {
@@ -80,11 +80,14 @@ fn keys_are_sorted_and_scoped_to_the_prefix() {
     assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.zoom"]);
 }
 
-/// A declared struct owns its prefix. Writing there through Kv would not merely
+/// A declared path is the schema's. Writing there through Kv would not merely
 /// store the wrong thing: the field's subscription fails to decode and keeps
 /// its old value, and the next startup fails outright reading the path back.
+///
+/// The last of the four is the other direction - `typed` is not itself
+/// declared, but a map there would take the level `typed.port` lives on.
 #[test]
-fn writing_into_a_declared_prefix_is_refused() {
+fn writing_into_a_declared_path_is_refused() {
     let store = store();
     let kv = store.kv();
 
@@ -120,8 +123,36 @@ fn a_path_next_to_a_declared_prefix_is_allowed() {
     );
 }
 
+/// A schema owns the paths it declared, not the prefix they sit under. Settings
+/// are extended from outside all the time - a plugin, a theme, a person editing
+/// the file - and none of that collides with a declared field.
+#[test]
+fn a_path_beside_a_declared_field_is_allowed() {
+    let store = store();
+    let typed = store.kv().namespace("typed");
+
+    typed.set("colour", &"blue".to_string()).unwrap();
+    typed.namespace("myplugin").set("enabled", &true).unwrap();
+
+    assert_eq!(
+        typed.get::<String>("colour").unwrap().as_deref(),
+        Some("blue")
+    );
+    assert_eq!(
+        typed.namespace("myplugin").get::<bool>("enabled").unwrap(),
+        Some(true)
+    );
+
+    assert!(
+        typed.set("port", &1u16).is_err(),
+        "the declared path itself is still owned"
+    );
+}
+
 /// Nothing connects a path to a type the way a struct field does, so asking for
-/// two types at one path is caught rather than returning garbage.
+/// two types at one path is caught rather than returning garbage - by the read,
+/// which is the only thing that can say what is actually stored there. The
+/// report names the value, not just the two type names.
 #[test]
 fn the_same_path_cannot_be_two_types() {
     let store = store();
@@ -130,7 +161,7 @@ fn the_same_path_cannot_be_two_types() {
     let _width = kv.namespace("ui").cell("width", 800u32).unwrap();
     let err = kv.namespace("ui").cell("width", String::new()).unwrap_err();
 
-    insta::assert_snapshot!("kv_asked_for_a_second_type", shape(&err));
+    insta::assert_snapshot!(per_engine("kv_asked_for_a_second_type"), shape(&err));
 }
 
 #[test]
@@ -143,6 +174,23 @@ fn asking_for_the_same_path_and_type_twice_is_fine() {
 
     a.set(42).unwrap();
     assert_eq!(b.get(), Some(42), "both are views on the same path");
+}
+
+/// The same, for a type that is not a primitive. Worth its own case because a
+/// registry of type *names* got this wrong - `alloc::string::String` never
+/// matched `String` - and refused the second ask for anything but a primitive.
+#[test]
+fn the_same_path_and_type_twice_is_fine_for_a_type_that_is_not_a_primitive() {
+    let store = store();
+    let kv = store.kv();
+
+    kv.cell("text", String::new()).unwrap();
+    let again = kv.cell("text", String::new());
+    assert!(
+        again.is_ok(),
+        "`String` was refused the second time: {:?}",
+        again.err()
+    );
 }
 
 #[test]

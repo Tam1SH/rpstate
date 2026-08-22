@@ -28,14 +28,10 @@ pub enum WriteError {
     SourceGone,
 
     /// A `Kv` write aimed at a path a declared struct owns.
-    SchemaOwned { path: String, prefix: String },
-
-    /// The same path asked for as two different types in one run.
-    TypeMismatch {
-        path: String,
-        known: String,
-        asked: String,
-    },
+    ///
+    /// `declared` is the path the schema declared, which is either `path`
+    /// itself or one it lies inside.
+    SchemaOwned { path: String, declared: String },
 }
 
 impl fmt::Display for WriteError {
@@ -48,11 +44,14 @@ impl fmt::Display for WriteError {
             WriteError::SourceGone => f.write_str(
                 "the value this cell views is gone: the field or map it came from was dropped (`into_cell` gives a cell that keeps it alive)",
             ),
-            WriteError::SchemaOwned { path, prefix } => {
-                write!(f, "path `{path}` belongs to the schema at `{prefix}`")
+            WriteError::SchemaOwned { path, declared } if path == declared => {
+                write!(f, "`{path}` is declared by a schema")
             }
-            WriteError::TypeMismatch { path, known, asked } => {
-                write!(f, "path `{path}` is already `{known}`, asked for `{asked}`")
+            WriteError::SchemaOwned { path, declared } if declared.len() > path.len() => {
+                write!(f, "`{path}` holds `{declared}`, which a schema declares")
+            }
+            WriteError::SchemaOwned { path, declared } => {
+                write!(f, "`{path}` is inside `{declared}`, which a schema declares")
             }
         }
     }

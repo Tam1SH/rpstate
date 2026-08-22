@@ -17,7 +17,9 @@ pub use backend::text::RonStore;
 
 use crate::MigrationReport;
 use crate::store::config::StoreConfig;
-use crate::store::{StorageResult, StoreBackend};
+use crate::store::{
+    InitState, StorageResult, StoreBackend, StoreCallback, StoreExt, SubscriptionId, to_path,
+};
 use amethystate_core::path::{IntoStorePath, StorePath};
 use std::sync::Arc;
 
@@ -104,7 +106,7 @@ impl Store {
         &self,
         path: impl IntoStorePath,
     ) -> StorageResult<Option<T>> {
-        crate::store::StoreExt::get(self, path)
+        StoreExt::get(self, path)
     }
     /// Writes a value at `path`, creating it or replacing what was there.
     ///
@@ -117,12 +119,12 @@ impl Store {
         path: impl IntoStorePath,
         value: &T,
     ) -> StorageResult<()> {
-        crate::store::StoreExt::set(self, path, value)
+        StoreExt::set(self, path, value)
     }
     /// [`Store::set`] for a path already owned, saving the clone the borrowed
     /// form would make.
     pub fn set_owned<T: serde::Serialize>(&self, path: StorePath, value: &T) -> StorageResult<()> {
-        crate::store::StoreExt::set_owned(self, path, value)
+        StoreExt::set_owned(self, path, value)
     }
     /// [`Store::set`] tagged with who made the write.
     ///
@@ -134,7 +136,7 @@ impl Store {
         value: &T,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        crate::store::StoreExt::set_with_source(self, path, value, source)
+        StoreExt::set_with_source(self, path, value, source)
     }
     /// [`Store::set_with_source`] for a path already owned.
     pub fn set_owned_with_source<T: serde::Serialize>(
@@ -143,45 +145,42 @@ impl Store {
         value: &T,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        crate::store::StoreExt::set_owned_with_source(self, path, value, source)
+        StoreExt::set_owned_with_source(self, path, value, source)
     }
     /// Removes whatever is at `path`. Removing an absent path is not an error.
     pub fn delete(&self, path: impl IntoStorePath) -> StorageResult<()> {
-        crate::store::StoreBackend::delete(self, &crate::store::to_path(path)?)
+        StoreBackend::delete(self, &to_path(path)?)
     }
 
     /// Removes every level under `prefix`, and the value at `prefix` itself.
     pub fn delete_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
-        crate::store::StoreBackend::delete_prefix(self, &crate::store::to_path(prefix)?)
+        StoreBackend::delete_prefix(self, &to_path(prefix)?)
     }
 
     /// Commits what is buffered under `prefix`.
     pub fn flush_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
-        crate::store::StoreBackend::flush_prefix(self, &crate::store::to_path(prefix)?)
+        StoreBackend::flush_prefix(self, &to_path(prefix)?)
     }
 
     /// The keys under `prefix`, sorted, without reading their values.
     pub fn scan_keys(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<String>> {
-        crate::store::StoreBackend::scan_keys(self, &crate::store::to_path(prefix)?)
+        StoreBackend::scan_keys(self, &to_path(prefix)?)
     }
 
     /// Every key under `prefix` with its bytes, sorted by key.
     pub fn scan_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
-        crate::store::StoreBackend::scan_prefix(self, &crate::store::to_path(prefix)?)
+        StoreBackend::scan_prefix(self, &to_path(prefix)?)
     }
 
     /// Decodes bytes that arrived in a [`StoreEvent`](crate::StoreEvent),
     /// in whatever format this backend writes.
     ///
-    /// Corruption is not an error here: bytes that will not decode - because
-    /// the file was edited by hand, or the field changed type - yield
-    /// `T::default()` with a warning, which is what the next startup would
-    /// read anyway.
-    pub fn decode<T: serde::de::DeserializeOwned + Default>(
-        &self,
-        bytes: &[u8],
-    ) -> StorageResult<T> {
-        crate::store::StoreExt::decode(self, bytes)
+    /// Bytes that will not decode - because the file was edited by hand, or the
+    /// field changed type - are an error naming the type that was asked for and
+    /// what the codec made of them. They used to yield `T::default()`, which
+    /// meant a caller could not tell a stored default from an unreadable value.
+    pub fn decode<T: serde::de::DeserializeOwned>(&self, bytes: &[u8]) -> StorageResult<T> {
+        StoreExt::decode(self, bytes)
     }
 }
 
@@ -245,14 +244,10 @@ impl StoreBackend for Store {
     fn save_now(&self) -> StorageResult<()> {
         self.0.save_now()
     }
-    fn subscribe(
-        &self,
-        kind: crate::SubscriptionKind,
-        callback: crate::store::StoreCallback,
-    ) -> crate::store::SubscriptionId {
+    fn subscribe(&self, kind: crate::SubscriptionKind, callback: StoreCallback) -> SubscriptionId {
         self.0.subscribe(kind, callback)
     }
-    fn unsubscribe(&self, id: crate::store::SubscriptionId) {
+    fn unsubscribe(&self, id: SubscriptionId) {
         self.0.unsubscribe(id)
     }
     fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
@@ -264,7 +259,7 @@ impl StoreBackend for Store {
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
         self.0.is_initialized(namespace)
     }
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        self.0.mark_initialized(namespace)
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+        self.0.set_initialized(namespace, state)
     }
 }

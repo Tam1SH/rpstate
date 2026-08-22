@@ -2,6 +2,7 @@ use crate::MigrationReport;
 use crate::codec::CodecError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
+use crate::store::InitState;
 use crate::store::StorageResult;
 use crate::store::backend::sqlite::migration::SqliteMigrationBackend;
 use crate::store::backend::utils;
@@ -80,6 +81,10 @@ impl SqliteStoreInner {
                     .prepare_cached("REPLACE INTO metadata (key, value) VALUES (?, ?)")
                     .map_err(SqliteStoreError::from)
                     .doing(StorageError::Flush, &self.path)?;
+                let mut unmark = txn
+                    .prepare_cached("DELETE FROM metadata WHERE key = ?")
+                    .map_err(SqliteStoreError::from)
+                    .doing(StorageError::Flush, &self.path)?;
 
                 for (path, op) in &changes {
                     match op {
@@ -96,11 +101,13 @@ impl SqliteStoreInner {
                                 .doing(StorageError::Flush, &self.path)
                                 .attach_with(|| format!("deleting key: {path}"))?;
                         }
-                        utils::PendingOp::MarkInit => {
-                            mark.execute(rusqlite::params![
-                                format!("__init::{path}"),
-                                [] as [u8; 0]
-                            ])
+                        utils::PendingOp::Init(seeded) => {
+                            let key = format!("__init::{path}");
+                            if *seeded {
+                                mark.execute(rusqlite::params![key, [] as [u8; 0]])
+                            } else {
+                                unmark.execute(rusqlite::params![key])
+                            }
                             .map_err(SqliteStoreError::from)
                             .doing(StorageError::Flush, &self.path)
                             .attach_with(|| format!("marking namespace: {path}"))?;
@@ -382,6 +389,10 @@ impl SqliteStoreInner {
             .change_context(StorageError::Delete)
             .attach_with(|| format!("reading the value being deleted: {path}"))?;
 
+        let Some(old_bytes) = old_bytes else {
+            return Ok(());
+        };
+
         {
             let mut lock = self.pending.lock();
             lock.insert(path_arc.clone(), utils::PendingOp::Delete);
@@ -392,7 +403,7 @@ impl SqliteStoreInner {
             StoreEvent {
                 path: path_arc,
                 op: StoreOp::Delete,
-                old: old_bytes,
+                old: Some(old_bytes),
                 new: None,
                 source,
             },
@@ -475,8 +486,8 @@ impl SqliteStoreInner {
         Ok(found)
     }
 
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        if self.initialized.lock().contains(namespace) {
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+        if self.initialized.lock().contains(namespace) == state.is_seeded() {
             return Ok(());
         }
 
@@ -484,8 +495,16 @@ impl SqliteStoreInner {
         let key: Arc<str> = Arc::from(namespace);
         self.pending
             .lock()
-            .insert(Arc::clone(&key), utils::PendingOp::MarkInit);
-        self.initialized.lock().insert(key);
+            .insert(Arc::clone(&key), utils::PendingOp::Init(state.is_seeded()));
+
+        let mut initialized = self.initialized.lock();
+        if state.is_seeded() {
+            initialized.insert(key);
+        } else {
+            initialized.remove(&key);
+        }
+        drop(initialized);
+
         self.debouncer.schedule();
         Ok(())
     }
@@ -585,6 +604,12 @@ impl SqliteStore {
                                 return;
                             }
                         };
+                    let mut unmark = match txn.prepare("DELETE FROM metadata WHERE key = ?") {
+                        Ok(s) => s,
+                        Err(_) => {
+                            return;
+                        }
+                    };
 
                     for (path, op) in &changes {
                         match op {
@@ -600,14 +625,14 @@ impl SqliteStore {
                                     break;
                                 }
                             }
-                            utils::PendingOp::MarkInit => {
-                                if mark
-                                    .execute(rusqlite::params![
-                                        format!("__init::{path}"),
-                                        [] as [u8; 0]
-                                    ])
-                                    .is_err()
-                                {
+                            utils::PendingOp::Init(seeded) => {
+                                let key = format!("__init::{path}");
+                                let done = if *seeded {
+                                    mark.execute(rusqlite::params![key, [] as [u8; 0]])
+                                } else {
+                                    unmark.execute(rusqlite::params![key])
+                                };
+                                if done.is_err() {
                                     success = false;
                                     break;
                                 }
@@ -753,8 +778,8 @@ impl StoreBackend for SqliteStore {
         self.inner.is_initialized(namespace)
     }
 
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        self.inner.mark_initialized(namespace)
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+        self.inner.set_initialized(namespace, state)
     }
 }
 

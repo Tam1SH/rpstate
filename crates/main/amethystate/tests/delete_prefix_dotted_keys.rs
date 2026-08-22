@@ -1,3 +1,8 @@
+//! A name is allowed to hold the separator, and the escape is what keeps it one
+//! name. Everything that reads a key back has to go through the escape rather
+//! than through the characters, or a name like `a.exe` turns back into two
+//! levels that address nothing.
+
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
 use amethystate_core::access::WritableMode;
@@ -6,9 +11,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Deleting a subtree has to take the entries whose names hold the separator
-/// with it. The tree engines re-read the scanned key by splitting it on the
-/// separator, which turns such a name back into levels and addresses a node
-/// that is not there.
+/// with it.
 #[test]
 fn deleting_a_subtree_takes_the_dotted_names_with_it() {
     let path = TempPath::new("delete_prefix_dotted");
@@ -38,4 +41,23 @@ fn deleting_a_subtree_takes_the_dotted_names_with_it() {
 
     assert_eq!(reopened.get(&"plain".to_string()).unwrap(), None, "plain");
     assert_eq!(reopened.get(&"a.exe".to_string()).unwrap(), None, "a.exe");
+}
+
+/// A scan of a prefix lists the value stored at the prefix itself, and a name
+/// ending in the separator is a name like any other. Asking the joined form
+/// whether it ends in a dot cannot tell `cfg.b\.` - one level called `b.` -
+/// from a path with an empty level after it, and drops the value.
+#[test]
+fn a_scan_lists_the_value_at_a_prefix_whose_name_ends_in_the_separator() {
+    let path = TempPath::new("scan_dotted_prefix");
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+
+    store.set(["cfg", "b."], &7u32).unwrap();
+
+    assert_eq!(
+        store.scan_keys(["cfg", "b."]).unwrap(),
+        vec!["cfg.b\\.".to_string()],
+        "the value at the scanned prefix is missing from its own scan"
+    );
+    assert_eq!(store.get::<u32>(["cfg", "b."]).unwrap(), Some(7));
 }

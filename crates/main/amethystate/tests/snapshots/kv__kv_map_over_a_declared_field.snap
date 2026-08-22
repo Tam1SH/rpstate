@@ -2,5 +2,5 @@
 source: crates/main/amethystate/tests/kv.rs
 expression: shape(&err)
 ---
-path `typed` belongs to the schema at `typed`
+`typed` holds `typed.port`, which a schema declares
 ╰╴declared by: Typed

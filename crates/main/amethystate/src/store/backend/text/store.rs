@@ -4,6 +4,7 @@ use crate::MigrationReport;
 use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
+use crate::store::InitState;
 use crate::store::StorageResult;
 use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
@@ -54,9 +55,25 @@ impl<D> Clone for StoreFile<D> {
     }
 }
 
+/// The copy a store keeps of one of its own files while rewriting it.
+///
+/// The whole name is kept and `.bak` added, rather than the extension swapped:
+/// swapping it gives `store.bak` for both `store.db` and `store.meta`, so the
+/// second copy lands on the first and the data has no backup left. It also
+/// names a file the store did not create - a `store.bak` a person put there
+/// themselves - and overwrites it.
+fn backup_of(path: &Path) -> PathBuf {
+    let mut name = match path.file_name() {
+        Some(name) => name.to_os_string(),
+        None => return path.with_extension("bak"),
+    };
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
 impl<D: TextDocument> StoreFile<D> {
     pub fn new(path: PathBuf, initial_doc: D) -> Self {
-        let backup_path = path.with_extension("bak");
+        let backup_path = backup_of(&path);
         Self {
             path,
             backup_path,
@@ -492,6 +509,10 @@ impl<D: TextDocument> TextStoreInner<D> {
             old
         };
 
+        let Some(old_bytes) = old_bytes else {
+            return Ok(());
+        };
+
         self.writes.fetch_add(1, Ordering::Release);
 
         utils::emit_events(
@@ -499,7 +520,7 @@ impl<D: TextDocument> TextStoreInner<D> {
             StoreEvent {
                 path: Arc::from(path.as_str()),
                 op: StoreOp::Delete,
-                old: old_bytes,
+                old: Some(old_bytes),
                 new: None,
                 source,
             },
@@ -560,17 +581,22 @@ impl<D: TextDocument> TextStoreInner<D> {
         Ok(guard.get(&parts).is_some())
     }
 
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
         {
             let mut guard = self.files.meta.doc.write();
             let parts = vec!["__init", namespace];
-            let node = D::serialize_node(&true)
-                .in_meta(StorageError::Meta, &self.files.meta.path)
-                .attach_with(|| format!("namespace: {namespace}"))?;
-            guard
-                .set(&parts, node)
-                .in_meta(StorageError::Meta, &self.files.meta.path)
-                .attach_with(|| format!("namespace: {namespace}"))?;
+
+            match state {
+                InitState::Seeded => {
+                    let node = D::serialize_node(&true)
+                        .in_meta(StorageError::Meta, &self.files.meta.path)
+                        .attach_with(|| format!("namespace: {namespace}"))?;
+                    guard.set(&parts, node)
+                }
+                InitState::Fresh => guard.delete(&parts).map(|_| ()),
+            }
+            .in_meta(StorageError::Meta, &self.files.meta.path)
+            .attach_with(|| format!("namespace: {namespace}"))?;
         }
 
         self.files
@@ -730,8 +756,8 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         self.inner.is_initialized(namespace)
     }
 
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        self.inner.mark_initialized(namespace)
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+        self.inner.set_initialized(namespace, state)
     }
 }
 
@@ -820,7 +846,6 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
         && current_depth >= target_depth
     {
         if !prefix_str.is_empty()
-            && !prefix_str.ends_with('.')
             && let Some(node) = doc.get(parts)
         {
             results.push((prefix_str.to_string(), node.clone()));
@@ -831,7 +856,6 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
     let children = doc.scan(parts)?;
     if children.is_empty() {
         if !prefix_str.is_empty()
-            && !prefix_str.ends_with('.')
             && let Some(node) = doc.get(parts)
         {
             results.push((prefix_str.to_string(), node.clone()));
@@ -997,7 +1021,7 @@ fn scan_keys_recursive<D: TextDocument>(
     if let Some(target_depth) = target_depth
         && current_depth >= target_depth
     {
-        if !prefix_str.is_empty() && !prefix_str.ends_with('.') && doc.get(parts).is_some() {
+        if !prefix_str.is_empty() && doc.get(parts).is_some() {
             keys.push(prefix_str.to_string());
         }
         return Ok(());
@@ -1005,7 +1029,7 @@ fn scan_keys_recursive<D: TextDocument>(
 
     let children = doc.scan(parts)?;
     if children.is_empty() {
-        if !prefix_str.is_empty() && !prefix_str.ends_with('.') && doc.get(parts).is_some() {
+        if !prefix_str.is_empty() && doc.get(parts).is_some() {
             keys.push(prefix_str.to_string());
         }
     } else {

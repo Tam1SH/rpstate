@@ -54,6 +54,20 @@ pub trait SchemaAwareStore: StoreBackend {
     fn run_migrations(&self, mset: MigrationSet) -> StorageResult<MigrationReport>;
 }
 
+/// The store addressed by path, with nothing in the way.
+///
+/// These are the backrooms. Here be dragons.
+///
+/// [`Kv`](crate::store::Kv) is the surface to reach for: it refuses a write at a
+/// path a declared struct owns, so a `u16` field cannot be overwritten with a
+/// `String` by code that never saw the declaration. Nothing here does. A write
+/// through this trait lands wherever it is aimed, and `delete_prefix` takes the
+/// subtree it is given - declared paths included, and the initialization markers
+/// that decide whether defaults are seeded left behind.
+///
+/// Which is the point: the engines implement it, the schema layer is built on
+/// it, and a caller who knows exactly what they are addressing can use it. A
+/// caller who is guessing wants `Kv`.
 pub trait StoreBackend: Send + Sync + 'static {
     fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>>;
 
@@ -135,7 +149,37 @@ pub trait StoreBackend: Send + Sync + 'static {
     fn flush_async(&self) -> crate::store::durable::Commit;
 
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool>;
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()>;
+
+    /// Records whether `namespace` has been seeded.
+    ///
+    /// The one bit no amount of reading the data reproduces: a namespace whose
+    /// values were all removed looks exactly like one that was never written.
+    /// Which way it reads decides whether the next construction puts the
+    /// declared defaults back.
+    ///
+    /// Setting a namespace [`Fresh`](InitState::Fresh) that was never seeded is
+    /// not an error.
+    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()>;
+
+    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
+        self.set_initialized(namespace, InitState::Seeded)
+    }
+}
+
+/// Whether a namespace has had its declared defaults written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitState {
+    /// The defaults have been written; do not write them again.
+    Seeded,
+
+    /// Nothing has been written here, so the next construction seeds it.
+    Fresh,
+}
+
+impl InitState {
+    pub fn is_seeded(self) -> bool {
+        matches!(self, InitState::Seeded)
+    }
 }
 
 /// The typed surface over [`StoreBackend`]. Blanket-implemented, including for

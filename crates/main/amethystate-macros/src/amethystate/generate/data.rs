@@ -67,6 +67,8 @@ pub(crate) fn data_impl(
                     name: #fname_str,
                     type_hash: 0xDEADBEEF ^ < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
+                    role: #crate_name::migration::fields::Role::Node,
+                    children: < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::FIELDS,
                 }
             }
         } else if let Some((k, v)) = e.get_map_types() {
@@ -75,6 +77,8 @@ pub(crate) fn data_impl(
                     name: #fname_str,
                     type_hash: <::std::collections::HashMap<#k, #v> as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
+                    role: #crate_name::migration::fields::Role::Map,
+                    children: &[],
                 }
             }
         } else {
@@ -83,6 +87,8 @@ pub(crate) fn data_impl(
                     name: #fname_str,
                     type_hash: <#ty as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
+                    role: #crate_name::migration::fields::Role::Field,
+                    children: &[],
                 }
             }
         }

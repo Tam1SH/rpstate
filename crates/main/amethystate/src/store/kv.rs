@@ -1,9 +1,12 @@
-use crate::migration::types::AmeType;
+use crate::migration::fields::{FieldDescriptor, Role};
 use crate::observability::SchemaEntry;
-use crate::observability::{register_instance, resolve_field};
+use crate::observability::register_instance;
 use crate::reactive::error::{WriteError, WriteResult};
 use crate::store::Durable;
-use crate::store::{StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only};
+use crate::store::{
+    InitState, IntoStorageReport, StorageResult, StoreBackend, field_with_path,
+    reactive_map_with_path_only,
+};
 use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::StorePath;
@@ -117,8 +120,9 @@ impl Kv {
 
     /// Reads a value, or `None` if the path holds nothing.
     ///
-    /// Raw: the type is whatever you ask for here, and nothing remembers it.
-    /// [`Kv::cell`] does, and refuses a second type for the same path.
+    /// Raw: the type is whatever you ask for here. Nothing records it, and
+    /// nothing checks it against what an earlier run wrote - if the bytes do
+    /// not fit, the read says so and names what it found.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -130,7 +134,7 @@ impl Kv {
     /// kv.set("width", &1280u32).unwrap();
     /// assert_eq!(kv.get::<u32>("width").unwrap(), Some(1280));
     /// ```
-    pub fn get<T: AmeType + DeserializeOwned>(&self, name: &str) -> WriteResult<Option<T>> {
+    pub fn get<T: DeserializeOwned>(&self, name: &str) -> WriteResult<Option<T>> {
         let path = self.resolve(name)?;
         self.store
             .get(&path)
@@ -166,7 +170,7 @@ impl Kv {
     /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("solarized".into()));
     /// assert_eq!(kv.namespace("ui").get::<String>("theme").unwrap(), None);
     /// ```
-    pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
+    pub fn set<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         let path = self.resolve(name)?;
         self.guard(&path)?;
         self.store
@@ -233,8 +237,9 @@ impl Kv {
     /// A reactive cell over one path, seeded with `default` if the path is
     /// empty.
     ///
-    /// The type is remembered, so asking for the same path as two different
-    /// types fails rather than handing back garbage.
+    /// A cell reads the path to seed itself, so asking for the same path as two
+    /// different types fails rather than handing back garbage - the second ask
+    /// finds what the first stored and says what it found.
     ///
     /// The cell owns the field behind it, since nothing else holds one: the
     /// field exists because the cell was asked for. So it stays readable and
@@ -254,16 +259,16 @@ impl Kv {
     /// theme.set("light".to_string()).unwrap();
     /// assert_eq!(kv.get::<String>("theme").unwrap(), Some("light".into()));
     ///
-    /// // The path is now typed, and a second type for it is refused.
+    /// // A second type for the same path is refused - by the read, which finds
+    /// // a string where a number was asked for.
     /// assert!(kv.cell("theme", 0u32).is_err());
     /// ```
     pub fn cell<T>(&self, name: &str, default: T) -> WriteResult<ReactiveCell<T>>
     where
-        T: AmeType + Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+        T: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
     {
         let path = self.resolve(name)?;
         self.guard(&path)?;
-        self.check_type::<T>(&path)?;
 
         let field = field_with_path::<T, WritableMode>(
             &self.store,
@@ -299,67 +304,273 @@ impl Kv {
     pub fn map<K, V>(&self, name: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>
     where
         K: ReactiveMapKey,
-        V: AmeType + ReactiveMapValue,
+        V: ReactiveMapValue,
     {
         let path = self.resolve(name)?;
         self.guard(&path)?;
-        self.check_type::<V>(&path)?;
 
         reactive_map_with_path_only(&self.store, path.clone(), HashMap::new(), self.instance_id)
             .change_context(WriteError::Storage)
             .attach_with(|| format!("kv map: {path}"))
     }
 
-    /// Refuses paths a declared struct owns.
+    /// Refuses a path a declared struct owns.
     ///
     /// Writing a `String` where a `u16` is declared does not merely store the
     /// wrong thing: the field's subscription fails to decode and keeps its old
     /// value, and the next startup fails outright when it reads the path back.
+    ///
+    /// What is owned is the declared path, not the prefix it sits under. A
+    /// prefix-wide refusal reads as ownership of a whole subtree, and settings
+    /// do not work that way: an extension, a theme, a person editing the file
+    /// all put their own keys beside the declared ones, and none of them
+    /// collide. `app.width` is owned; `app.myplugin.enabled` is nobody's.
     fn guard(&self, path: &StorePath) -> WriteResult<()> {
-        for entry in inventory::iter::<SchemaEntry> {
-            let Some(prefix) = &entry.prefix else {
-                continue;
-            };
+        let Some((found, struct_name)) = schema_collision(path) else {
+            return Ok(());
+        };
 
-            if path.starts_with(prefix) {
-                return Err(Report::new(WriteError::SchemaOwned {
-                    path: path.as_str().to_string(),
-                    prefix: prefix.as_str().to_string(),
-                })
-                .attach(format!("declared by: {}", entry.struct_name)));
+        let declared = match found {
+            Collision::Owned(declared) | Collision::Holds(declared) => declared,
+        };
+
+        Err(Report::new(WriteError::SchemaOwned {
+            path: path.as_str().to_string(),
+            declared: declared.as_str().to_string(),
+        })
+        .attach(format!("declared by: {struct_name}")))
+    }
+
+    /// Drops everything under this handle that no schema declared.
+    ///
+    /// What a plugin, a theme or a person put beside the declared settings goes;
+    /// the declared paths stay, and so does anything inside them. A path a
+    /// schema declares *under* it is descended into rather than skipped, so an
+    /// undeclared key beside a declared one is still removed.
+    ///
+    /// This is not "restore defaults": the declared values are left exactly as
+    /// they are, and their initialization markers are untouched.
+    ///
+    /// Returns what went and what stayed, because a settings screen that resets
+    /// something should be able to say what it reset.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let ui = store.kv().namespace("ui");
+    /// let plugin = ui.namespace("myplugin");
+    ///
+    /// ui.set("theme", &"dark".to_string()).unwrap();
+    /// plugin.set("enabled", &true).unwrap();
+    ///
+    /// let cleared = ui.clear().unwrap();
+    ///
+    /// assert!(cleared.kept.is_empty(), "no schema declares anything under `ui`");
+    /// assert!(cleared.removed.iter().any(|p| p.as_str() == "ui.theme"));
+    /// assert!(
+    ///     cleared.removed.iter().any(|p| p.starts_with(plugin.prefix().unwrap())),
+    ///     "the subtree went, at whatever depth this engine names it"
+    /// );
+    ///
+    /// assert_eq!(ui.get::<String>("theme").unwrap(), None);
+    /// assert_eq!(plugin.get::<bool>("enabled").unwrap(), None);
+    /// ```
+    pub fn clear(&self) -> StorageResult<Cleared> {
+        let at = self.prefix.clone().unwrap_or_else(StorePath::root);
+        let mut cleared = Cleared::default();
+
+        self.clear_under(&at, &mut cleared)?;
+
+        Ok(cleared)
+    }
+
+    /// Drops the declared values under this handle so the next construction
+    /// writes the defaults again.
+    ///
+    /// The other half of [`Kv::clear`]: that one keeps the declared paths and
+    /// drops everything else, this one drops the declared paths and keeps
+    /// everything else.
+    ///
+    /// A namespace's initialization marker is cleared *before* its values are
+    /// dropped, and the order is not a detail. The marker is the only thing that
+    /// tells a namespace it has been written before, so dropping the values
+    /// first and failing in between leaves them gone and the marker standing -
+    /// nothing re-seeds and the settings are lost for good. In this order the
+    /// same failure leaves the marker cleared and the values in place, and the
+    /// next start finds them, writes nothing, and marks the namespace again.
+    pub fn reset_to_defaults(&self) -> StorageResult<Cleared> {
+        let at = self.prefix.clone().unwrap_or_else(StorePath::root);
+        let mut cleared = Cleared::default();
+
+        for namespace in seeded_namespaces_under(&at) {
+            self.store
+                .set_initialized(namespace.as_str(), InitState::Fresh)?;
+        }
+
+        self.reset_under(&at, &mut cleared)?;
+
+        Ok(cleared)
+    }
+
+    fn reset_under(&self, at: &StorePath, cleared: &mut Cleared) -> StorageResult<()> {
+        for key in self.store.scan_keys(at)? {
+            let child = StorePath::parse_joined(&key).map_err(IntoStorageReport::into_report)?;
+
+            match schema_collision(&child) {
+                Some((Collision::Owned(_), _)) => {
+                    self.store
+                        .delete_prefix_with_source(&child, Some(self.instance_id))?;
+                    cleared.removed.push(child);
+                }
+                Some((Collision::Holds(_), _)) => self.reset_under(&child, cleared)?,
+                None => cleared.kept.push(child),
             }
         }
 
         Ok(())
     }
 
-    /// Refuses a path already claimed as another type in this run.
-    ///
-    /// Only what this process has built is known, so this catches a mistake
-    /// rather than guaranteeing a type. A path written by an earlier run is not
-    /// checked, and neither is the raw [`Kv::set`].
-    fn check_type<T: AmeType + 'static>(&self, path: &StorePath) -> WriteResult<()> {
-        let path = path.as_str();
-        let wanted = T::TYPE_NAME;
+    fn clear_under(&self, at: &StorePath, cleared: &mut Cleared) -> StorageResult<()> {
+        for key in self.store.scan_keys(at)? {
+            let child = StorePath::parse_joined(&key).map_err(IntoStorageReport::into_report)?;
 
-        match resolve_field(path) {
-            Some(meta) if meta.value_type_name != wanted => {
-                Err(Report::new(WriteError::TypeMismatch {
-                    path: path.to_string(),
-                    known: meta.value_type_name.to_string(),
-                    asked: wanted.to_string(),
-                }))
+            match schema_collision(&child) {
+                None => {
+                    self.store
+                        .delete_prefix_with_source(&child, Some(self.instance_id))?;
+                    cleared.removed.push(child);
+                }
+                Some((Collision::Holds(_), _)) => self.clear_under(&child, cleared)?,
+                Some((Collision::Owned(_), _)) => cleared.kept.push(child),
             }
-            _ => Ok(()),
+        }
+
+        Ok(())
+    }
+}
+
+/// What [`Kv::clear`] did.
+///
+/// How deep the paths are follows the engine's scan - see
+/// [`StoreBackend::scan_keys`] - so a flat engine names the leaves it removed
+/// and a document engine names the level it removed them with. What went is the
+/// same either way.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Cleared {
+    /// Paths that were removed, with everything under them.
+    pub removed: Vec<StorePath>,
+
+    /// Paths left alone because a schema declares them.
+    pub kept: Vec<StorePath>,
+}
+
+/// How a path meets what a schema declared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Collision {
+    /// The path is a declared one, or lies inside one - a field owns whatever
+    /// is under it, since that is the inside of its value, and a map owns its
+    /// entries.
+    Owned(StorePath),
+
+    /// A declared path lies under this one, so a value here, or a map, would
+    /// take the level those paths live on.
+    Holds(StorePath),
+}
+
+/// How `path` meets the paths a schema declared, if it meets them at all.
+///
+/// A node is neither owned nor owning: it holds nothing itself and is only the
+/// way to the paths below it, so `app.panel` meets a schema only through its
+/// children.
+fn collision(at: &StorePath, fields: &[FieldDescriptor], path: &StorePath) -> Option<Collision> {
+    for field in fields {
+        let Ok(declared) = at.try_push(field.name) else {
+            continue;
+        };
+
+        if declared.starts_with(path) && &declared != path {
+            return Some(Collision::Holds(declared));
+        }
+
+        match field.role {
+            Role::Node => {
+                if path.starts_with(&declared)
+                    && let Some(found) = collision(&declared, field.children, path)
+                {
+                    return Some(found);
+                }
+            }
+            Role::Field | Role::Map => {
+                if path.starts_with(&declared) {
+                    return Some(Collision::Owned(declared));
+                }
+            }
         }
     }
+
+    None
+}
+
+/// Every namespace at or under `at` that a construction marks as seeded.
+///
+/// A struct marks its own prefix, and a nested node marks the path it was built
+/// at, so the set is the prefix plus every `Role::Node` under it.
+fn seeded_namespaces_under(at: &StorePath) -> Vec<StorePath> {
+    let mut found = Vec::new();
+
+    for entry in inventory::iter::<SchemaEntry> {
+        let Some(prefix) = &entry.prefix else {
+            continue;
+        };
+        if !prefix.starts_with(at) {
+            continue;
+        }
+
+        found.push(prefix.clone());
+        collect_nodes(prefix, entry.fields, &mut found);
+    }
+
+    found
+}
+
+fn collect_nodes(at: &StorePath, fields: &[FieldDescriptor], found: &mut Vec<StorePath>) {
+    for field in fields {
+        if field.role != Role::Node {
+            continue;
+        }
+        let Ok(node) = at.try_push(field.name) else {
+            continue;
+        };
+
+        collect_nodes(&node, field.children, found);
+        found.push(node);
+    }
+}
+
+/// How `path` meets every declared schema, if it meets any.
+fn schema_collision(path: &StorePath) -> Option<(Collision, &'static str)> {
+    for entry in inventory::iter::<SchemaEntry> {
+        let Some(prefix) = &entry.prefix else {
+            continue;
+        };
+        if !path.starts_with(prefix) && !prefix.starts_with(path) {
+            continue;
+        }
+
+        if let Some(found) = collision(prefix, entry.fields, path) {
+            return Some((found, entry.struct_name));
+        }
+    }
+
+    None
 }
 
 impl Durable<'_, Kv> {
     /// Writes a value at `path`, creating it or replacing what was there.
     ///
     /// Returns only once it is on disk rather than buffered.
-    pub fn set<T: AmeType + Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
+    pub fn set<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         self.0.set(name, value)?;
         let path = self.0.resolve(name)?;
         self.0
@@ -375,11 +586,7 @@ impl Durable<'_, Kv> {
     /// Resolves once the change is on disk rather than buffered.
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn set_async<T: AmeType + Serialize>(
-        &self,
-        name: &str,
-        value: &T,
-    ) -> WriteResult<()> {
+    pub async fn set_async<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         self.0.set(name, value)?;
         let path = self.0.resolve(name)?;
         self.0

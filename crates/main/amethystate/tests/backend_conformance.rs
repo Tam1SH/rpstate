@@ -50,6 +50,22 @@
 //!     empty after a reopen.
 //! 21. Degenerate: a level named `.` is an ordinary level - it addresses one
 //!     value, not the whole store.
+//! 22. A namespace reads uninitialized until it is marked, and initialized
+//!     after.
+//! 23. Each kind of subscription hears exactly what it asked for, and a prefix
+//!     is matched by level rather than by characters.
+//! 24. A dropped subscription stops hearing.
+//! 25. The store's own bookkeeping is not data: marking a namespace puts
+//!     nothing a scan of it will return.
+//! 26. A write emits one `Set` at the path, carrying the value that landed and
+//!     the one it replaced.
+//! 27. A delete emits one `Delete` carrying the value that went, and a delete
+//!     that removed nothing emits nothing.
+//! 28. `delete_prefix` emits one `DeletePrefix` at the prefix, not a `Delete`
+//!     per key underneath.
+//!
+//! Property 2 is two statements and so two tests: a path nobody wrote, and the
+//! parent of one somebody did.
 //!
 //! # What is deliberately not stated here
 //!
@@ -84,7 +100,9 @@
 use amethystate::Store;
 use amethystate::errors::WriteError;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{Occupied, StorageError, StorePath, StorePathError, SubscriptionKind};
+use amethystate::store::{
+    Occupied, StorageError, StoreEvent, StoreOp, StorePath, StorePathError, SubscriptionKind,
+};
 use amethystate_core::test_utils::TempPath;
 use proptest::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -257,10 +275,11 @@ fn an_ancestor_is_not_a_value(backend: Backend) {
         let under = parent.push(&child);
         store.set(&under, &7u32).unwrap();
 
-        prop_assert_ne!(
-            store.get::<u32>(&parent).ok().flatten(),
-            Some(7),
-            "reading {} handed back the value stored at {}", parent, under
+        let read = store.get::<u32>(&parent);
+        prop_assert!(
+            matches!(read, Err(_) | Ok(None)),
+            "reading {} handed back a value, and the only one in reach is at {}",
+            parent, under
         );
     });
 }
@@ -334,7 +353,7 @@ fn deleting_what_is_not_there_changes_nothing(backend: Backend) {
         write_leaves(&store, &written);
 
         let absent = StorePath::from_segments(&absent);
-        prop_assume!(!written.contains(&absent));
+        prop_assume!(!written.iter().any(|p| p.starts_with(&absent)));
 
         let before = store.scan_prefix(StorePath::root()).unwrap();
         store.delete(&absent).unwrap();
@@ -1032,6 +1051,100 @@ fn a_dropped_subscription_stops_hearing(backend: Backend) {
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
 
+/// Every event a store emits, in order.
+fn events(store: &Store) -> Arc<Mutex<Vec<StoreEvent>>> {
+    let seen: Arc<Mutex<Vec<StoreEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    store.subscribe(
+        SubscriptionKind::Any,
+        Arc::new(move |event| sink.lock().unwrap().push(event.clone())),
+    );
+    seen
+}
+
+/// What an event's bytes say, read in the engine's own format.
+fn decoded<T: serde::de::DeserializeOwned>(store: &Store, bytes: &Option<Vec<u8>>) -> Option<T> {
+    bytes
+        .as_ref()
+        .map(|raw| store.decode::<T>(raw).expect("the event's bytes decode"))
+}
+
+/// 26. A write says what changed: one `Set` at the path written, `new` holding
+///     the value that landed and `old` the one it replaced - and nothing for
+///     `old` where there was nothing to replace.
+fn a_write_emits_one_set_carrying_both_values(backend: Backend) {
+    let file = TempPath::new("conf_event_set");
+    let store = open(backend, &file);
+    let seen = events(&store);
+
+    store.set(["ui", "width"], &10u32).unwrap();
+    store.set(["ui", "width"], &20u32).unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "one event per write, got {seen:?}");
+
+    assert_eq!(seen[0].op, StoreOp::Set);
+    assert_eq!(&*seen[0].path, "ui.width");
+    assert!(seen[0].old.is_none(), "nothing was there to replace");
+    assert_eq!(decoded::<u32>(&store, &seen[0].new), Some(10));
+
+    assert_eq!(seen[1].op, StoreOp::Set);
+    assert_eq!(
+        decoded::<u32>(&store, &seen[1].old),
+        Some(10),
+        "the value the second write replaced"
+    );
+    assert_eq!(decoded::<u32>(&store, &seen[1].new), Some(20));
+}
+
+/// 27. A delete says what went: one `Delete` carrying the value that was there
+///     and no new one. A delete that removed nothing says nothing at all - an
+///     event for a removal that did not happen is a change subscribers act on.
+fn a_delete_emits_one_delete_and_only_when_something_went(backend: Backend) {
+    let file = TempPath::new("conf_event_delete");
+    let store = open(backend, &file);
+
+    store.set(["ui", "width"], &10u32).unwrap();
+
+    let seen = events(&store);
+    store.delete(["ui", "width"]).unwrap();
+    store.delete(["ui", "height"]).unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.len(),
+        1,
+        "only the delete that removed something speaks, got {seen:?}"
+    );
+    assert_eq!(seen[0].op, StoreOp::Delete);
+    assert_eq!(&*seen[0].path, "ui.width");
+    assert_eq!(
+        decoded::<u32>(&store, &seen[0].old),
+        Some(10),
+        "the value that went"
+    );
+    assert!(seen[0].new.is_none(), "a delete leaves nothing behind");
+}
+
+/// 28. `delete_prefix` is one operation, so it is one `DeletePrefix` at the
+///     prefix rather than a `Delete` for each key underneath.
+fn delete_prefix_emits_one_event_at_the_prefix(backend: Backend) {
+    let file = TempPath::new("conf_event_delete_prefix");
+    let store = open(backend, &file);
+
+    store.set(["ui", "a"], &1u32).unwrap();
+    store.set(["ui", "b"], &2u32).unwrap();
+    store.set(["ui", "c", "d"], &3u32).unwrap();
+
+    let seen = events(&store);
+    store.delete_prefix(["ui"]).unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "one operation, one event, got {seen:?}");
+    assert_eq!(seen[0].op, StoreOp::DeletePrefix);
+    assert_eq!(&*seen[0].path, "ui");
+}
+
 /// The store's own bookkeeping is not data.
 ///
 /// Marking a namespace initialized must not put anything a scan of that
@@ -1183,6 +1296,21 @@ macro_rules! conformance_suite {
         #[test]
         fn the_initialization_marker_is_not_listed_as_data() {
             super::the_initialization_marker_is_not_listed_as_data(BACKEND);
+        }
+
+        #[test]
+        fn a_write_emits_one_set_carrying_both_values() {
+            super::a_write_emits_one_set_carrying_both_values(BACKEND);
+        }
+
+        #[test]
+        fn a_delete_emits_one_delete_and_only_when_something_went() {
+            super::a_delete_emits_one_delete_and_only_when_something_went(BACKEND);
+        }
+
+        #[test]
+        fn delete_prefix_emits_one_event_at_the_prefix() {
+            super::delete_prefix_emits_one_event_at_the_prefix(BACKEND);
         }
     };
 }

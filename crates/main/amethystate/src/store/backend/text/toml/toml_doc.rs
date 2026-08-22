@@ -21,7 +21,7 @@ impl Navigable for toml_edit::Item {
         self.get(key)
     }
     fn get_child_mut(&mut self, key: &str) -> Option<&mut Self> {
-        self.get_mut(key)
+        self.as_table_like_mut().and_then(|t| t.get_mut(key))
     }
     fn is_map(&self) -> bool {
         self.as_table_like().is_some()

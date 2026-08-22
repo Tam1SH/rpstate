@@ -100,8 +100,12 @@ impl StoreBackend for JsonStore {
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
         self.0.is_initialized(namespace)
     }
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
-        self.0.mark_initialized(namespace)
+    fn set_initialized(
+        &self,
+        namespace: &str,
+        state: crate::store::InitState,
+    ) -> StorageResult<()> {
+        self.0.set_initialized(namespace, state)
     }
 }
 

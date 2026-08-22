@@ -7,6 +7,7 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::Span;
 use quote::quote;
 use syn::__private::TokenStream2;
+use syn::spanned::Spanned;
 use syn::{Data, DataStruct, DeriveInput, Fields, parse_macro_input};
 
 pub fn amethystate_impl(
@@ -77,6 +78,19 @@ pub fn amethystate_impl(
             return syn::Error::new(key.span(), message)
                 .to_compile_error()
                 .into();
+        }
+
+        if (entry.nested || entry.lookup_node.is_some())
+            && generate::names_type(&entry.ty, struct_name)
+        {
+            return syn::Error::new(
+                entry.ty.span(),
+                format!(
+                    "`{struct_name}` would build another `{struct_name}` to build itself, and never stop. A node that holds one of its own kind has to be able to stop - `Option<Box<_>>` at `None`, a collection at empty - and neither is built the way a `nested` or `lookup_node` field is"
+                ),
+            )
+            .to_compile_error()
+            .into();
         }
 
         entries.push(entry);

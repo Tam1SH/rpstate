@@ -186,6 +186,7 @@ impl NetworkState {
     }
 }
 impl ::amethystate::AmeStateNode for NetworkState {
+    const CONSTRUCTION_TERMINATES: () = {};
     fn new_node(
         store: &::amethystate::Store,
         _path: &::amethystate::store::StorePath,
@@ -200,6 +201,7 @@ impl ::amethystate::AmeStateNode for NetworkState {
         Self::new_with_id(store, instance_id)
     }
 }
+const _: () = <NetworkState as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
@@ -503,11 +505,15 @@ impl ::amethystate::migration::fields::AmeStateFields for NetworkState_Data {
             name: "host",
             type_hash: <String as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "String",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
         ::amethystate::migration::fields::FieldDescriptor {
             name: "port",
             type_hash: <u16 as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "u16",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
     ];
     const VERSION: u32 = 0u32;
@@ -793,6 +799,7 @@ impl UiState {
     }
 }
 impl ::amethystate::AmeStateNode for UiState {
+    const CONSTRUCTION_TERMINATES: () = {};
     fn new_node(
         store: &::amethystate::Store,
         _path: &::amethystate::store::StorePath,
@@ -807,6 +814,7 @@ impl ::amethystate::AmeStateNode for UiState {
         Self::new_with_id(store, instance_id)
     }
 }
+const _: () = <UiState as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]

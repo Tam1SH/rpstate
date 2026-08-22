@@ -202,11 +202,7 @@ mod tests {
 
     #[test]
     fn test_target_info_retrieval() {
-        static TEST_FIELDS: &[FieldDescriptor] = &[FieldDescriptor {
-            name: "id",
-            type_hash: 123,
-            type_name: "u64",
-        }];
+        static TEST_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("id", 123, "u64")];
 
         let migrator = MigrationPlan::new().step(1, "init", |_| Ok(()));
         let set = MigrationSet::default().add("app", migrator, 999, TEST_FIELDS, &[]);

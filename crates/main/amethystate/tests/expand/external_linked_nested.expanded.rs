@@ -182,6 +182,7 @@ impl ConnectionPool {
     }
 }
 impl ::amethystate::AmeStateNode for ConnectionPool {
+    const CONSTRUCTION_TERMINATES: () = {};
     fn new_node(
         store: &::amethystate::Store,
         path: &::amethystate::store::StorePath,
@@ -196,6 +197,7 @@ impl ::amethystate::AmeStateNode for ConnectionPool {
         Self::new_with_id(store, path, instance_id)
     }
 }
+const _: () = <ConnectionPool as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
@@ -576,11 +578,15 @@ impl ::amethystate::migration::fields::AmeStateFields for ConnectionPool_Data {
             name: "max_connections",
             type_hash: <u32 as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "u32",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
         ::amethystate::migration::fields::FieldDescriptor {
             name: "timeout_secs",
             type_hash: <u32 as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "u32",
+            role: ::amethystate::migration::fields::Role::Field,
+            children: &[],
         },
     ];
     const VERSION: u32 = 0u32;
@@ -771,6 +777,9 @@ impl DatabaseState {
     }
 }
 impl ::amethystate::AmeStateNode for DatabaseState {
+    const CONSTRUCTION_TERMINATES: () = {
+        let _: () = <ConnectionPool as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
+    };
     fn new_node(
         store: &::amethystate::Store,
         _path: &::amethystate::store::StorePath,
@@ -785,6 +794,7 @@ impl ::amethystate::AmeStateNode for DatabaseState {
         Self::new_with_id(store, instance_id)
     }
 }
+const _: () = <DatabaseState as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
@@ -1047,6 +1057,8 @@ impl ::amethystate::migration::fields::AmeStateFields for DatabaseState_Data {
             type_hash: 0xDEADBEEF
                 ^ <<ConnectionPool as ::amethystate::AmeState>::Data as ::amethystate::migration::types::AmeType>::TYPE_HASH,
             type_name: "ConnectionPool",
+            role: ::amethystate::migration::fields::Role::Node,
+            children: <<ConnectionPool as ::amethystate::AmeState>::Data as ::amethystate::migration::fields::AmeStateFields>::FIELDS,
         },
     ];
     const VERSION: u32 = 0u32;
@@ -1282,6 +1294,9 @@ impl InspectorState {
     }
 }
 impl ::amethystate::AmeStateNode for InspectorState {
+    const CONSTRUCTION_TERMINATES: () = {
+        let _: () = <ConnectionPool as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
+    };
     fn new_node(
         store: &::amethystate::Store,
         _path: &::amethystate::store::StorePath,
@@ -1296,6 +1311,7 @@ impl ::amethystate::AmeStateNode for InspectorState {
         Self::new_with_id(store, instance_id)
     }
 }
+const _: () = <InspectorState as ::amethystate::AmeStateNode>::CONSTRUCTION_TERMINATES;
 #[serde(crate = "::amethystate::serde")]
 #[doc(hidden)]
 #[allow(non_camel_case_types)]

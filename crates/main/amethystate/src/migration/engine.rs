@@ -859,18 +859,11 @@ mod tests {
             )
             .unwrap();
 
-        let current_fields: &'static [FieldDescriptor] = &[
-            FieldDescriptor {
-                name: "name",
-                type_hash: 1,
-                type_name: "String",
-            },
-            FieldDescriptor {
-                name: "age",
-                type_hash: 2,
-                type_name: "u32",
-            },
+        static CURRENT_FIELDS: &[FieldDescriptor] = &[
+            FieldDescriptor::leaf("name", 1, "String"),
+            FieldDescriptor::leaf("age", 2, "u32"),
         ];
+        let current_fields = CURRENT_FIELDS;
 
         let mset = MigrationSet::default().add(
             prefix.as_str(),
@@ -921,11 +914,8 @@ mod tests {
             )
             .unwrap();
 
-        let current_fields: &'static [FieldDescriptor] = &[FieldDescriptor {
-            name: "port",
-            type_hash: 200,
-            type_name: "u32",
-        }];
+        static CURRENT_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("port", 200, "u32")];
+        let current_fields = CURRENT_FIELDS;
 
         let mset = MigrationSet::default().add(
             prefix.as_str(),
@@ -972,11 +962,8 @@ mod tests {
             )
             .unwrap();
 
-        let fields: &'static [FieldDescriptor] = &[FieldDescriptor {
-            name: "new",
-            type_hash: 9,
-            type_name: "i32",
-        }];
+        static NEW_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("new", 9, "i32")];
+        let fields = NEW_FIELDS;
 
         {
             let mset = MigrationSet::default().add(
@@ -1064,11 +1051,8 @@ mod tests {
             )
             .unwrap();
 
-        let v2_fields: &'static [FieldDescriptor] = &[FieldDescriptor {
-            name: "new_f",
-            type_hash: 2,
-            type_name: "u16",
-        }];
+        static V2_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("new_f", 2, "u16")];
+        let v2_fields = V2_FIELDS;
 
         let mset = MigrationSet::default().add(
             prefix.as_str(),
@@ -1104,18 +1088,11 @@ mod tests {
         let prefix = &p("app_settings");
 
         {
-            let fields_v1: &'static [FieldDescriptor] = &[
-                FieldDescriptor {
-                    name: "port",
-                    type_hash: 10,
-                    type_name: "u16",
-                },
-                FieldDescriptor {
-                    name: "host",
-                    type_hash: 20,
-                    type_name: "String",
-                },
+            static FIELDS_V1: &[FieldDescriptor] = &[
+                FieldDescriptor::leaf("port", 10, "u16"),
+                FieldDescriptor::leaf("host", 20, "String"),
             ];
+            let fields_v1 = FIELDS_V1;
             let hash_v1 = 111;
 
             let mset = MigrationSet::default().add(
@@ -1131,18 +1108,11 @@ mod tests {
         }
 
         {
-            let fields_v2: &'static [FieldDescriptor] = &[
-                FieldDescriptor {
-                    name: "port",
-                    type_hash: 30,
-                    type_name: "u32",
-                },
-                FieldDescriptor {
-                    name: "timeout",
-                    type_hash: 40,
-                    type_name: "Duration",
-                },
+            static FIELDS_V2: &[FieldDescriptor] = &[
+                FieldDescriptor::leaf("port", 30, "u32"),
+                FieldDescriptor::leaf("timeout", 40, "Duration"),
             ];
+            let fields_v2 = FIELDS_V2;
             let hash_v2 = 222;
 
             let mset = MigrationSet::default().add(
