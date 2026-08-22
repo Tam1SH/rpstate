@@ -23,6 +23,7 @@ fn test_macro_expansion_compilation() {
     t.compile_fail("tests/fails/lookup_deep_error.rs");
     t.compile_fail("tests/fails/lookup_node_not_struct.rs");
     t.compile_fail("tests/fails/local_scope_not_send.rs");
+    t.compile_fail("tests/fails/subscription_not_clone.rs");
 
     t.compile_fail("tests/fails/prefix_empty.rs");
     t.compile_fail("tests/fails/prefix_root_dot.rs");

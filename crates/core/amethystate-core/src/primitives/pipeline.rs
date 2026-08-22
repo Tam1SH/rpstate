@@ -216,7 +216,12 @@ where
     }
 }
 
-#[derive(Default, Clone)]
+/// Subscriptions held together, ending when the scope does.
+///
+/// Not `Clone`, for the reason [`SignalSubscription`] is not: a copy of the
+/// scope would be a second chance to end every subscription in it, and the
+/// first copy dropped would take them all.
+#[derive(Default)]
 pub struct ReactiveScope {
     subs: Vec<SignalSubscription>,
 }

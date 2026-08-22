@@ -33,8 +33,12 @@ impl<T> Clone for Signal<T> {
 
 /// Dropping this ends the subscription, so it has to be held for as long as the
 /// callback should keep firing.
+///
+/// Not `Clone`, and not by omission: this is the right to end one subscription,
+/// and a second copy of that right is a second way to end it rather than a
+/// second owner. Hand it to one place; `ReactiveScope` is where several are
+/// held together.
 #[must_use = "dropping a subscription unsubscribes; bind it to keep it alive"]
-#[derive(Clone)]
 pub struct SignalSubscription {
     pub id: u64,
     pub location: &'static std::panic::Location<'static>,
