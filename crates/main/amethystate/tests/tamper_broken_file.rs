@@ -3,6 +3,9 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+use common::text_backend;
+
 macro_rules! doc {
     (json = $j:expr, toml = $t:expr, ron = $r:expr $(,)?) => {{
         #[cfg(feature = "json")]
@@ -27,7 +30,10 @@ fn settle() {
 fn seeded(suffix: &str) -> TempPath {
     let path = TempPath::new(suffix);
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.set(["cfg", "height"], &720u32).unwrap();
         store.save_now().unwrap();
@@ -40,7 +46,16 @@ fn meta_path(path: &std::path::Path) -> std::path::PathBuf {
     path.with_extension("meta")
 }
 
+/// Where the store keeps its copy: the whole name plus `.bak`.
 fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// What a person might plausibly have put beside the store themselves, which
+/// is what swapping the extension would have named.
+fn a_neighbours_file(path: &std::path::Path) -> std::path::PathBuf {
     path.with_extension("bak")
 }
 
@@ -57,7 +72,9 @@ fn a_truncated_file_is_refused_and_left_alone() {
     };
     std::fs::write(path.path(), broken).unwrap();
 
-    let opened = StoreBuilder::new(path.path()).build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build();
     assert!(opened.is_err(), "a truncated file opened without complaint");
     drop(opened);
     settle();
@@ -80,7 +97,9 @@ fn an_empty_file_is_refused() {
     let path = seeded("tamper_empty_file");
     std::fs::write(path.path(), "").unwrap();
 
-    let opened = StoreBuilder::new(path.path()).build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build();
     assert!(
         opened.is_err(),
         "an empty file opened as an empty store, and the next save writes over it"
@@ -98,7 +117,9 @@ fn a_scalar_root_is_refused() {
     };
     std::fs::write(path.path(), broken).unwrap();
 
-    let opened = StoreBuilder::new(path.path()).build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build();
     assert!(opened.is_err(), "a scalar root opened without complaint");
 }
 
@@ -111,7 +132,9 @@ fn an_array_root_is_refused() {
     let broken = "[1, 2, 3]\n";
     std::fs::write(path.path(), broken).unwrap();
 
-    let opened = StoreBuilder::new(path.path()).build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build();
     assert!(opened.is_err(), "an array root opened without complaint");
 }
 
@@ -132,7 +155,9 @@ fn a_file_with_no_keys_left_is_refused() {
     };
     std::fs::write(path.path(), commented).unwrap();
 
-    let opened = StoreBuilder::new(path.path()).build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build();
     assert!(
         opened.is_err(),
         "a file with no keys in it opened as an empty store, and the next save \
@@ -151,6 +176,7 @@ fn an_open_that_gives_up_leaves_the_data_where_it_was() {
 
     let opened =
         StoreBuilder::new(path.path())
+            .backend(text_backend())
             .migrations(|m| {
                 m.for_prefix("alpha")
                     .depends_on_raw("beta")
@@ -184,7 +210,6 @@ fn an_open_that_gives_up_leaves_the_data_where_it_was() {
 /// `store.db` and for `store.meta`, so the metadata copy lands on top of the
 /// data copy and the data has no backup left.
 #[test]
-#[ignore = "known: `with_extension(\"bak\")` collides for the data and the metadata - see TODO.md"]
 fn the_data_and_metadata_backups_are_separate_files() {
     let path = seeded("tamper_backup_collision");
 
@@ -197,7 +222,9 @@ fn the_data_and_metadata_backups_are_separate_files() {
 
     std::fs::write(meta_path(path.path()), "not a document at all {{{").unwrap();
 
-    let opened = StoreBuilder::new(path.path()).build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build();
     assert!(
         opened.is_err(),
         "an unreadable metadata file must be caught"
@@ -213,16 +240,18 @@ fn the_data_and_metadata_backups_are_separate_files() {
     );
 }
 
-/// The backup path is derived from the store path by swapping the extension, so
-/// it can name a file that is already there and is not the store's to touch.
+/// A backup path derived by swapping the extension names a file that may
+/// already be there and is not the store's to touch.
 #[test]
-#[ignore = "known: the backup path is derived from the stem, so it can name a file that is not the store's - see TODO.md"]
 fn a_file_beside_the_store_is_left_alone() {
     let path = seeded("tamper_bak_squat");
-    let bak = backup_path(path.path());
+    let bak = a_neighbours_file(path.path());
     std::fs::write(&bak, "the user's own backup").unwrap();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     store.set(["cfg", "width"], &1u32).unwrap();
     drop(store);
     settle();

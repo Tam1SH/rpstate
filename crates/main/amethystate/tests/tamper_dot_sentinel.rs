@@ -6,6 +6,9 @@ use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::collections::HashMap;
 
+mod common;
+use common::text_backend;
+
 macro_rules! doc {
     (json = $j:expr, toml = $t:expr, ron = $r:expr $(,)?) => {{
         #[cfg(feature = "json")]
@@ -32,7 +35,10 @@ fn settle() {
 #[test]
 fn a_level_named_dot_is_not_the_document_root() {
     let path = TempPath::new("tamper_dot_read");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
 
     store.set(["cfg", "width"], &1280u32).unwrap();
 
@@ -51,7 +57,10 @@ fn a_level_named_dot_is_not_the_document_root() {
 #[test]
 fn writing_at_a_level_named_dot_does_not_wipe_the_store() {
     let path = TempPath::new("tamper_dot_write");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
 
     store.set(["cfg", "width"], &1280u32).unwrap();
     store.set(["cfg", "height"], &720u32).unwrap();
@@ -73,7 +82,10 @@ fn writing_at_a_level_named_dot_does_not_wipe_the_store() {
 #[test]
 fn a_kv_entry_named_dot_does_not_wipe_the_store() {
     let path = TempPath::new("tamper_dot_kv");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
 
     let kv = store.kv();
     kv.set("width", &1280u32).unwrap();
@@ -95,7 +107,10 @@ fn a_write_at_a_level_named_dot_does_not_wipe_the_file() {
     let path = TempPath::new("tamper_dot_write_disk");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         let mut payload: HashMap<String, u32> = HashMap::new();
         payload.insert("zzz".to_string(), 1);
@@ -104,7 +119,10 @@ fn a_write_at_a_level_named_dot_does_not_wipe_the_file() {
     }
     settle();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "width"]).unwrap(),
         Some(1280),
@@ -116,7 +134,10 @@ fn a_write_at_a_level_named_dot_does_not_wipe_the_file() {
 #[test]
 fn deleting_a_level_named_dot_removes_it() {
     let path = TempPath::new("tamper_dot_delete");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
 
     let contents = doc! {
         json = "{\n  \".\": 7,\n  \"cfg\": { \"width\": 1280 }\n}\n",
@@ -127,7 +148,10 @@ fn deleting_a_level_named_dot_removes_it() {
     drop(store);
     settle();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let dot = StorePath::segment(".");
     StoreBackend::delete(&store, &dot).unwrap();
 
@@ -145,7 +169,10 @@ fn a_hand_written_dot_key_reads_back_its_own_value() {
     let path = TempPath::new("tamper_dot_hand");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.save_now().unwrap();
     }
@@ -158,7 +185,10 @@ fn a_hand_written_dot_key_reads_back_its_own_value() {
     };
     std::fs::write(path.path(), contents).unwrap();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["."]).unwrap(),
         Some(7),
@@ -172,7 +202,10 @@ fn scanning_over_a_hand_written_dot_key_does_not_yield_the_document() {
     let path = TempPath::new("tamper_dot_scan");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.save_now().unwrap();
     }
@@ -185,7 +218,10 @@ fn scanning_over_a_hand_written_dot_key_does_not_yield_the_document() {
     };
     std::fs::write(path.path(), contents).unwrap();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let entries = StoreBackend::scan_prefix(&store, &StorePath::root()).unwrap();
 
     let dot_entry = entries

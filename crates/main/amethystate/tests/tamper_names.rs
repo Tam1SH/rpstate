@@ -5,6 +5,9 @@ use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+use common::text_backend;
+
 macro_rules! doc {
     (json = $j:expr, toml = $t:expr, ron = $r:expr $(,)?) => {{
         #[cfg(feature = "json")]
@@ -28,7 +31,10 @@ fn settle() {
 
 fn seed(path: &std::path::Path, contents: &str) {
     {
-        let store = StoreBuilder::new(path).build().unwrap();
+        let store = StoreBuilder::new(path)
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["seed"], &1u32).unwrap();
         store.save_now().unwrap();
     }
@@ -49,7 +55,10 @@ fn a_dotted_name_and_a_nesting_are_two_places() {
     let path = TempPath::new("tamper_dotted_read");
     seed(path.path(), DOTTED);
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "a.b"]).unwrap(),
         Some(1),
@@ -69,7 +78,10 @@ fn a_scan_lists_the_dotted_name_escaped() {
     let path = TempPath::new("tamper_dotted_scan");
     seed(path.path(), DOTTED);
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let keys = StoreBackend::scan_keys(&store, &StorePath::segment("cfg")).unwrap();
 
     assert!(
@@ -79,14 +91,17 @@ fn a_scan_lists_the_dotted_name_escaped() {
 }
 
 /// Deleting a subtree must take a dotted name under it. The scan hands back the
-/// escaped key and `split_path` in the text store cuts it at the dot, so the
-/// delete addresses a level that is not there and silently removes nothing.
+/// escaped key, and anything that cuts that at the dot addresses a level which
+/// is not there, so the delete removes nothing and still returns `Ok`.
 #[test]
 fn deleting_a_prefix_takes_the_dotted_name_with_it() {
     let path = TempPath::new("tamper_dotted_delete");
     seed(path.path(), DOTTED);
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     store.delete_prefix(["cfg"]).unwrap();
 
     assert_eq!(
@@ -109,13 +124,19 @@ fn a_prefix_delete_over_a_dotted_name_survives_a_restart() {
     seed(path.path(), DOTTED);
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         store.delete_prefix(["cfg"]).unwrap();
         store.save_now().unwrap();
     }
     settle();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "a.b"]).unwrap(),
         None,
@@ -136,7 +157,10 @@ fn a_key_with_no_name_survives_a_round_trip() {
     seed(path.path(), contents);
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         store.set(["cfg", "height"], &720u32).unwrap();
         store.save_now().unwrap();
     }
@@ -165,7 +189,10 @@ fn a_key_with_no_name_costs_only_itself() {
     };
     seed(path.path(), contents);
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
 
     let keys = StoreBackend::scan_keys(&store, &StorePath::root()).unwrap();
     assert!(

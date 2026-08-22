@@ -44,6 +44,33 @@ pub fn per_engine(name: &str) -> String {
     )
 }
 
+/// The document engine a test about documents must name: the first of json,
+/// toml, ron, which is the order the seeded text is chosen in too.
+///
+/// A store built without naming its backend takes
+/// [`default_backend`](amethystate::store::builder::default_backend), and that
+/// prefers redb. A test that seeds a json file and then opens a store without
+/// saying so reads a redb database beside it, and what it asserts is about
+/// redb.
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
+#[allow(dead_code)]
+pub fn text_backend() -> amethystate::store::builder::Backend {
+    use amethystate::store::builder::Backend;
+
+    #[cfg(feature = "json")]
+    {
+        Backend::Json
+    }
+    #[cfg(all(feature = "toml", not(feature = "json")))]
+    {
+        Backend::Toml
+    }
+    #[cfg(all(feature = "ron", not(feature = "json"), not(feature = "toml")))]
+    {
+        Backend::Ron
+    }
+}
+
 fn content(line: &str) -> &str {
     line.trim_start_matches(['│', '├', '╰', '╴', '─', '▶', ' '])
 }

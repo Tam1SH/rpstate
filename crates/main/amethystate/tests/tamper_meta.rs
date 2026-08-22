@@ -9,6 +9,9 @@ use amethystate_macros::amethystate;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+mod common;
+use common::text_backend;
+
 mod v1 {
     use super::*;
     #[amethystate(prefix = "replay", version = 1)]
@@ -62,7 +65,10 @@ fn losing_the_metadata_file_does_not_resurrect_removed_defaults() {
     let path = TempPath::new("tamper_init_lost");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         let map = open_map(&store);
         assert_eq!(map.get(&"shipped".to_string()).unwrap(), Some(1));
         map.remove("shipped".to_string()).unwrap();
@@ -73,7 +79,10 @@ fn losing_the_metadata_file_does_not_resurrect_removed_defaults() {
 
     std::fs::remove_file(meta_path(path.path())).unwrap();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let map = open_map(&store);
     assert_eq!(
         map.get(&"shipped".to_string()).unwrap(),
@@ -90,7 +99,10 @@ fn a_forged_marker_does_not_suppress_the_defaults() {
     let path = TempPath::new("tamper_init_forged");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         store.set(["unrelated"], &1u32).unwrap();
         store.save_now().unwrap();
     }
@@ -112,7 +124,10 @@ fn a_forged_marker_does_not_suppress_the_defaults() {
     };
     std::fs::write(meta_path(path.path()), forged).unwrap();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let map = open_map(&store);
     assert_eq!(
         map.get(&"shipped".to_string()).unwrap(),
@@ -129,7 +144,10 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
     let path = TempPath::new("tamper_replay");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
         let doc = v1::Doc::new_with(&store).unwrap();
         doc.hits().set(21).unwrap();
         drop(doc);
@@ -138,7 +156,10 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
     settle();
 
     {
-        let (store, _) = StoreBuilder::new(path.path()).build_with_report().unwrap();
+        let (store, _) = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build_with_report()
+        .unwrap();
         assert_eq!(
             store.get::<u32>(["replay", "hits"]).unwrap(),
             Some(42),
@@ -150,7 +171,10 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
 
     std::fs::remove_file(meta_path(path.path())).unwrap();
 
-    let (store, _) = StoreBuilder::new(path.path()).build_with_report().unwrap();
+    let (store, _) = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build_with_report()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["replay", "hits"]).unwrap(),
         Some(42),

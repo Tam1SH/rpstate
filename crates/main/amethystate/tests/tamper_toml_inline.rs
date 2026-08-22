@@ -1,7 +1,7 @@
 #![cfg(feature = "toml")]
 
 use amethystate::store::StoreBackend;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
@@ -12,7 +12,10 @@ fn settle() {
 fn seeded(suffix: &str, contents: &str) -> TempPath {
     let path = TempPath::new(suffix);
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(Backend::Toml)
+            .build()
+            .unwrap();
         store.set(["seed"], &1u32).unwrap();
         store.save_now().unwrap();
     }
@@ -30,7 +33,10 @@ fn writing_into_an_inline_table_keeps_its_other_keys() {
         "cfg = { width = 1280, height = 720 }\n",
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Toml)
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "height"]).unwrap(),
         Some(720),
@@ -56,13 +62,19 @@ fn an_inline_table_survives_a_restart() {
     );
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(Backend::Toml)
+            .build()
+            .unwrap();
         store.set(["cfg", "scale"], &2u32).unwrap();
         store.save_now().unwrap();
     }
     settle();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Toml)
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "height"]).unwrap(),
         Some(720),
@@ -79,7 +91,10 @@ fn a_key_inside_an_inline_table_can_be_deleted() {
         "cfg = { width = 1280, height = 720 }\n",
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Toml)
+        .build()
+        .unwrap();
     StoreBackend::delete(&store, &StorePath::from_segments(["cfg", "width"])).unwrap();
 
     assert_eq!(
@@ -98,7 +113,10 @@ fn a_key_inside_an_inline_table_can_be_deleted() {
 fn a_section_is_not_read_back_as_one_of_its_own_keys() {
     let path = seeded("tamper_first_equals", "[cfg.width]\npx = 800\n");
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Toml)
+        .build()
+        .unwrap();
     let read = store.get::<u16>(["cfg", "width"]);
 
     assert!(
@@ -117,6 +135,7 @@ fn a_momentary_truncation_is_not_written_back_as_the_document() {
 
     {
         let store = StoreBuilder::new(path.path())
+            .backend(Backend::Toml)
             .debounce(20)
             .watch_interval(20)
             .build()
@@ -133,7 +152,10 @@ fn a_momentary_truncation_is_not_written_back_as_the_document() {
     }
     std::thread::sleep(std::time::Duration::from_millis(400));
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Toml)
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "width"]).unwrap(),
         Some(1280),
@@ -152,7 +174,10 @@ fn an_array_of_tables_survives_a_write_beside_it() {
     );
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(Backend::Toml)
+            .build()
+            .unwrap();
         store.set(["servers", "count"], &2u32).unwrap();
         store.save_now().unwrap();
     }

@@ -6,6 +6,9 @@ use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+use common::text_backend;
+
 macro_rules! doc {
     (json = $j:expr, toml = $t:expr, ron = $r:expr $(,)?) => {{
         #[cfg(feature = "json")]
@@ -36,7 +39,10 @@ pub struct Cfg {
 fn seeded(suffix: &str, contents: &str) -> TempPath {
     let path = TempPath::new(suffix);
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         cfg.width().set(800).unwrap();
         drop(cfg);
@@ -61,7 +67,10 @@ fn a_field_whose_value_became_a_string_is_reported() {
         },
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let built = Cfg::new_with(&store);
 
     assert!(
@@ -83,7 +92,10 @@ fn a_field_whose_value_became_a_float_is_reported() {
         },
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let built = Cfg::new_with(&store);
     assert!(
         built.is_err(),
@@ -105,7 +117,10 @@ fn a_field_whose_value_overflows_is_reported() {
         },
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let built = Cfg::new_with(&store);
     assert!(
         built.is_err(),
@@ -131,7 +146,10 @@ fn a_leaf_that_became_a_branch_is_reported() {
         },
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
 
     assert_eq!(
         store.get::<u16>(["cfg", "width", "px"]).unwrap(),
@@ -150,7 +168,10 @@ fn a_leaf_that_became_a_branch_is_reported() {
 fn a_branch_that_became_a_leaf_can_still_be_cleared() {
     let path = TempPath::new("tamper_branch_to_leaf");
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["items", "a"], &1u32).unwrap();
         store.set(["items", "b"], &2u32).unwrap();
         store.save_now().unwrap();
@@ -167,7 +188,10 @@ fn a_branch_that_became_a_leaf_can_still_be_cleared() {
     )
     .unwrap();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     let entries = StoreBackend::scan_keys(&store, &StorePath::segment("items")).unwrap();
     assert_eq!(
         entries,
@@ -199,7 +223,10 @@ fn a_section_that_holds_a_scalar_is_not_thrown_away_on_startup() {
     );
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         let _cfg = Cfg::new_with(&store).unwrap();
         drop(_cfg);
         store.save_now().unwrap();
@@ -226,7 +253,10 @@ fn a_section_that_holds_a_list_is_not_thrown_away_on_startup() {
     );
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         let _cfg = Cfg::new_with(&store).unwrap();
         drop(_cfg);
         store.save_now().unwrap();
@@ -254,7 +284,10 @@ fn undeclared_keys_survive_a_round_trip() {
     );
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         cfg.width().set(1024).unwrap();
         drop(cfg);

@@ -6,6 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+mod common;
+use common::text_backend;
+
 macro_rules! doc {
     (json = $j:expr, toml = $t:expr, ron = $r:expr $(,)?) => {{
         #[cfg(feature = "json")]
@@ -38,6 +41,7 @@ const EDITED: &str = doc! {
 fn an_external_edit_is_picked_up_while_the_store_is_open() {
     let path = TempPath::new("tamper_live_pickup");
     let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
         .debounce(20)
         .watch_interval(20)
         .build()
@@ -66,6 +70,7 @@ fn an_external_edit_notifies_a_subscriber() {
 
     let path = TempPath::new("tamper_live_notify");
     let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
         .debounce(20)
         .watch_interval(20)
         .build()
@@ -103,6 +108,7 @@ fn an_external_edit_notifies_a_subscriber() {
 fn an_external_edit_survives_an_unrelated_pending_write() {
     let path = TempPath::new("tamper_live_conflict");
     let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
         .debounce(400)
         .watch_interval(20)
         .build()
@@ -120,7 +126,10 @@ fn an_external_edit_survives_an_unrelated_pending_write() {
     drop(store);
     settle();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<u32>(["cfg", "width"]).unwrap(),
         Some(1024),
@@ -141,6 +150,7 @@ fn an_external_edit_survives_an_unrelated_pending_write() {
 fn a_broken_external_edit_is_not_silently_overwritten() {
     let path = TempPath::new("tamper_live_broken");
     let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
         .debounce(20)
         .watch_interval(20)
         .build()
@@ -182,6 +192,7 @@ fn a_broken_external_edit_is_not_silently_overwritten() {
 fn a_momentarily_truncated_file_is_not_read_as_an_empty_store() {
     let path = TempPath::new("tamper_live_truncate");
     let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
         .debounce(20)
         .watch_interval(20)
         .build()
@@ -209,7 +220,10 @@ fn an_external_edit_survives_two_round_trips() {
     let path = TempPath::new("tamper_live_two_trips");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.set(["cfg", "note"], &"mine".to_string()).unwrap();
         store.save_now().unwrap();
@@ -219,13 +233,19 @@ fn an_external_edit_survives_two_round_trips() {
     std::fs::write(path.path(), EDITED).unwrap();
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "width"], &1024u32).unwrap();
         store.save_now().unwrap();
     }
     settle();
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
+        .unwrap();
     assert_eq!(
         store.get::<String>(["cfg", "note"]).unwrap(),
         Some("edited by hand".to_string())
