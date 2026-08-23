@@ -111,15 +111,15 @@ fn a_forged_marker_does_not_suppress_the_defaults() {
     let forged = {
         #[cfg(feature = "json")]
         {
-            "{ \"__init\": { \"items\": true } }\n"
+            "{ \"__init.items\": true }\n"
         }
         #[cfg(all(feature = "toml", not(feature = "json")))]
         {
-            "[__init]\nitems = true\n"
+            "\"__init.items\" = true\n"
         }
         #[cfg(all(feature = "ron", not(feature = "json"), not(feature = "toml")))]
         {
-            "{\"__init\": {\"items\": true}}"
+            "{\"__init.items\": true}"
         }
     };
     std::fs::write(meta_path(path.path()), forged).unwrap();

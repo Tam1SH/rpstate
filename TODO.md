@@ -1052,6 +1052,22 @@ a derived `Clone` stops updating after being cloned once.
 The type is a cancellation token; it should not be `Clone` at all, or it should
 be an `Arc<Inner>` whose `Inner: Drop` unsubscribes.
 
+**Done: it is not `Clone`, and neither is `ReactiveScope`.** The `Arc<Inner>`
+half of that choice keeps an API nothing asks for - no `SignalSubscription` or
+`ReactiveScope` in the tree is cloned, and the clones in `Field` and
+`ReactiveMap` are of `Arc<StoreSubscription>` and
+`Arc<Mutex<SubscriptionHandle>>`, which are already shared. A second copy of
+the right to end a subscription is a second way to end it, so there is none.
+Pinned by `tests/fails/subscription_not_clone.rs`, since a type that cannot be
+cloned cannot be tested for it at run time.
+
+Removing it named its one victim, which is the one the entry above predicted:
+`amethystate-gpui` derives `Clone` on `RpView`, which holds a `ReactiveScope` -
+so cloning a view and dropping the clone stopped the original updating. That
+adapter no longer builds, and is left for the adapter pass; the fix there is an
+`Arc<ReactiveScope>` at the holder that wants sharing, said once and locally,
+rather than on the token.
+
 ## The error model's seams with the outside world
 
 Three, none about the contexts themselves - those are right.
@@ -1682,6 +1698,112 @@ separately why that one carries no path at all.
 field and saying that nothing was going to be stored either way. Both are pinned
 by snapshot in `tests/error_reports.rs`, so a refusal that collapses back to one
 sentence fails a test.
+
+## The fork under all of it: is the file a store, or a picture of a type
+
+Two models, and the library is currently both.
+
+**A picture of a type.** `to_writer(file, &config)`. The file is nested because
+the struct is, a person opening it sees their own shape, and there is nothing to
+address: the root is read and written whole. This is what `confy` does and what
+the compatibility layer exists to read.
+
+**A store that happens to be text.** Keys are paths, each with its own value,
+its own event, its own deletion. VS Code's `settings.json` is this - flat, keys
+like `"editor.fontSize"`, no object under `editor`.
+
+We address by path, which promises the second, and write nested, which delivers
+the first. Every ambiguity recorded in this file lives on that seam: a
+serialized struct and a branch are the same bytes, a leaf and a branch cannot
+share a name, `delete` and `delete_prefix` are one call on a document, a cleared
+map leaves a node behind, and a scan has to guess how deep a value is.
+
+**Writing the joined path as the key would end it.** The key becomes exactly
+`StorePath::as_str()` - the same string the flat engines already use, escaping
+included, injectivity already proved. Then a document holds keys, not nodes:
+
+```json
+{ "cfg.panels.left": { "width": 800 } }
+```
+
+`cfg.panels.left` is a key and `{"width": 800}` is its value; that the value is
+an object stops being anyone's business. The picture-of-a-type model does not
+die, it moves inside the value, which is where VS Code keeps it too
+(`"editor.rulers": [80, 120]`).
+
+What it would close: `Occupied` and both its variants, the empty node after
+`clear`, `a_leaf_and_a_branch_coexist_at_one_name`, the depth of a scan, the
+difference between `delete` and `delete_prefix` on a document, and `Navigable`
+with the four `generic_*` walkers - `TextDocument` becomes a flat map.
+
+What it would cost: every file already written nested needs migrating on open;
+`confy`'s files are nested and stay a foreign format to import rather than our
+own; toml needs quoted keys (`"editor.fontSize" = 14`), which is legal and
+against its idiom; and a path into the interior of a value - `["cfg", "panels",
+"left", "width"]` - stops resolving, though `#[amestate(nested)]` already writes
+each leaf as its own key and so is unaffected.
+
+### Decided: structure where a schema declares it, flat keys everywhere else
+
+Neither extreme. A document is nested exactly as far as a schema says it is, and
+whatever no schema declared is one flat key at the deepest declared point:
+
+```json
+{ "app": { "width": 1280, "panel": { "visible": true }, "myplugin.enabled": true } }
+```
+
+`app` and `panel` are nested because they are declared nodes. `myplugin.enabled`
+is one key because nothing declared it. The ambiguity becomes a decision rather
+than a guess: **a node is a level exactly when the schema says so, and anything
+else is a value.** Undeclared data cannot be ambiguous at all, since it is never
+nested.
+
+That also settles the case that silently corrupted a map: a declared `map`'s
+entries are the level below it, so `panels.left` is an entry and `{"width":
+800}` is its value, whole. The walk stops there because a role said where the
+boundary is, not because of a depth cut.
+
+**What the record has to hold, and it is small.** At each point the reader
+answers one question - descend, or take this whole - so the record is a tree of
+name and role, and nothing else:
+
+| role | the reader does |
+| --- | --- |
+| `node` | descends by name |
+| `map` | descends one level; each entry is a value |
+| `field` | stops; the node is the value |
+| no record | nothing was nested here, so the key is a joined remainder - split it |
+
+`FieldDescriptor` already carries exactly this. `type_hash` and `type_name` are
+not consulted in any of the four cases, so the layout needs two of the four
+layers - path and role - and nothing about types. `AmeType` leaves the critical
+path and stays a migration concern.
+
+**The prerequisite, now load-bearing.** Reading the file needs the schema, not
+just writing it: without one, `{"panels": {"left": {"width": 800}}}` could be an
+entry holding a struct or three levels, and no amount of string handling tells
+them apart - the escaped flat remainder reads correctly without a schema, a
+struct-valued node does not. So the snapshot has to be read from the store, per
+prefix, and "the set it reads is the linked one" above stops being deferrable:
+two binaries linking different structs would otherwise read one file into
+different data rather than merely refusing different writes.
+
+At read time the file's own snapshot wins - it describes how the file was laid
+out. At write time the code's declaration wins. The difference between them is
+drift, which is the migration half.
+
+**Two edge rules.** The metadata file is always flat, because reading the data
+file needs the schema and the schema lives in the metadata - a file that can
+only be read once you have read it is not a design. And a prefix with no
+snapshot is read flat: nothing was declared, so nothing was nested.
+
+Migration of files already written nested is not a concern - there are no users.
+
+**Done so far:** the metadata file is flat. Its keys were `["meta", prefix]` -
+two levels whose second name held the dots itself - and are now one joined key,
+`meta.app.panel`. That also ends a quieter oddity: an `as_root` struct's
+namespace is the empty string, so its marker was written as a child with no
+name, which is exactly what a scan reports as a name no path can hold.
 
 ## The text engines take a path apart and put it back on every call
 

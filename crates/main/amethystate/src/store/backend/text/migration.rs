@@ -74,8 +74,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
-        let parts = vec!["meta", prefix.as_str()];
-        if let Some(node) = self.meta_doc.get(&parts) {
+        let key = store::meta_key("meta", prefix);
+        if let Some(node) = self.meta_doc.get(&[key.as_str()]) {
             Ok(Some(
                 D::deserialize_node(node)
                     .change_context(StorageError::Meta)
@@ -87,7 +87,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
-        let parts = vec!["meta", prefix.as_str()];
+        let key = store::meta_key("meta", prefix);
+        let parts = [key.as_str()];
         let node = D::serialize_node(meta)
             .change_context(StorageError::Meta)
             .attach_with(|| format!("meta node: meta.{prefix}"))?;
@@ -99,8 +100,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
-        let parts = vec!["schema", prefix.as_str()];
-        if let Some(node) = self.meta_doc.get(&parts) {
+        let key = store::meta_key("schema", prefix);
+        if let Some(node) = self.meta_doc.get(&[key.as_str()]) {
             Ok(Some(
                 D::deserialize_node(node)
                     .change_context(StorageError::Meta)
@@ -116,7 +117,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
         prefix: &StorePath,
         snapshot: &SchemaSnapshot,
     ) -> StorageResult<()> {
-        let parts = vec!["schema", prefix.as_str()];
+        let key = store::meta_key("schema", prefix);
+        let parts = [key.as_str()];
         let node = D::serialize_node(snapshot)
             .change_context(StorageError::Meta)
             .attach_with(|| format!("meta node: schema.{prefix}"))?;
@@ -128,8 +130,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {
-        let parts = vec!["log", prefix.as_str()];
-        if let Some(node) = self.meta_doc.get(&parts) {
+        let key = store::meta_key("log", prefix);
+        if let Some(node) = self.meta_doc.get(&[key.as_str()]) {
             Ok(Some(
                 D::deserialize_node(node)
                     .change_context(StorageError::Meta)
@@ -141,7 +143,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     }
 
     fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
-        let parts = vec!["log", prefix.as_str()];
+        let key = store::meta_key("log", prefix);
+        let parts = [key.as_str()];
         let node = D::serialize_node(&log)
             .change_context(StorageError::Meta)
             .attach_with(|| format!("meta node: log.{prefix}"))?;

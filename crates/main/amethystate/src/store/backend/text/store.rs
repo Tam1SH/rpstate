@@ -71,6 +71,15 @@ fn backup_of(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// One record's key in the metadata file, which is flat.
+///
+/// Reading the data file needs the schema, and the schema is in here - so this
+/// file cannot be laid out by a rule that has to be read out of it. Joining
+/// once and storing the result whole keeps it readable with no schema at all.
+pub(super) fn meta_key(kind: &str, path: &StorePath) -> StorePath {
+    StorePath::segment(kind).join(path)
+}
+
 impl<D: TextDocument> StoreFile<D> {
     pub fn new(path: PathBuf, initial_doc: D) -> Self {
         let backup_path = backup_of(&path);
@@ -575,16 +584,24 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.subscriptions.write().retain(|s| s.id != id);
     }
 
+    fn init_key(&self, namespace: &str) -> StorageResult<StorePath> {
+        let path = StorePath::parse_joined(namespace)
+            .in_meta(StorageError::Meta, &self.files.meta.path)
+            .attach_with(|| format!("namespace: {namespace}"))?;
+        Ok(meta_key("__init", &path))
+    }
+
     fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
+        let key = self.init_key(namespace)?;
         let guard = self.files.meta.doc.read();
-        let parts = vec!["__init", namespace];
-        Ok(guard.get(&parts).is_some())
+        Ok(guard.get(&[key.as_str()]).is_some())
     }
 
     fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+        let key = self.init_key(namespace)?;
         {
             let mut guard = self.files.meta.doc.write();
-            let parts = vec!["__init", namespace];
+            let parts = [key.as_str()];
 
             match state {
                 InitState::Seeded => {

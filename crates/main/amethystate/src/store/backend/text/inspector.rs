@@ -32,12 +32,12 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
 
     fn get_schema_snapshots(&self) -> StorageResult<Vec<(String, SchemaSnapshot)>> {
         let guard = self.inner.files.meta.doc.read();
-        let mut raw_nodes = Vec::new();
-        scan_prefix_recursive(&*guard, &["schema"], "schema", &mut raw_nodes, Some(2))
+        let records = guard
+            .scan(&[])
             .attach_with(|| format!("meta file: {}", self.inner.files.meta.path.display()))?;
 
         let mut results = Vec::new();
-        for (full_key, node) in raw_nodes {
+        for (full_key, node) in records {
             if let Some(prefix) = full_key.strip_prefix("schema.") {
                 let snapshot: SchemaSnapshot = D::deserialize_node(&node)
                     .change_context(StorageError::Meta)
