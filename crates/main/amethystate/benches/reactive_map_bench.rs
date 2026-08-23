@@ -111,6 +111,33 @@ fn bench_scans(c: &mut Criterion) {
     group.finish();
 }
 
+/// The store's own scan, with the whole map still in the write buffer.
+///
+/// `ReactiveMap`'s `len`, `keys` and `entries` answer from the projection and
+/// never reach this, so the cost of folding the buffer over the committed rows
+/// is invisible from up there - and it is the cost anything addressing the
+/// store by path pays.
+fn bench_store_scan(c: &mut Criterion) {
+    use amethystate::store::StoreBackend;
+
+    let mut group = c.benchmark_group("store_scan_buffered");
+
+    for n in SIZES {
+        let (store, _map) = populated("store-scan", n);
+        let prefix = amethystate_core::path::StorePath::segment("bench");
+        group.throughput(Throughput::Elements(n as u64));
+
+        group.bench_with_input(BenchmarkId::new("scan_keys", n), &n, |b, _| {
+            b.iter(|| black_box(StoreBackend::scan_keys(&store, &prefix).unwrap().len()))
+        });
+        group.bench_with_input(BenchmarkId::new("scan_prefix", n), &n, |b, _| {
+            b.iter(|| black_box(StoreBackend::scan_prefix(&store, &prefix).unwrap().len()))
+        });
+    }
+
+    group.finish();
+}
+
 fn bench_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("map_read");
 
@@ -186,6 +213,7 @@ criterion_group!(
     bench_writes,
     bench_len,
     bench_scans,
+    bench_store_scan,
     bench_reads,
     bench_subscribers,
     bench_durability

@@ -20,7 +20,7 @@ use error::SqliteStoreError;
 use error_stack::ResultExt;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -272,7 +272,7 @@ impl SqliteStoreInner {
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let bound = utils::subtree_bound(prefix);
-        let mut storage_results = Vec::new();
+        let mut storage_results: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
         {
             let conn = self.conn.lock();
@@ -299,7 +299,7 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("rows read: {}", storage_results.len()))?;
-                storage_results.push((k, v));
+                storage_results.insert(k, v);
             }
         }
 
@@ -314,24 +314,18 @@ impl SqliteStoreInner {
         }
 
         for (k, opt_v) in pending_map {
-            if let Some(v) = opt_v {
-                if let Some(pos) = storage_results.iter().position(|(rk, _)| *rk == k) {
-                    storage_results[pos].1 = v;
-                } else {
-                    storage_results.push((k, v));
-                }
-            } else {
-                storage_results.retain(|(rk, _)| *rk != k);
-            }
+            match opt_v {
+                Some(v) => storage_results.insert(k, v),
+                None => storage_results.remove(&k),
+            };
         }
 
-        storage_results.sort_by(|(a, _), (b, _)| a.cmp(b));
-        Ok(storage_results)
+        Ok(storage_results.into_iter().collect())
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
         let bound = utils::subtree_bound(prefix);
-        let mut keys = Vec::new();
+        let mut keys: BTreeSet<String> = BTreeSet::new();
 
         {
             let conn = self.conn.lock();
@@ -356,7 +350,7 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("keys read: {}", keys.len()))?;
-                keys.push(key);
+                keys.insert(key);
             }
         }
 
@@ -367,17 +361,13 @@ impl SqliteStoreInner {
                     continue;
                 }
                 match op.value() {
-                    Some(_) if !keys.iter().any(|existing| existing == &**k) => {
-                        keys.push(k.to_string())
-                    }
-                    Some(_) => {}
-                    None => keys.retain(|existing| existing != &**k),
-                }
+                    Some(_) => keys.insert(k.to_string()),
+                    None => keys.remove(&**k),
+                };
             }
         }
 
-        keys.sort();
-        Ok(keys)
+        Ok(keys.into_iter().collect())
     }
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {

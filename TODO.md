@@ -79,6 +79,25 @@ of a second. `scan_keys` has the same shape via `retain`.
 The fix is a map lookup instead of a scan of `results`, which is a contained
 change to the redb and sqlite backends.
 
+**Done.** `results` is a `BTreeMap` and `keys` a `BTreeSet`, so folding the
+buffer is an insert or a remove per pending key, and the final `sort` goes with
+the ordering the container already keeps. The old code searched a `Vec`
+linearly for each of them while iterating a `HashMap` it never looked anything
+up in - the lookup went the wrong way round.
+
+Measured on redb with everything still buffered, at 10 000 entries:
+`scan_keys` 344.6 ms to 5.09 ms, `scan_prefix` 394.1 ms to 8.13 ms. At 1 000,
+`scan_keys` 4.14 ms to 0.32 ms. Ten times the size cost 83 times the time
+before and 16 times after.
+
+The 364 ms above was this path, reached through `len()`. It is not reachable
+that way any more: `ReactiveMap`'s `len`, `keys` and `entries` answer from the
+projection, so `reactive_map_bench`'s `map_len_vs_size` is flat at 680 ns from
+10 to 10 000 and measures the projection rather than a scan. The group that
+does reach the store is `store_scan_buffered`, added with the fix; the module
+doc's line about what `len()` costs "when it has to scan" is left over from
+when it did.
+
 Also worth noting from the same run: `entries().take(1)` costs as much as
 consuming all 10 000, because the scan materialises every key and value before
 the iterator is handed over. Decoding is lazy; the scan is not, and the scan is

@@ -6,7 +6,7 @@ use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use migration::RedbMigrationBackend;
 use redb::{Database, ReadableDatabase, TableHandle};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
@@ -497,7 +497,7 @@ impl StoreBackend for RedbStore {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
-        let mut results = Vec::new();
+        let mut results: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
         let read_txn = self
             .inner
@@ -522,7 +522,7 @@ impl StoreBackend for RedbStore {
                 .attach_with(|| format!("entries read so far: {}", results.len()))?;
             let key_str = k.value();
             if utils::is_under(key_str, prefix, &bound) {
-                results.push((key_str.to_string(), Vec::from(&v.value()[..])));
+                results.insert(key_str.to_string(), Vec::from(&v.value()[..]));
             } else if !key_str.starts_with(prefix) {
                 break;
             }
@@ -539,25 +539,19 @@ impl StoreBackend for RedbStore {
         }
 
         for (k, opt_v) in pending_map {
-            if let Some(v) = opt_v {
-                if let Some(pos) = results.iter().position(|(rk, _)| *rk == k) {
-                    results[pos].1 = v;
-                } else {
-                    results.push((k, v));
-                }
-            } else {
-                results.retain(|(rk, _)| *rk != k);
-            }
+            match opt_v {
+                Some(v) => results.insert(k, v),
+                None => results.remove(&k),
+            };
         }
 
-        results.sort_by(|(a, _), (b, _)| a.cmp(b));
-        Ok(results)
+        Ok(results.into_iter().collect())
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
-        let mut keys = Vec::new();
+        let mut keys: BTreeSet<String> = BTreeSet::new();
 
         let read_txn = self
             .inner
@@ -586,7 +580,7 @@ impl StoreBackend for RedbStore {
                 }
                 continue;
             }
-            keys.push(key.to_string());
+            keys.insert(key.to_string());
         }
 
         {
@@ -596,17 +590,13 @@ impl StoreBackend for RedbStore {
                     continue;
                 }
                 match op.value() {
-                    Some(_) if !keys.iter().any(|existing| existing == &**k) => {
-                        keys.push(k.to_string())
-                    }
-                    Some(_) => {}
-                    None => keys.retain(|existing| existing != &**k),
-                }
+                    Some(_) => keys.insert(k.to_string()),
+                    None => keys.remove(&**k),
+                };
             }
         }
 
-        keys.sort();
-        Ok(keys)
+        Ok(keys.into_iter().collect())
     }
 
     fn delete_with_source(&self, path: &StorePath, source: Option<Uuid>) -> StorageResult<()> {
