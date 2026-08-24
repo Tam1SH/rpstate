@@ -1156,9 +1156,10 @@ at 364 ms. The async twins are live; the sync four are not.
   needs two. Publicly reachable.
 - `reactive_map_with_path<TScope, ..>` binds `TScope: StateScope` and never uses
   it; callers turbofish four parameters for nothing.
-- `Kv::keys` returns joined, escaped, absolute strings, where
-  `ReactiveMap::keys` returns `Vec<K>`. It should return the names below the
-  namespace.
+- `Kv::keys` returns absolute paths, where `ReactiveMap::keys` returns
+  `Vec<K>`. It should return the names below the namespace. (It returns
+  `Vec<StorePath>` rather than `Vec<String>` now, which is the type being
+  honest, not the answer being right.)
 - `StorePath::from_static` is public and unchecked, with a doc saying `joined`
   must match `segments` and nothing enforcing it. It exists for the macro;
   `#[doc(hidden)]` it.
@@ -1281,6 +1282,93 @@ returns without telling the waiters anything.
 
 `StorageError::CommitFailed` is the context these want, and `CommitSignal`
 already carries a failure flag - what is missing is calling it on the way out.
+
+**Done, on all five engines.** The background debouncer retries a failed
+flush at a fixed interval instead of swallowing the first failure, and keeps
+retrying until it lands or the store is dropped. `retry_budget` does not bound
+that - a full disk is usually somebody about to delete something, and a store
+that stopped trying could not heal when they did. It bounds the *silence*: a
+streak outliving it escalates once, waking any `Commit` waiter with a failure
+and asking `on_persist_failure` what writers should be told from there.
+
+That answer is [`AfterGivingUp`]: `Fail` (the default with no callback) marks
+`PersistHealth`, so every later write returns `StorageError::CommitFailed`
+naming the reason until a flush lands and clears it; `Ignore` says nothing and
+keeps buffering; `Poison` is the old behaviour, now opt-in. Poisoning the
+writer for a disk that is briefly full is the reaction least worth having by
+default - the application is running, its reads are fine, and the thing it
+most needs is to be told, not killed. All three configurable per store
+(`StoreBuilder::retry_interval`, `::retry_budget`, `::on_persist_failure`).
+
+The `changes.is_empty()` early return that skipped notifying entirely - so
+`flush_async()` on an idle store hung forever, no failure required - is gone
+too, folded into the same mechanism as a trivial success. `apply_pending`
+factors the table-writing loop out of both the sync and background paths,
+which is also what gives the background one a real error to log instead of
+`.ok()?`.
+
+[`AfterGivingUp`]: crates/main/amethystate/src/store/config.rs
+
+**What "retry" cannot mean on redb, found while building this.** A real I/O
+error - not the test's `SIMULATE_WRITE_FAILURE`, which returns before ever
+reaching `Database` - sets an `AtomicBool` in redb's own `CachedFile`
+(`cached_file.rs`, `io_failed`) that nothing in the crate ever clears. Every
+`begin_write` *and* `begin_read` after that checks it first and returns
+`StorageError::PreviousIo` without touching disk - confirmed against redb
+4.1.0's own source, including its own test at `db.rs:1395-1410` doing exactly
+this. So a retry loop that just calls `begin_write` again is not retrying the
+failing operation; on the one failure mode this was built for, it is spinning
+at `retry_interval` until the budget runs out, on a `Database` handle that
+already decided it is dead - and taking every *read* down with it, not only
+writes. The doc's own wording says how to recover: close and reopen the
+`Database`. Doing that live would mean every holder of `db: Arc<Database>` in
+`RedbStoreInner` - not only the flush path - going through something
+swappable (`ArcSwap` is already a workspace dependency) that notices
+`PreviousIo`/`DatabaseClosed` and reopens rather than a bare `Arc`.
+
+**Not decided, and it is the one thing `AfterGivingUp` cannot paper over.**
+The choice of what writers are told is the application's now; whether redb can
+ever *recover* is not, and today it cannot. `Fail` and `Ignore` both promise
+that a flush landing later heals the store, and on sqlite and the text engines
+it does. On redb the retry can never land after a real I/O error, so the store
+stays failed until it is reopened - the promise is kept everywhere except the
+engine that most needs it. Building the reopen is what would close that; it is
+parked rather than guessed at.
+
+**sqlite and the text engines do not share redb's problem.** Neither rusqlite
+nor SQLite itself has anything resembling `io_failed`: a failed write rolls
+back its own transaction and leaves the `Connection` usable for the next one,
+which is the whole premise `busy_timeout`-style retrying on SQLite already
+relies on. The text engines write a whole file with `persist_atomic` and have
+no live handle to poison at all. So the same mechanism - retry, budget,
+poison, notify - is wired into all five engines now, and only on redb is the
+retry itself unable to do what its name says; sqlite and the text engines get
+a real second chance, not just a wait.
+
+**Done, the rest of it.** `apply_pending` (redb, sqlite) factors the
+table-writing loop out of both the sync and background call sites within each
+engine - not across engines, which the architecture pass below this entry
+found not worth it. `utils::init_key` replaces four hand-written
+`format!("__init::{namespace}")`s with one. `RetryPolicy`
+(`StoreConfig::retry_policy`, `StoreBuilder::retry_interval`/`::retry_budget`)
+and `on_persist_failure` are configurable per store, defaulting to a 5 second
+interval and a 60 second total budget - sized against this project's own
+stated write profile (thousands of buffered keys in a burst, not a handful of
+settings) rather than guessed, and closer to what a survey of comparable
+systems found than the redb `busy_timeout` convention would suggest on its
+own: nothing surveyed actually retries silently for a bounded time and then
+deliberately crashes - the real spectrum runs from failing fast with no retry
+at all (redb's own stance, and Core Data's explicit advice against retrying a
+failed save) to a bounded *count* of attempts degrading to read-only rather
+than crashing (RocksDB, VS Code) to crashing on the very first failure with no
+retry (PostgreSQL's fsync `PANIC`, adopted because retrying itself was unsafe -
+Linux clears the dirty-page error flag after reporting it once, so a retry can
+silently succeed over data that never actually landed). What landed is closest to the middle
+of that spectrum - keep trying, degrade rather than die, and let the
+application escalate if it wants to - with the crash kept available and
+nobody's default. Three tests in `redb/mod.rs` pin it: writes fail rather than
+the process, a disk that comes back heals the store with nothing restarted,
+and `Poison` still takes the writer down for an application that asks.
 
 ## The sqlite migration adapter still scans by `GLOB`
 
@@ -1943,6 +2031,26 @@ need rewriting as the entries above land:
 Sorting is documented on `keys` and pointed at from `entries`: the order is the
 store's, over the key's string form, so numeric keys come back `10, 100, 9`.
 That one is not expected to change.
+
+**The migration context needs a written-up page of its own.** Its methods carry
+doc comments and `StoreBuilder::provide` has a runnable example, but there is
+nowhere that explains the shape of a migration as a whole - and it is the part
+of the library a person meets exactly once, under pressure, with data they
+cannot afford to lose. What it should cover:
+
+- what a step is: a bare `fn` collected at link time, capturing nothing, which
+  is why anything from the application arrives through `provide`/`require`
+  rather than a closure;
+- the difference between `build` and `build_with_report` - only the second
+  collects the steps `#[migrate]` generated, which is its own entry above and
+  is the first thing that bites;
+- reading old data (`AmeData`), the scoped forms (`nested`, `scoped`), and
+  which of `get`/`global_get` addresses what;
+- that `scan_map` reads a map the step will write back whole, so an entry it
+  cannot read is an error rather than a skip;
+- what a failing step leaves behind, once migration atomicity above is
+  settled - this one has to wait for that answer rather than describe the
+  current behaviour, which is on this list.
 
 When the list is empty, turn on `#![deny(missing_docs)]` for the documented
 modules so the next undocumented public item cannot land quietly.
