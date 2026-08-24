@@ -1983,6 +1983,21 @@ Either pin the seed for the properties that record a divergence, or
 second says which engine fails which property in the source, where the reader
 is, rather than in whichever run they happen to read.
 
+**Done, and by neither of those.** `failure_persistence` is on: a
+counterexample is recorded in `.proptest-regressions` beside the suite and
+replayed before the new draws, so what fails once fails every run afterwards.
+Two are recorded already, both shrunk to a name that is a lone backslash.
+Three toml runs now name the same three properties where the count used to
+wander.
+
+Pinning the seed would have frozen the suite into twenty-four examples that
+never find anything again - determinism bought by ending the search, which is
+the opposite of what a property suite is for. `cfg_attr`-ignoring the three was
+dropped for a different reason: they are not accepted divergences. Each waits
+on a question open above - the scan's depth, the empty node after a delete,
+toml's `with_bytes_de` - and marking them ignored would have decided those by
+hiding them.
+
 ### What the suite does not reach yet
 
 Ordered by what it costs. **Events**: `StoreOp` appears nowhere in the tests,
