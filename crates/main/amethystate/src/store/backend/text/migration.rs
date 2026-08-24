@@ -66,7 +66,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         store::scan_prefix_impl(self.data_doc, prefix)
             .change_context(StorageError::Migrate)
             .attach_with(|| format!("prefix: {prefix}"))

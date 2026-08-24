@@ -36,7 +36,7 @@ pub trait MigrationBackendAdapter {
     fn get(&self, key: &str) -> StorageResult<Option<Vec<u8>>>;
     fn set(&mut self, key: &str, value: &[u8]) -> StorageResult<()>;
     fn delete(&mut self, key: &str) -> StorageResult<()>;
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>>;
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>>;
 
     fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>>;
     fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()>;
@@ -118,7 +118,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// Every key under `prefix`, sorted by key on every backend.
     ///
     /// Lists what [`StoreBackend::scan_keys`] lists.
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>>;
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>>;
 
     /// The keys under `prefix`, sorted, without reading their values.
     ///
@@ -127,7 +127,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// than with the answer.
     ///
     #[doc = include_str!("scan_contract.md")]
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>>;
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>>;
 
     fn save_now(&self) -> StorageResult<()>;
 

@@ -34,12 +34,72 @@ fn at(path: &Path) -> String {
     format!("store: {}", path.display())
 }
 
+/// Writes every buffered change through `txn`'s prepared statements.
+/// Committing `txn` is the caller's own last step - a synchronous flush that
+/// reports its error immediately and a retried background one both walk the
+/// same changes the same way, and only differ in what happens after this
+/// returns.
+fn apply_pending(
+    txn: &rusqlite::Transaction,
+    changes: &utils::Pending,
+    path: &Path,
+) -> StorageResult<()> {
+    let mut ins = txn
+        .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Flush, path)?;
+    let mut del = txn
+        .prepare_cached("DELETE FROM data WHERE key = ?")
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Flush, path)?;
+    let mut mark = txn
+        .prepare_cached("REPLACE INTO metadata (key, value) VALUES (?, ?)")
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Flush, path)?;
+    let mut unmark = txn
+        .prepare_cached("DELETE FROM metadata WHERE key = ?")
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Flush, path)?;
+
+    for (key, op) in changes {
+        match op {
+            utils::PendingOp::Set(b) => {
+                ins.execute(rusqlite::params![&**key, &b[..]])
+                    .map_err(SqliteStoreError::from)
+                    .doing(StorageError::Flush, path)
+                    .attach_with(|| format!("writing key: {key}"))
+                    .attach_with(|| format!("value bytes: {}", b.len()))?;
+            }
+            utils::PendingOp::Delete => {
+                del.execute([&**key])
+                    .map_err(SqliteStoreError::from)
+                    .doing(StorageError::Flush, path)
+                    .attach_with(|| format!("deleting key: {key}"))?;
+            }
+            utils::PendingOp::Init(seeded) => {
+                let init_key = utils::init_key(key);
+                if *seeded {
+                    mark.execute(rusqlite::params![init_key, [] as [u8; 0]])
+                } else {
+                    unmark.execute(rusqlite::params![init_key])
+                }
+                .map_err(SqliteStoreError::from)
+                .doing(StorageError::Flush, path)
+                .attach_with(|| format!("marking namespace: {key}"))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 struct SqliteStoreInner {
     conn: Arc<Mutex<Connection>>,
     path: PathBuf,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
     commits: Arc<crate::store::durable::CommitSignal>,
+    health: Arc<crate::store::durable::PersistHealth>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -68,53 +128,9 @@ impl SqliteStoreInner {
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Flush, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
-            {
-                let mut ins = txn
-                    .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
-                    .map_err(SqliteStoreError::from)
-                    .doing(StorageError::Flush, &self.path)?;
-                let mut del = txn
-                    .prepare_cached("DELETE FROM data WHERE key = ?")
-                    .map_err(SqliteStoreError::from)
-                    .doing(StorageError::Flush, &self.path)?;
-                let mut mark = txn
-                    .prepare_cached("REPLACE INTO metadata (key, value) VALUES (?, ?)")
-                    .map_err(SqliteStoreError::from)
-                    .doing(StorageError::Flush, &self.path)?;
-                let mut unmark = txn
-                    .prepare_cached("DELETE FROM metadata WHERE key = ?")
-                    .map_err(SqliteStoreError::from)
-                    .doing(StorageError::Flush, &self.path)?;
 
-                for (path, op) in &changes {
-                    match op {
-                        utils::PendingOp::Set(b) => {
-                            ins.execute(rusqlite::params![&**path, &b[..]])
-                                .map_err(SqliteStoreError::from)
-                                .doing(StorageError::Flush, &self.path)
-                                .attach_with(|| format!("writing key: {path}"))
-                                .attach_with(|| format!("value bytes: {}", b.len()))?;
-                        }
-                        utils::PendingOp::Delete => {
-                            del.execute([&**path])
-                                .map_err(SqliteStoreError::from)
-                                .doing(StorageError::Flush, &self.path)
-                                .attach_with(|| format!("deleting key: {path}"))?;
-                        }
-                        utils::PendingOp::Init(seeded) => {
-                            let key = format!("__init::{path}");
-                            if *seeded {
-                                mark.execute(rusqlite::params![key, [] as [u8; 0]])
-                            } else {
-                                unmark.execute(rusqlite::params![key])
-                            }
-                            .map_err(SqliteStoreError::from)
-                            .doing(StorageError::Flush, &self.path)
-                            .attach_with(|| format!("marking namespace: {path}"))?;
-                        }
-                    }
-                }
-            }
+            apply_pending(&txn, &changes, &self.path)?;
+
             txn.commit()
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Flush, &self.path)
@@ -127,10 +143,25 @@ impl SqliteStoreInner {
         Ok(())
     }
 
-    fn check_debouncer(&self) {
+    /// Whether a write may proceed.
+    ///
+    /// A background flush that has been failing past its budget is an error
+    /// the caller can act on, not a reason to take the process down - the
+    /// value is refused, what is already buffered keeps being retried, and a
+    /// flush that lands clears this. A debouncer thread that is actually dead
+    /// is a different thing and still panics: that is a bug here, not a disk.
+    fn check_debouncer(&self) -> StorageResult<()> {
+        if let Some(reason) = self.health.failure() {
+            return Err(error_stack::Report::new(StorageError::CommitFailed)
+                .attach(format!("the background flush is not landing: {reason}"))
+                .attach(
+                    "what is already buffered is still being retried, and reads are unaffected",
+                ));
+        }
         if self.debouncer.is_poisoned() {
             panic!("debouncer thread is dead — store integrity cannot be guaranteed");
         }
+        Ok(())
     }
 
     /// The value a subscriber should see as the old one.
@@ -235,7 +266,7 @@ impl SqliteStoreInner {
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.check_debouncer();
+        self.check_debouncer()?;
         let vec = sonic_rs::to_vec(&value)
             .map_err(CodecError::from)
             .doing(StorageError::Codec, &self.path)
@@ -270,9 +301,9 @@ impl SqliteStoreInner {
         self.flush_prefix(&StorePath::root())
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let bound = utils::subtree_bound(prefix);
-        let mut storage_results: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut storage_results: BTreeMap<StorePath, Vec<u8>> = BTreeMap::new();
 
         {
             let conn = self.conn.lock();
@@ -299,7 +330,7 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("rows read: {}", storage_results.len()))?;
-                storage_results.insert(k, v);
+                storage_results.insert(utils::stored_path(&k)?, v);
             }
         }
 
@@ -308,7 +339,7 @@ impl SqliteStoreInner {
             let lock = self.pending.lock();
             for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
                 if utils::is_under(k, prefix.as_str(), &bound) {
-                    pending_map.insert(k.to_string(), op.value().map(Vec::from));
+                    pending_map.insert(utils::stored_path(k)?, op.value().map(Vec::from));
                 }
             }
         }
@@ -323,9 +354,9 @@ impl SqliteStoreInner {
         Ok(storage_results.into_iter().collect())
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let bound = utils::subtree_bound(prefix);
-        let mut keys: BTreeSet<String> = BTreeSet::new();
+        let mut keys: BTreeSet<StorePath> = BTreeSet::new();
 
         {
             let conn = self.conn.lock();
@@ -350,7 +381,7 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("keys read: {}", keys.len()))?;
-                keys.insert(key);
+                keys.insert(utils::stored_path(&key)?);
             }
         }
 
@@ -360,9 +391,10 @@ impl SqliteStoreInner {
                 if !utils::is_under(k, prefix.as_str(), &bound) {
                     continue;
                 }
+                let key = utils::stored_path(k)?;
                 match op.value() {
-                    Some(_) => keys.insert(k.to_string()),
-                    None => keys.remove(&**k),
+                    Some(_) => keys.insert(key),
+                    None => keys.remove(&key),
                 };
             }
         }
@@ -371,7 +403,7 @@ impl SqliteStoreInner {
     }
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
-        self.check_debouncer();
+        self.check_debouncer()?;
         let path_arc: Arc<str> = Arc::from(path.as_str());
 
         let old_bytes = self
@@ -404,7 +436,7 @@ impl SqliteStoreInner {
     }
 
     fn delete_prefix(&self, prefix: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
-        self.check_debouncer();
+        self.check_debouncer()?;
 
         let keys = self
             .scan_prefix(prefix)
@@ -456,7 +488,7 @@ impl SqliteStoreInner {
             return Ok(true);
         }
 
-        let key = format!("__init::{namespace}");
+        let key = utils::init_key(namespace);
         let found = {
             let conn = self.conn.lock();
             let mut stmt = conn
@@ -481,7 +513,7 @@ impl SqliteStoreInner {
             return Ok(());
         }
 
-        self.check_debouncer();
+        self.check_debouncer()?;
         let key: Arc<str> = Arc::from(namespace);
         self.pending
             .lock()
@@ -555,88 +587,53 @@ impl SqliteStore {
         let write_lock = Arc::new(Mutex::new(()));
 
         let conn_save = conn_arc.clone();
-        let commits_save = commits.clone();
         let pending_save = pending.clone();
         let write_lock_save = write_lock.clone();
+        let path_save = config.path.clone();
 
-        let debouncer = Debouncer::new(config.save_debounce, move || {
-            let _write_guard = write_lock_save.lock();
+        let health = Arc::new(crate::store::durable::PersistHealth::default());
 
-            let changes = {
-                let lock = pending_save.lock();
-                if lock.is_empty() {
-                    return;
-                }
-                lock.clone()
-            };
+        let debouncer = Debouncer::new_with_retry(
+            config.save_debounce,
+            crate::store::util::debouncer::FlushPolicy {
+                retry: config.retry_policy.clone(),
+                commits: commits.clone(),
+                health: health.clone(),
+                on_giveup: config.on_persist_failure.clone(),
+            },
+            move || -> Result<(), String> {
+                let _write_guard = write_lock_save.lock();
 
-            let mut conn = conn_save.lock();
-            if let Ok(txn) = conn.transaction() {
-                let mut success = true;
-                {
-                    let mut ins = match txn.prepare("REPLACE INTO data (key, value) VALUES (?, ?)")
-                    {
-                        Ok(s) => s,
-                        Err(_) => {
-                            return;
-                        }
-                    };
-                    let mut del = match txn.prepare("DELETE FROM data WHERE key = ?") {
-                        Ok(s) => s,
-                        Err(_) => {
-                            return;
-                        }
-                    };
-                    let mut mark =
-                        match txn.prepare("REPLACE INTO metadata (key, value) VALUES (?, ?)") {
-                            Ok(s) => s,
-                            Err(_) => {
-                                return;
-                            }
-                        };
-                    let mut unmark = match txn.prepare("DELETE FROM metadata WHERE key = ?") {
-                        Ok(s) => s,
-                        Err(_) => {
-                            return;
-                        }
-                    };
-
-                    for (path, op) in &changes {
-                        match op {
-                            utils::PendingOp::Set(b) => {
-                                if ins.execute(rusqlite::params![&**path, &b[..]]).is_err() {
-                                    success = false;
-                                    break;
-                                }
-                            }
-                            utils::PendingOp::Delete => {
-                                if del.execute([&**path]).is_err() {
-                                    success = false;
-                                    break;
-                                }
-                            }
-                            utils::PendingOp::Init(seeded) => {
-                                let key = format!("__init::{path}");
-                                let done = if *seeded {
-                                    mark.execute(rusqlite::params![key, [] as [u8; 0]])
-                                } else {
-                                    unmark.execute(rusqlite::params![key])
-                                };
-                                if done.is_err() {
-                                    success = false;
-                                    break;
-                                }
-                            }
-                        }
+                let changes = {
+                    let lock = pending_save.lock();
+                    if lock.is_empty() {
+                        return Ok(());
                     }
+                    lock.clone()
+                };
+
+                let landed: StorageResult<()> = (|| {
+                    let mut conn = conn_save.lock();
+                    let txn = conn
+                        .transaction()
+                        .map_err(SqliteStoreError::from)
+                        .doing(StorageError::Flush, &path_save)?;
+                    apply_pending(&txn, &changes, &path_save)?;
+                    txn.commit()
+                        .map_err(SqliteStoreError::from)
+                        .doing(StorageError::Flush, &path_save)
+                        .attach_with(|| format!("buffered changes: {}", changes.len()))
+                })();
+
+                match landed {
+                    Ok(()) => {
+                        utils::clear_committed(&mut pending_save.lock(), &changes);
+                        Ok(())
+                    }
+                    Err(report) => Err(format!("{report:#}")),
                 }
-                let landed = success && txn.commit().is_ok();
-                if landed {
-                    utils::clear_committed(&mut pending_save.lock(), &changes);
-                }
-                commits_save.finished(landed);
-            }
-        });
+            },
+        );
 
         let inner = Arc::new(SqliteStoreInner {
             conn: conn_arc,
@@ -644,6 +641,7 @@ impl SqliteStore {
             pending,
             initialized,
             commits,
+            health,
             debouncer: Arc::new(debouncer),
             subscriptions,
             next_sub_id,
@@ -720,11 +718,11 @@ impl StoreBackend for SqliteStore {
         self.inner.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.inner.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.inner.scan_keys(prefix)
     }
 

@@ -63,11 +63,11 @@ impl StoreBackend for RonStore {
         self.0.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.0.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.0.scan_keys(prefix)
     }
 

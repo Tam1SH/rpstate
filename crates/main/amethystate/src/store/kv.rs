@@ -4,8 +4,7 @@ use crate::observability::register_instance;
 use crate::reactive::error::{WriteError, WriteResult};
 use crate::store::Durable;
 use crate::store::{
-    InitState, IntoStorageReport, StorageResult, StoreBackend, field_with_path,
-    reactive_map_with_path_only,
+    InitState, StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only,
 };
 use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
 use crate::{ReactiveMapKey, ReactiveMapValue};
@@ -224,10 +223,13 @@ impl Kv {
     /// ui.set("width", &1280u32).unwrap();
     /// kv.namespace("net").set("port", &8080u16).unwrap();
     ///
-    /// assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.width"]);
+    /// assert_eq!(
+    ///     ui.keys().unwrap().iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+    ///     ["ui.theme", "ui.width"]
+    /// );
     /// ```
     #[doc = include_str!("scan_contract.md")]
-    pub fn keys(&self) -> StorageResult<Vec<String>> {
+    pub fn keys(&self) -> StorageResult<Vec<StorePath>> {
         match &self.prefix {
             Some(prefix) => self.store.scan_keys(prefix),
             None => self.store.scan_keys(StorePath::root()),
@@ -414,9 +416,7 @@ impl Kv {
     }
 
     fn reset_under(&self, at: &StorePath, cleared: &mut Cleared) -> StorageResult<()> {
-        for key in self.store.scan_keys(at)? {
-            let child = StorePath::parse_joined(&key).map_err(IntoStorageReport::into_report)?;
-
+        for child in self.store.scan_keys(at)? {
             match schema_collision(&child) {
                 Some((Collision::Owned(_), _)) => {
                     self.store
@@ -432,9 +432,7 @@ impl Kv {
     }
 
     fn clear_under(&self, at: &StorePath, cleared: &mut Cleared) -> StorageResult<()> {
-        for key in self.store.scan_keys(at)? {
-            let child = StorePath::parse_joined(&key).map_err(IntoStorageReport::into_report)?;
-
+        for child in self.store.scan_keys(at)? {
             match schema_collision(&child) {
                 None => {
                     self.store

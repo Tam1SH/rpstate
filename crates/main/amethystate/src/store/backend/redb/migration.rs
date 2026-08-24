@@ -5,6 +5,7 @@ use crate::migration::AppliedStep;
 use crate::store::CodecFormat;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
+use crate::store::backend::utils;
 use crate::store::traits::MigrationBackendAdapter;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -96,7 +97,7 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let prefix = prefix.as_str();
         let table = self.data_table()?;
         let mut result = Vec::new();
@@ -111,9 +112,9 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
                 .attach_with(|| self.store())
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("entries read so far: {}", result.len()))?;
-            let key = k.value().to_string();
+            let key = k.value();
             if key.starts_with(prefix) {
-                result.push((key, v.value().to_vec()));
+                result.push((utils::stored_path(key)?, v.value().to_vec()));
             }
         }
         Ok(result)

@@ -152,6 +152,18 @@ impl StorePath {
         }
     }
 
+    /// A path whose joined form is already in hand, taken rather than rebuilt.
+    ///
+    /// Only for [`StorePath::parse_joined`], which was handed the joined form
+    /// and split it: joining the pieces back reproduces the string it started
+    /// from, which `a_key_that_parses_joins_back_to_itself` pins.
+    fn from_parsed(segments: Vec<Arc<str>>, joined: &str) -> Self {
+        Self {
+            segments: Segments::Owned(Arc::from(segments)),
+            joined: Joined::Owned(Arc::from(joined)),
+        }
+    }
+
     /// This path with one more level under it.
     ///
     /// # Panics
@@ -269,21 +281,38 @@ impl StorePath {
     /// path is not one.
     pub fn parse_joined(joined: &str) -> Result<Self, StorePathError> {
         let mut segments: Vec<Arc<str>> = Vec::new();
-        let mut current = String::new();
+        let mut start = 0;
+        let mut unescaped: Option<String> = None;
         let mut escaped = false;
 
-        for ch in joined.chars() {
+        for (at, ch) in joined.char_indices() {
             match ch {
                 _ if escaped => {
                     if ch != SEPARATOR && ch != ESCAPE {
                         return Err(StorePathError::DanglingEscape);
                     }
-                    current.push(ch);
+                    unescaped.get_or_insert_default().push(ch);
                     escaped = false;
                 }
-                ESCAPE => escaped = true,
-                SEPARATOR => segments.push(Arc::from(std::mem::take(&mut current).as_str())),
-                _ => current.push(ch),
+                ESCAPE => {
+                    let taken = unescaped.get_or_insert_default();
+                    if taken.is_empty() {
+                        taken.push_str(&joined[start..at]);
+                    }
+                    escaped = true;
+                }
+                SEPARATOR => {
+                    segments.push(match unescaped.take() {
+                        Some(name) => Arc::from(name.as_str()),
+                        None => Arc::from(&joined[start..at]),
+                    });
+                    start = at + ch.len_utf8();
+                }
+                _ => {
+                    if let Some(name) = unescaped.as_mut() {
+                        name.push(ch);
+                    }
+                }
             }
         }
 
@@ -292,14 +321,17 @@ impl StorePath {
         }
 
         if !joined.is_empty() {
-            segments.push(Arc::from(current.as_str()));
+            segments.push(match unescaped {
+                Some(name) => Arc::from(name.as_str()),
+                None => Arc::from(&joined[start..]),
+            });
         }
 
         if let Some(at) = segments.iter().position(|s| s.is_empty()) {
             return Err(StorePathError::EmptySegment { at });
         }
 
-        Ok(Self::from_checked(segments))
+        Ok(Self::from_parsed(segments, joined))
     }
 }
 
@@ -484,6 +516,22 @@ impl PartialEq for StorePath {
 
 impl Eq for StorePath {}
 
+/// The order a store lists in: the joined form, byte by byte.
+///
+/// The flat engines range over that string, so anything sorting paths for
+/// itself has to agree with them or a listing changes order by engine.
+impl Ord for StorePath {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for StorePath {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl std::hash::Hash for StorePath {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_usize(self.segments.len());
@@ -502,6 +550,12 @@ impl std::fmt::Debug for StorePath {
 impl std::fmt::Display for StorePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for StorePath {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 

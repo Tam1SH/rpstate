@@ -69,7 +69,12 @@ where
     let mut results = Vec::new();
 
     for (full_path, raw) in kvs {
-        let Some(key_str) = path.entry_name(&full_path) else {
+        let Some(key_str) = full_path
+            .strip_prefix(path)
+            .as_ref()
+            .and_then(StorePath::name)
+            .map(str::to_string)
+        else {
             continue;
         };
         let Ok(key) = K::from_str(&key_str) else {
@@ -271,10 +276,7 @@ where
                 .await
                 .change_context(WriteError::Storage)
                 .attach_with(|| format!("clearing map: {path}"))?;
-            for (full_path, _) in kvs {
-                let key = StorePath::parse_joined(&full_path)
-                    .change_context(WriteError::Path)
-                    .attach_with(|| format!("stored key: {full_path}"))?;
+            for (key, _) in kvs {
                 backend
                     .delete_with_source(&key, source)
                     .await

@@ -48,12 +48,66 @@ thread_local! {
         std::cell::RefCell::new(Vec::with_capacity(BUF_SIZE));
 }
 
+/// Writes every buffered change into `txn`'s tables. Committing `txn` is the
+/// caller's own last step, not this function's - a synchronous flush that
+/// reports its error immediately and a retried background one both walk the
+/// same changes the same way, and only differ in what happens after this
+/// returns.
+fn apply_pending(
+    txn: &redb::WriteTransaction,
+    changes: &utils::Pending,
+    path: &Path,
+) -> StorageResult<()> {
+    let mut table = txn
+        .open_table(TABLE_DATA)
+        .doing(StorageError::Flush, path)
+        .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+    let mut meta = txn
+        .open_table(TABLE_META)
+        .doing(StorageError::Flush, path)
+        .attach_with(|| format!("table: {}", TABLE_META.name()))?;
+
+    for (key, op) in changes {
+        match op {
+            utils::PendingOp::Set(b) => {
+                table
+                    .insert(&**key, &b[..])
+                    .doing(StorageError::Flush, path)
+                    .attach_with(|| format!("table: {}", TABLE_DATA.name()))
+                    .attach_with(|| format!("key: {key}"))
+                    .attach_with(|| format!("value: {} bytes", b.len()))?;
+            }
+            utils::PendingOp::Delete => {
+                table
+                    .remove(&**key)
+                    .doing(StorageError::Flush, path)
+                    .attach_with(|| format!("table: {}", TABLE_DATA.name()))
+                    .attach_with(|| format!("key: {key}"))?;
+            }
+            utils::PendingOp::Init(seeded) => {
+                let init_key = utils::init_key(key);
+                if *seeded {
+                    meta.insert(init_key.as_str(), &[][..]).map(|_| ())
+                } else {
+                    meta.remove(init_key.as_str()).map(|_| ())
+                }
+                .doing(StorageError::Flush, path)
+                .attach_with(|| format!("table: {}", TABLE_META.name()))
+                .attach_with(|| format!("namespace: {key}"))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 struct RedbStoreInner {
     db: Arc<Database>,
     path: Arc<Path>,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
     commits: Arc<crate::store::durable::CommitSignal>,
+    health: Arc<crate::store::durable::PersistHealth>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -84,46 +138,9 @@ impl RedbStoreInner {
             .doing(StorageError::Flush, &self.path)
             .attach_with(|| format!("prefix: {prefix}"))
             .attach_with(|| format!("buffered entries: {}", changes.len()))?;
-        {
-            let mut table = txn
-                .open_table(TABLE_DATA)
-                .doing(StorageError::Flush, &self.path)
-                .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
-            let mut meta = txn
-                .open_table(TABLE_META)
-                .doing(StorageError::Flush, &self.path)
-                .attach_with(|| format!("table: {}", TABLE_META.name()))?;
-            for (path, op) in &changes {
-                match op {
-                    utils::PendingOp::Set(b) => {
-                        table
-                            .insert(&**path, &b[..])
-                            .doing(StorageError::Flush, &self.path)
-                            .attach_with(|| format!("table: {}", TABLE_DATA.name()))
-                            .attach_with(|| format!("key: {path}"))
-                            .attach_with(|| format!("value: {} bytes", b.len()))?;
-                    }
-                    utils::PendingOp::Delete => {
-                        table
-                            .remove(&**path)
-                            .doing(StorageError::Flush, &self.path)
-                            .attach_with(|| format!("table: {}", TABLE_DATA.name()))
-                            .attach_with(|| format!("key: {path}"))?;
-                    }
-                    utils::PendingOp::Init(seeded) => {
-                        let key = format!("__init::{path}");
-                        if *seeded {
-                            meta.insert(key.as_str(), &[][..]).map(|_| ())
-                        } else {
-                            meta.remove(key.as_str()).map(|_| ())
-                        }
-                        .doing(StorageError::Flush, &self.path)
-                        .attach_with(|| format!("table: {}", TABLE_META.name()))
-                        .attach_with(|| format!("namespace: {path}"))?;
-                    }
-                }
-            }
-        }
+
+        apply_pending(&txn, &changes, &self.path)?;
+
         txn.commit()
             .doing(StorageError::Flush, &self.path)
             .attach_with(|| format!("prefix: {prefix}"))
@@ -134,10 +151,23 @@ impl RedbStoreInner {
         Ok(())
     }
 
-    fn check_debouncer(&self) {
+    /// Whether a write may proceed.
+    ///
+    /// A background flush that has been failing past its budget is an error
+    /// the caller can act on, not a reason to take the process down - the
+    /// value is refused, what is already buffered keeps being retried, and a
+    /// flush that lands clears this. A debouncer thread that is actually dead
+    /// is a different thing and still panics: that is a bug here, not a disk.
+    fn check_debouncer(&self) -> StorageResult<()> {
+        if let Some(reason) = self.health.failure() {
+            return Err(error_stack::Report::new(StorageError::CommitFailed)
+                .attach(format!("the background flush is not landing: {reason}"))
+                .attach("what is already buffered is still being retried, and reads are unaffected"));
+        }
         if self.debouncer.is_poisoned() {
             panic!("debouncer thread is dead — store integrity cannot be guaranteed");
         }
+        Ok(())
     }
 }
 
@@ -198,61 +228,57 @@ impl RedbStore {
 
         let db_save = db.clone();
         let pending_save = pending.clone();
-        let commits_save = commits.clone();
+        let path_save = path.clone();
 
         let write_lock = Arc::new(Mutex::new(()));
         let write_lock_save = write_lock.clone();
 
-        let debouncer = Debouncer::new(config.save_debounce, move || {
-            let _write_guard = write_lock_save.lock();
+        let health = Arc::new(crate::store::durable::PersistHealth::default());
 
-            let changes = {
-                let lock = pending_save.lock();
-                lock.clone()
-            };
-            if changes.is_empty() {
-                return;
-            }
+        let debouncer = Debouncer::new_with_retry(
+            config.save_debounce,
+            crate::store::util::debouncer::FlushPolicy {
+                retry: config.retry_policy.clone(),
+                commits: commits.clone(),
+                health: health.clone(),
+                on_giveup: config.on_persist_failure.clone(),
+            },
+            move || -> Result<(), String> {
+                let _write_guard = write_lock_save.lock();
 
-            let success = (|| -> Option<bool> {
+                let changes = {
+                    let lock = pending_save.lock();
+                    if lock.is_empty() {
+                        return Ok(());
+                    }
+                    lock.clone()
+                };
+
                 #[cfg(test)]
                 if SIMULATE_WRITE_FAILURE.load(Ordering::Relaxed) {
-                    return None;
+                    return Err("simulated write failure".to_string());
                 }
 
-                let txn = db_save.begin_write().ok()?;
-                {
-                    let mut table = txn.open_table(TABLE_DATA).ok()?;
-                    let mut meta = txn.open_table(TABLE_META).ok()?;
-                    for (path, op) in &changes {
-                        match op {
-                            utils::PendingOp::Set(b) => {
-                                table.insert(&**path, &b[..]).ok()?;
-                            }
-                            utils::PendingOp::Delete => {
-                                table.remove(&**path).ok()?;
-                            }
-                            utils::PendingOp::Init(seeded) => {
-                                let key = format!("__init::{path}");
-                                if *seeded {
-                                    meta.insert(key.as_str(), &[][..]).ok()?;
-                                } else {
-                                    meta.remove(key.as_str()).ok()?;
-                                }
-                            }
-                        }
+                let landed: StorageResult<()> = (|| {
+                    let txn = db_save
+                        .begin_write()
+                        .doing(StorageError::Flush, &path_save)
+                        .attach_with(|| format!("buffered entries: {}", changes.len()))?;
+                    apply_pending(&txn, &changes, &path_save)?;
+                    txn.commit()
+                        .doing(StorageError::Flush, &path_save)
+                        .attach_with(|| format!("buffered entries: {}", changes.len()))
+                })();
+
+                match landed {
+                    Ok(()) => {
+                        utils::clear_committed(&mut pending_save.lock(), &changes);
+                        Ok(())
                     }
+                    Err(report) => Err(format!("{report:#}")),
                 }
-                txn.commit().ok()?;
-                Some(true)
-            })()
-            .unwrap_or(false);
-
-            if success {
-                utils::clear_committed(&mut pending_save.lock(), &changes);
-            }
-            commits_save.finished(success);
-        });
+            },
+        );
 
         let inner = Arc::new(RedbStoreInner {
             db,
@@ -260,6 +286,7 @@ impl RedbStore {
             pending,
             initialized,
             commits,
+            health,
             debouncer: Arc::new(debouncer),
             subscriptions,
             next_sub_id: Arc::new(AtomicU64::new(1)),
@@ -448,7 +475,7 @@ impl StoreBackend for RedbStore {
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.inner.check_debouncer();
+        self.inner.check_debouncer()?;
         let bytes = SERIALIZATION_BUFFER
             .with(|buf| {
                 let mut b = buf.borrow_mut();
@@ -494,10 +521,10 @@ impl StoreBackend for RedbStore {
         self.inner.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
-        let mut results: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut results: BTreeMap<StorePath, Vec<u8>> = BTreeMap::new();
 
         let read_txn = self
             .inner
@@ -522,7 +549,7 @@ impl StoreBackend for RedbStore {
                 .attach_with(|| format!("entries read so far: {}", results.len()))?;
             let key_str = k.value();
             if utils::is_under(key_str, prefix, &bound) {
-                results.insert(key_str.to_string(), Vec::from(&v.value()[..]));
+                results.insert(utils::stored_path(key_str)?, Vec::from(&v.value()[..]));
             } else if !key_str.starts_with(prefix) {
                 break;
             }
@@ -533,7 +560,7 @@ impl StoreBackend for RedbStore {
             let lock = self.inner.pending.lock();
             for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
                 if utils::is_under(k, prefix, &bound) {
-                    pending_map.insert(k.to_string(), op.value().map(Vec::from));
+                    pending_map.insert(utils::stored_path(k)?, op.value().map(Vec::from));
                 }
             }
         }
@@ -548,10 +575,10 @@ impl StoreBackend for RedbStore {
         Ok(results.into_iter().collect())
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
-        let mut keys: BTreeSet<String> = BTreeSet::new();
+        let mut keys: BTreeSet<StorePath> = BTreeSet::new();
 
         let read_txn = self
             .inner
@@ -559,6 +586,7 @@ impl StoreBackend for RedbStore {
             .begin_read()
             .doing(StorageError::Scan, &self.inner.path)
             .attach_with(|| format!("prefix: {prefix}"))?;
+
         let table = read_txn
             .open_table(TABLE_DATA)
             .doing(StorageError::Scan, &self.inner.path)
@@ -568,6 +596,7 @@ impl StoreBackend for RedbStore {
             .range(prefix..)
             .doing(StorageError::Scan, &self.inner.path)
             .attach_with(|| format!("prefix: {prefix}"))?;
+
         for result in entries {
             let (k, _) = result
                 .doing(StorageError::Scan, &self.inner.path)
@@ -580,7 +609,7 @@ impl StoreBackend for RedbStore {
                 }
                 continue;
             }
-            keys.insert(key.to_string());
+            keys.insert(utils::stored_path(key)?);
         }
 
         {
@@ -589,9 +618,10 @@ impl StoreBackend for RedbStore {
                 if !utils::is_under(k, prefix, &bound) {
                     continue;
                 }
+                let key = utils::stored_path(k)?;
                 match op.value() {
-                    Some(_) => keys.insert(k.to_string()),
-                    None => keys.remove(&**k),
+                    Some(_) => keys.insert(key),
+                    None => keys.remove(&key),
                 };
             }
         }
@@ -600,7 +630,7 @@ impl StoreBackend for RedbStore {
     }
 
     fn delete_with_source(&self, path: &StorePath, source: Option<Uuid>) -> StorageResult<()> {
-        self.inner.check_debouncer();
+        self.inner.check_debouncer()?;
         let path_arc: Arc<str> = Arc::from(path.as_str());
 
         let old_bytes = self
@@ -638,7 +668,7 @@ impl StoreBackend for RedbStore {
         prefix: &StorePath,
         source: Option<Uuid>,
     ) -> StorageResult<()> {
-        self.inner.check_debouncer();
+        self.inner.check_debouncer()?;
 
         let keys = self
             .scan_prefix(prefix)
@@ -701,7 +731,7 @@ impl StoreBackend for RedbStore {
             return Ok(true);
         }
 
-        let key = format!("__init::{namespace}");
+        let key = utils::init_key(namespace);
         let read_txn = self
             .inner
             .db
@@ -729,7 +759,7 @@ impl StoreBackend for RedbStore {
             return Ok(());
         }
 
-        self.inner.check_debouncer();
+        self.inner.check_debouncer()?;
         let key: Arc<str> = Arc::from(namespace);
         self.inner
             .pending
@@ -757,6 +787,7 @@ mod tests {
     use crate::migration::{MigrationError, MigrationPlan};
     use crate::store::IntoStorageReport;
     use crate::store::StoreExt;
+    use crate::store::config::AfterGivingUp;
     use amethystate_core::test_utils::unique_path;
     use serial_test::serial;
     use std::thread;
@@ -1013,5 +1044,120 @@ mod tests {
 
         let retrieved: Option<String> = store.get(&test_key).unwrap();
         assert_eq!(retrieved, Some(test_value));
+    }
+
+    fn failing_store(tag: &str, decision: AfterGivingUp) -> (RedbStore, Arc<Mutex<Vec<String>>>) {
+        let mut config = StoreConfig::new(unique_path(tag));
+        config.save_debounce = Duration::from_millis(10);
+        config.retry_policy = crate::store::config::RetryPolicy {
+            interval: Duration::from_millis(10),
+            budget: Duration::from_millis(50),
+        };
+
+        let heard: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let heard_write = heard.clone();
+        config.on_persist_failure = Some(Arc::new(move |reason: &str| {
+            heard_write.lock().push(reason.to_string());
+            decision
+        }));
+
+        let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
+        (store, heard)
+    }
+
+    /// A flush that keeps failing tells writers so, once its streak has
+    /// outlived the budget - an error they can act on, not a dead process.
+    /// A full disk is somebody about to delete something, and taking the
+    /// application down with it is the store's least useful reaction.
+    #[test]
+    #[serial]
+    fn a_flush_that_keeps_failing_fails_the_next_write_rather_than_the_process() {
+        SIMULATE_WRITE_FAILURE.store(true, Ordering::Relaxed);
+        let (store, heard) = failing_store("debouncer_fails_writes", AfterGivingUp::Fail);
+
+        store
+            .set(StorePath::from_segments(["doomed"]), &1u32)
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+
+        assert!(
+            !heard.lock().is_empty(),
+            "on_persist_failure never ran once the streak outlived the budget"
+        );
+        assert!(
+            !store.inner.debouncer.is_poisoned(),
+            "a disk that will not take a write is not a reason to poison the writer"
+        );
+
+        let refused = store.set(StorePath::from_segments(["another"]), &2u32);
+        assert!(
+            refused.is_err(),
+            "a write while the flush is not landing should say so, not queue quietly"
+        );
+
+        // The reads the store already had are untouched by any of it.
+        assert_eq!(
+            store.get::<u32>(StorePath::from_segments(["doomed"])).unwrap(),
+            Some(1)
+        );
+
+        SIMULATE_WRITE_FAILURE.store(false, Ordering::Relaxed);
+    }
+
+    /// And it heals: the disk comes back, the next flush lands, and writes
+    /// work again with nothing restarted.
+    #[test]
+    #[serial]
+    fn a_disk_that_comes_back_heals_the_store() {
+        SIMULATE_WRITE_FAILURE.store(true, Ordering::Relaxed);
+        let (store, _) = failing_store("debouncer_heals", AfterGivingUp::Fail);
+
+        store
+            .set(StorePath::from_segments(["waiting"]), &1u32)
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            store.set(StorePath::from_segments(["nope"]), &2u32).is_err(),
+            "the store should be refusing writes before the disk comes back"
+        );
+
+        SIMULATE_WRITE_FAILURE.store(false, Ordering::Relaxed);
+
+        // The retry loop is still running, so the next attempt lands on its
+        // own - nothing here asks it to.
+        thread::sleep(Duration::from_millis(200));
+
+        store
+            .set(StorePath::from_segments(["fine"]), &3u32)
+            .expect("writes should work again once a flush has landed");
+    }
+
+    /// The application that would rather stop than run on with state it
+    /// cannot persist can still say so.
+    #[test]
+    #[serial]
+    fn poison_is_available_for_an_application_that_asks_for_it() {
+        SIMULATE_WRITE_FAILURE.store(true, Ordering::Relaxed);
+        let (store, _) = failing_store("debouncer_poisons", AfterGivingUp::Poison);
+
+        store
+            .set(StorePath::from_segments(["doomed"]), &1u32)
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+
+        assert!(
+            store.inner.debouncer.is_poisoned(),
+            "AfterGivingUp::Poison should have taken the writer down"
+        );
+
+        let poisoned_write = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            store.set(StorePath::from_segments(["another"]), &2u32)
+        }));
+        assert!(
+            poisoned_write.is_err(),
+            "a write after a poison should panic in the caller's own stack"
+        );
+
+        SIMULATE_WRITE_FAILURE.store(false, Ordering::Relaxed);
     }
 }

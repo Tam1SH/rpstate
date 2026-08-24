@@ -163,12 +163,15 @@ impl Store {
     }
 
     /// The keys under `prefix`, sorted, without reading their values.
-    pub fn scan_keys(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<String>> {
+    pub fn scan_keys(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<StorePath>> {
         StoreBackend::scan_keys(self, &to_path(prefix)?)
     }
 
     /// Every key under `prefix` with its bytes, sorted by key.
-    pub fn scan_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    pub fn scan_prefix(
+        &self,
+        prefix: impl IntoStorePath,
+    ) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         StoreBackend::scan_prefix(self, &to_path(prefix)?)
     }
 
@@ -235,10 +238,10 @@ impl StoreBackend for Store {
     ) -> StorageResult<()> {
         self.0.delete_prefix_with_source(prefix, source)
     }
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.0.scan_prefix(prefix)
     }
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.0.scan_keys(prefix)
     }
     fn save_now(&self) -> StorageResult<()> {

@@ -192,6 +192,7 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     pub(crate) next_id: Arc<AtomicU64>,
     pub(crate) debouncer: Arc<Debouncer>,
     pub(crate) commits: Arc<crate::store::durable::CommitSignal>,
+    pub(crate) health: Arc<crate::store::durable::PersistHealth>,
     /// Bumped by every mutation, and compared against `persisted` to tell
     /// whether the document differs from the file. A flag could not do this:
     /// checking it and acting on it are two steps, and a write landing in
@@ -203,7 +204,21 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
 }
 
 impl<D: TextDocument> TextStoreInner<D> {
+    /// Whether a write may proceed.
+    ///
+    /// A background flush that has been failing past its budget is an error
+    /// the caller can act on, not a reason to take the process down - the
+    /// value is refused, what is already buffered keeps being retried, and a
+    /// flush that lands clears this. A debouncer thread that is actually dead
+    /// is a different thing and still panics: that is a bug here, not a disk.
     pub(crate) fn check_debouncer(&self) -> StorageResult<()> {
+        if let Some(reason) = self.health.failure() {
+            return Err(error_stack::Report::new(StorageError::CommitFailed)
+                .attach(format!("the background flush is not landing: {reason}"))
+                .attach(
+                    "what is already buffered is still being retried, and reads are unaffected",
+                ));
+        }
         if self.debouncer.is_poisoned() {
             panic!("debouncer thread is dead — store integrity cannot be guaranteed");
         }
@@ -299,25 +314,31 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let writes_debounce = writes.clone();
         let persisted_debounce = persisted.clone();
         let commits = Arc::new(crate::store::durable::CommitSignal::default());
-        let commits_save = commits.clone();
 
-        let debouncer = Debouncer::new(config.save_debounce, move || {
-            // Read the generation before serializing. A write landing during
-            // the persist bumps it past this, so it stays pending instead of
-            // being marked saved without having been written.
-            let saving = writes_debounce.load(Ordering::Acquire);
-            let landed = match files_debounce.persist() {
-                Err(e) => {
-                    warn!("store persist failed: {e:#}");
-                    false
+        let health = Arc::new(crate::store::durable::PersistHealth::default());
+
+        let debouncer = Debouncer::new_with_retry(
+            config.save_debounce,
+            crate::store::util::debouncer::FlushPolicy {
+                retry: config.retry_policy.clone(),
+                commits: commits.clone(),
+                health: health.clone(),
+                on_giveup: config.on_persist_failure.clone(),
+            },
+            move || -> Result<(), String> {
+                // Read the generation before serializing. A write landing during
+                // the persist bumps it past this, so it stays pending instead of
+                // being marked saved without having been written.
+                let saving = writes_debounce.load(Ordering::Acquire);
+                match files_debounce.persist() {
+                    Err(e) => Err(format!("{e:#}")),
+                    Ok(()) => {
+                        persisted_debounce.store(saving, Ordering::Release);
+                        Ok(())
+                    }
                 }
-                Ok(()) => {
-                    persisted_debounce.store(saving, Ordering::Release);
-                    true
-                }
-            };
-            commits_save.finished(landed);
-        });
+            },
+        );
 
         let files_watch = files.clone();
         let watch_subs = subscriptions.clone();
@@ -383,6 +404,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             next_id: Arc::new(AtomicU64::new(1)),
             debouncer: Arc::new(debouncer),
             commits,
+            health,
             writes,
             persisted,
             _watch_debouncer: watch_debouncer,
@@ -484,13 +506,13 @@ impl<D: TextDocument> TextStoreInner<D> {
         );
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let guard = self.files.data.doc.read();
         scan_prefix_impl(&*guard, prefix)
             .attach_with(|| format!("file: {}", self.files.data.path.display()))
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let guard = self.files.data.doc.read();
         scan_keys_impl(&*guard, prefix)
             .attach_with(|| format!("file: {}", self.files.data.path.display()))
@@ -723,11 +745,11 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         self.inner.save_now()
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.inner.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<String>> {
+    fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.inner.scan_keys(prefix)
     }
 
@@ -823,7 +845,7 @@ fn persist_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 pub(super) fn scan_prefix_impl<D: TextDocument>(
     doc: &D,
     prefix: &StorePath,
-) -> StorageResult<Vec<(String, Vec<u8>)>> {
+) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
     let parts: Vec<&str> = prefix.segments().collect();
     let target_depth = parts.len() + 1;
     let mut raw_nodes = Vec::new();
@@ -842,11 +864,11 @@ pub(super) fn scan_prefix_impl<D: TextDocument>(
                 .change_context(StorageError::Scan)
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("node: {k}"))?;
-            results.push((k, bytes));
+            results.push((utils::stored_path(&k)?, bytes));
         }
     }
 
-    results.sort_by(|(a, _), (b, _)| a.cmp(b));
+    results.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
     Ok(results)
 }
 
@@ -1014,7 +1036,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
 pub(super) fn scan_keys_impl<D: TextDocument>(
     doc: &D,
     prefix: &StorePath,
-) -> StorageResult<Vec<String>> {
+) -> StorageResult<Vec<StorePath>> {
     let parts: Vec<&str> = prefix.segments().collect();
     let target_depth = parts.len() + 1;
     let mut keys = Vec::new();
@@ -1023,7 +1045,7 @@ pub(super) fn scan_keys_impl<D: TextDocument>(
     keys.retain(|k| k.starts_with(prefix.as_str()));
     keys.sort();
 
-    Ok(keys)
+    keys.iter().map(|k| utils::stored_path(k)).collect()
 }
 
 fn scan_keys_recursive<D: TextDocument>(

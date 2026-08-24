@@ -1,7 +1,6 @@
 use crate::SubscriptionKind;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::{StoreEvent, SubscriptionEntry};
-#[cfg(any(feature = "redb", feature = "sqlite"))]
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use parking_lot::RwLock;
@@ -57,6 +56,26 @@ pub fn is_under(key: &str, prefix: &str, bound: &Option<String>) -> bool {
         Some(bound) => key == prefix || key.starts_with(bound.as_str()),
         None => true,
     }
+}
+
+/// A key read back out of storage, as the path it claims to be.
+///
+/// Every key a scan hands back is one this library could have written, so this
+/// fails only where something else did the writing - an older build, or a hand
+/// edit. Failing names the key rather than dropping it, since a key nothing can
+/// address is worse unsaid.
+pub fn stored_path(key: &str) -> StorageResult<StorePath> {
+    StorePath::parse_joined(key)
+        .change_context(StorageError::Scan)
+        .attach_with(|| format!("stored key: {key}"))
+        .attach("the store holds a key this library could not have written")
+}
+
+/// The key a namespace's initialization marker is stored under, in the same
+/// table as data - redb and sqlite keep no table of their own for it.
+#[cfg(any(feature = "redb", feature = "sqlite"))]
+pub fn init_key(namespace: &str) -> String {
+    format!("__init::{namespace}")
 }
 
 pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent) {

@@ -158,18 +158,23 @@ where
         .attach_with(|| format!("map: {path}"))?;
 
     for (stored, bytes) in scanned {
-        let name = match path.entry_name(&stored) {
+        let below = stored
+            .starts_with(path)
+            .then(|| stored.segment_at(path.len()))
+            .flatten();
+
+        let name = match below {
             Some(name) => name,
-            None if StorePath::parse_joined(&stored).is_ok_and(|key| &key == path) => continue,
+            None if &stored == path => continue,
             None => {
                 return Err(Report::new(StorageError::Path)
                     .attach(format!("map: {path}"))
                     .attach(format!("stored key: {stored}"))
-                    .attach("the key is not a path this library could have written"));
+                    .attach("the key is not under the map it was scanned from"));
             }
         };
 
-        let key = K::from_str(&name).map_err(|_| {
+        let key = K::from_str(name).map_err(|_| {
             Report::new(StorageError::Codec)
                 .attach(format!("map: {path}"))
                 .attach(format!("entry: {name}"))

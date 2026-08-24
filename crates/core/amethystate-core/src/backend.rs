@@ -60,10 +60,10 @@ pub trait AmeBackendSync {
     fn scan_prefix(
         &self,
         prefix: &StorePath,
-    ) -> Result<Vec<(String, Self::Raw)>, Report<Self::Error>>;
+    ) -> Result<Vec<(StorePath, Self::Raw)>, Report<Self::Error>>;
 
     /// The keys under `prefix`, sorted, without reading their values.
-    fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<String>, Report<Self::Error>>;
+    fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<StorePath>, Report<Self::Error>>;
 
     fn decode<T>(&self, raw: &Self::Borrowed) -> Result<T, Report<Self::Error>>
     where
@@ -105,7 +105,7 @@ pub trait AmeBackendAsync {
     async fn scan_prefix(
         &self,
         prefix: &StorePath,
-    ) -> Result<Vec<(String, Self::Raw)>, Report<Self::Error>>;
+    ) -> Result<Vec<(StorePath, Self::Raw)>, Report<Self::Error>>;
 
     fn decode<T>(&self, raw: &Self::Raw) -> Result<T, Report<Self::Error>>
     where

@@ -13,7 +13,7 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
         D::format()
     }
 
-    fn scan_all(&self) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_all(&self) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let guard = self.inner.files.data.doc.read();
         let mut raw_nodes = Vec::new();
         scan_prefix_recursive(&*guard, &[], "", &mut raw_nodes, None)
@@ -25,7 +25,7 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
                 .change_context(StorageError::Scan)
                 .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
                 .attach_with(|| format!("node: {k}"))?;
-            results.push((k, bytes));
+            results.push((crate::store::backend::utils::stored_path(&k)?, bytes));
         }
         Ok(results)
     }

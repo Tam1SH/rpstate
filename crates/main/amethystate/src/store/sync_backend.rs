@@ -79,11 +79,11 @@ impl AmeBackendSync for SyncBridge {
     fn scan_prefix(
         &self,
         prefix: &StorePath,
-    ) -> Result<Vec<(String, Self::Raw)>, Report<Self::Error>> {
+    ) -> Result<Vec<(StorePath, Self::Raw)>, Report<Self::Error>> {
         self.store.scan_prefix(prefix)
     }
 
-    fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<String>, Report<Self::Error>> {
+    fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<StorePath>, Report<Self::Error>> {
         self.store.scan_keys(prefix)
     }
 

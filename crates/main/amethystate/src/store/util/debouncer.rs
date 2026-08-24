@@ -1,10 +1,12 @@
+use crate::store::config::{AfterGivingUp, PersistFailureCallback, RetryPolicy};
+use crate::store::durable::{CommitSignal, PersistHealth};
 use crate::store::util::DeadNotifier;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
-use tracing::debug;
+use std::time::{Duration, Instant};
+use tracing::{debug, error, warn};
 
 /// Why the thread was woken: `Schedule` restarts the quiet period, `Now`
 /// cuts it short for a caller that is waiting on the commit.
@@ -20,6 +22,16 @@ pub struct Debouncer {
     guard: Arc<Mutex<()>>,
     #[cfg(test)]
     dead: Arc<(Mutex<bool>, Condvar)>,
+}
+
+/// Everything a retrying flush needs beyond the work itself: how often to try
+/// again, who to wake, where to record that it is not working, and who to ask
+/// what that should mean.
+pub struct FlushPolicy {
+    pub retry: RetryPolicy,
+    pub commits: Arc<CommitSignal>,
+    pub health: Arc<PersistHealth>,
+    pub on_giveup: Option<PersistFailureCallback>,
 }
 
 impl Debouncer {
@@ -58,6 +70,59 @@ impl Debouncer {
 
                 debug!("debouncer trigger: interval elapsed");
                 op();
+            }
+
+            debug!("debouncer thread exiting (channel closed)");
+        });
+
+        Self {
+            tx: Some(tx),
+            handle: Some(handle),
+            guard,
+            #[cfg(test)]
+            dead,
+        }
+    }
+
+    /// Like [`Debouncer::new`], for a flush that has to report whether it
+    /// landed rather than just running.
+    ///
+    /// `op` returns `Ok(())` once the buffered writes are on disk, or the
+    /// reason they are not. A failure is retried at `policy.retry.interval`
+    /// and keeps being retried until it lands or the store is dropped - a
+    /// full disk is usually temporary, and a store that stopped trying could
+    /// not heal when it was fixed. What `policy.retry.budget` bounds is the
+    /// silence: a streak outliving it escalates once, waking anyone awaiting
+    /// that flush with a failure and asking `policy.on_giveup` what writers
+    /// should be told from here.
+    pub fn new_with_retry<F>(interval: Duration, policy: FlushPolicy, mut op: F) -> Self
+    where
+        F: FnMut() -> Result<(), String> + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel::<Trigger>();
+        let guard = Arc::new(Mutex::new(()));
+        let dead = Arc::new((Mutex::new(false), Condvar::new()));
+        let guard_inner = guard.clone();
+        let dead_inner = dead.clone();
+
+        let handle = thread::spawn(move || {
+            let _notify = DeadNotifier(dead_inner);
+            let _hold = guard_inner.lock().unwrap();
+
+            while let Ok(first) = rx.recv() {
+                if first != Trigger::Now {
+                    loop {
+                        match rx.recv_timeout(interval) {
+                            Ok(Trigger::Schedule) => continue,
+                            Ok(Trigger::Now)
+                            | Err(RecvTimeoutError::Timeout)
+                            | Err(RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                }
+
+                debug!("debouncer trigger: running the flush");
+                run_with_retry(&mut op, &policy, &rx);
             }
 
             debug!("debouncer thread exiting (channel closed)");
@@ -113,6 +178,89 @@ impl Debouncer {
 impl Drop for Debouncer {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Runs `op` until it lands or the store goes away, retrying at
+/// `policy.retry.interval`.
+///
+/// It does not stop trying at the budget: a full disk is usually someone
+/// about to delete something, and a store that gave up could not heal when
+/// they did. The budget bounds the *silence* instead. A streak outliving it
+/// escalates once - waking anyone awaiting this flush with a failure, then
+/// asking `policy.on_giveup` what writers should be told - and the loop
+/// carries on regardless, so a flush that lands afterwards clears the failure
+/// and the store is whole again with nothing restarted.
+///
+/// Only [`AfterGivingUp::Poison`] ends the thread, by panicking: `Drop`'s own
+/// guard poisons on the way down, which is the same mechanism a panic inside
+/// `op` itself already relies on.
+fn run_with_retry(
+    op: &mut dyn FnMut() -> Result<(), String>,
+    policy: &FlushPolicy,
+    rx: &mpsc::Receiver<Trigger>,
+) {
+    let retry = &policy.retry;
+    let mut streak_start: Option<Instant> = None;
+    let mut escalated = false;
+
+    loop {
+        let reason = match op() {
+            Ok(()) => {
+                policy.health.landed();
+                policy.commits.finished(true);
+                return;
+            }
+            Err(why) => why,
+        };
+
+        let since = *streak_start.get_or_insert_with(Instant::now);
+        let elapsed = since.elapsed();
+
+        if elapsed >= retry.budget && !escalated {
+            escalated = true;
+            policy.commits.finished(false);
+
+            let decision = policy
+                .on_giveup
+                .as_ref()
+                .map_or(AfterGivingUp::Fail, |callback| callback(&reason));
+
+            error!(
+                target: "amethystate",
+                reason = %reason,
+                elapsed_ms = elapsed.as_millis() as u64,
+                budget_ms = retry.budget.as_millis() as u64,
+                decision = ?decision,
+                "background flush has been failing longer than its retry budget",
+            );
+
+            match decision {
+                AfterGivingUp::Fail => policy.health.give_up(&reason),
+                AfterGivingUp::Ignore => {}
+                AfterGivingUp::Poison => panic!(
+                    "background flush failed for {elapsed:?} (budget {:?}): {reason}",
+                    retry.budget
+                ),
+            }
+        } else if !escalated {
+            warn!(
+                target: "amethystate",
+                reason = %reason,
+                elapsed_ms = elapsed.as_millis() as u64,
+                budget_ms = retry.budget.as_millis() as u64,
+                "background flush failed, retrying",
+            );
+        }
+
+        // A trigger arriving mid-streak just retries sooner. A disconnect is
+        // the store being dropped, and is the one way out of a streak that
+        // never lands - without it, `shutdown` would join a thread that is
+        // still politely waiting for a disk that is never coming back.
+        if let Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(retry.interval) {
+            debug!("debouncer thread leaving a failing flush: the store is gone");
+            return;
+        }
     }
 }
 

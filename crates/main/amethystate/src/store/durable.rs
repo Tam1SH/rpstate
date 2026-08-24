@@ -51,6 +51,33 @@ impl CommitSignal {
     }
 }
 
+/// Whether the store can still persist, and why it cannot.
+///
+/// Set by the background flush once a failing streak outlives its retry
+/// budget and the application asked to be failed rather than ignored, and
+/// cleared by the next flush that lands - so a full disk that gets emptied
+/// heals the store without a restart. Reads never consult it: what is on
+/// disk is still readable, and what is buffered is still buffered.
+#[derive(Default)]
+pub struct PersistHealth {
+    given_up: Mutex<Option<Arc<str>>>,
+}
+
+impl PersistHealth {
+    /// The reason writes are failing, if they are.
+    pub fn failure(&self) -> Option<Arc<str>> {
+        self.given_up.lock().unwrap().clone()
+    }
+
+    pub(crate) fn give_up(&self, reason: &str) {
+        *self.given_up.lock().unwrap() = Some(Arc::from(reason));
+    }
+
+    pub(crate) fn landed(&self) {
+        *self.given_up.lock().unwrap() = None;
+    }
+}
+
 /// Resolves once a flush has completed since it was created.
 pub struct Commit {
     signal: Arc<CommitSignal>,

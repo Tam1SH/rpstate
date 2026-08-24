@@ -16,7 +16,7 @@ impl InspectorBackend for RedbStore {
         CodecFormat::MessagePack
     }
 
-    fn scan_all(&self) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_all(&self) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.scan_prefix(&StorePath::root())
             .attach("inspecting every key in the store")
     }
@@ -58,7 +58,7 @@ impl InspectorBackend for RedbStore {
     }
 
     fn set_raw(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
-        self.inner.check_debouncer();
+        self.inner.check_debouncer()?;
         utils::set_raw_pending(
             &self.inner.pending,
             &self.inner.subscriptions,

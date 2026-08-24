@@ -122,7 +122,7 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let mut stmt = self
             .txn
             .prepare_cached("SELECT key, value FROM data WHERE key GLOB ?")
@@ -138,12 +138,12 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
 
         let mut res = Vec::new();
         for row in rows {
-            let entry = row
+            let (key, value): (String, Vec<u8>) = row
                 .map_err(SqliteStoreError::from)
                 .change_context(StorageError::Scan)
                 .attach_with(|| format!("glob: {pattern}"))
                 .attach_with(|| format!("rows read: {}", res.len()))?;
-            res.push(entry);
+            res.push((crate::store::backend::utils::stored_path(&key)?, value));
         }
         Ok(res)
     }
