@@ -122,13 +122,23 @@ fn open(backend: Backend, file: &TempPath) -> Store {
         .expect("the store opened")
 }
 
-/// Few cases, because each one opens a file. Failures are not persisted: this
-/// suite is not allowed to write anything beside itself.
+/// Few cases, because each one opens a file.
+///
+/// Counterexamples are kept, in the `.proptest-regressions` file beside this
+/// one, and replayed before the new draws on every later run. Without that a
+/// property fails only on the runs whose draw happens to reach it: the failing
+/// set moved between runs of the same tree - json 2 and toml 4 one time, json 3
+/// and toml 3 the next - and a real regression was indistinguishable from a
+/// different roll of the dice.
+///
+/// Keeping them costs a file the suite writes and a reader has to commit. That
+/// is the trade, and it is worth taking: a counterexample found once and lost
+/// by the next run is the worst of both worlds, since the search paid for it
+/// and nothing kept it.
 fn config() -> ProptestConfig {
     ProptestConfig {
         cases: 24,
         max_shrink_iters: 4096,
-        failure_persistence: None,
         ..ProptestConfig::default()
     }
 }
