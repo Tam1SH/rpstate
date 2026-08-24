@@ -51,5 +51,5 @@ fn a_value_at_the_prefix_is_listed_by_a_scan_over_it() {
     store.set(["items"], &7u32).unwrap();
 
     let keys = StoreBackend::scan_keys(&store, &StorePath::segment("items")).unwrap();
-    assert_eq!(keys, vec!["items".to_string()]);
+    assert_eq!(keys, vec![StorePath::segment("items")]);
 }

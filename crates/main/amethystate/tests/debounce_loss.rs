@@ -21,7 +21,10 @@ pub struct Cfg {
 #[test]
 fn a_write_during_a_commit_is_not_dropped() {
     let path = unique_path("debounce_loss");
-    let store = StoreBuilder::new(&path).debounce(25).build().unwrap();
+    let store = StoreBuilder::new(&path)
+        .debounce(Duration::from_millis(25))
+        .build()
+        .unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     for round in 1..=40u64 {
@@ -46,7 +49,10 @@ fn a_burst_of_writes_settles_on_the_last_one() {
     let path = unique_path("debounce_burst");
 
     {
-        let store = StoreBuilder::new(&path).debounce(15).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .debounce(Duration::from_millis(15))
+            .build()
+            .unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
 
         for n in 1..=300u64 {
@@ -75,7 +81,7 @@ fn dropping_the_store_writes_what_is_still_buffered() {
 
     {
         let store = StoreBuilder::new(path.path())
-            .debounce(30_000)
+            .debounce(Duration::from_secs(30))
             .build()
             .unwrap();
         let cfg = Cfg::new_with(&store).unwrap();

@@ -85,7 +85,7 @@ fn a_scan_lists_the_dotted_name_escaped() {
     let keys = StoreBackend::scan_keys(&store, &StorePath::segment("cfg")).unwrap();
 
     assert!(
-        keys.contains(&"cfg.a\\.b".to_string()),
+        keys.contains(&StorePath::from_segments(["cfg", "a.b"])),
         "the dotted entry is missing from the scan: {keys:?}"
     );
 }
@@ -201,8 +201,8 @@ fn a_key_with_no_name_costs_only_itself() {
     );
     for key in &keys {
         assert!(
-            StorePath::parse_joined(key).is_ok(),
-            "the scan handed back {key:?}, which is not a path"
+            !key.is_root(),
+            "the scan handed back {key:?}, which addresses nothing"
         );
     }
     assert_eq!(store.get::<u32>(["cfg", "width"]).unwrap(), Some(1280));

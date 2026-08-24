@@ -195,7 +195,7 @@ fn a_branch_that_became_a_leaf_can_still_be_cleared() {
     let entries = StoreBackend::scan_keys(&store, &StorePath::segment("items")).unwrap();
     assert_eq!(
         entries,
-        vec!["items".to_string()],
+        vec![StorePath::segment("items")],
         "the scalar is listed as the node at the prefix, as on every engine"
     );
 

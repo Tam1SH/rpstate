@@ -13,8 +13,9 @@ fn scanning_a_prefix_stops_at_a_segment_boundary() {
     kv.namespace("ui").set("width", &1280u32).unwrap();
     kv.namespace("uix").set("width", &640u32).unwrap();
 
+    let keys = kv.namespace("ui").keys().unwrap();
     assert_eq!(
-        kv.namespace("ui").keys().unwrap(),
+        keys.iter().map(StorePath::as_str).collect::<Vec<_>>(),
         ["ui.width"],
         "uix is a different subtree"
     );
@@ -59,7 +60,7 @@ fn a_path_segment_with_glob_metacharacters_scans_as_a_literal() {
     let mut keys = kv.namespace("cfg[a]").keys().unwrap();
     keys.sort();
     assert_eq!(
-        keys,
+        keys.iter().map(StorePath::as_str).collect::<Vec<_>>(),
         ["cfg[a].height", "cfg[a].width"],
         "the bracket is part of the path, not a character class"
     );

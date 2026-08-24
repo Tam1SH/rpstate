@@ -15,6 +15,7 @@ use amethystate::{ReactiveMap, Store, StoreBuilder, WritableMode};
 use amethystate_core::test_utils::unique_path;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::time::Duration;
 
 type Map = ReactiveMap<String, u64, WritableMode>;
 
@@ -22,7 +23,7 @@ const SIZES: [usize; 3] = [10, 1_000, 10_000];
 
 fn store(tag: &str) -> Store {
     StoreBuilder::new(unique_path(tag))
-        .debounce(100_000)
+        .debounce(Duration::from_secs(100))
         .build()
         .unwrap()
 }
@@ -138,6 +139,27 @@ fn bench_store_scan(c: &mut Criterion) {
     group.finish();
 }
 
+/// Opening a map over entries that are already there, which is the scan plus
+/// everything done with its answer.
+///
+/// The end of the chain, and the only place that says whether a cost was
+/// removed or moved: `load_map` used to parse every key the scan handed it, so
+/// a scan that hands back paths can only be judged from here.
+fn bench_map_open(c: &mut Criterion) {
+    let mut group = c.benchmark_group("map_open_over_existing");
+
+    for n in SIZES {
+        let (store, _map) = populated("map-open", n);
+        group.throughput(Throughput::Elements(n as u64));
+
+        group.bench_with_input(BenchmarkId::new("open", n), &n, |b, _| {
+            b.iter(|| black_box(store.kv().map::<String, u64>("bench").unwrap()))
+        });
+    }
+
+    group.finish();
+}
+
 fn bench_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("map_read");
 
@@ -214,6 +236,7 @@ criterion_group!(
     bench_len,
     bench_scans,
     bench_store_scan,
+    bench_map_open,
     bench_reads,
     bench_subscribers,
     bench_durability

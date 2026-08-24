@@ -106,6 +106,7 @@ use amethystate::store::{
 use amethystate_core::test_utils::TempPath;
 use proptest::prelude::*;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const SEPARATOR: char = '.';
 const ESCAPE: char = '\\';
@@ -115,8 +116,8 @@ const ESCAPE: char = '\\';
 fn open(backend: Backend, file: &TempPath) -> Store {
     StoreBuilder::new(file.path())
         .backend(backend)
-        .debounce(60_000)
-        .watch_interval(60_000)
+        .debounce(Duration::from_secs(60))
+        .watch_interval(Duration::from_secs(60))
         .build()
         .expect("the store opened")
 }
@@ -408,8 +409,7 @@ fn a_scan_lists_exactly_what_is_under_the_prefix(backend: Backend) {
         }
         store.set(&elsewhere, &1u32).unwrap();
 
-        let mut expected: Vec<String> =
-            under.iter().map(|p| p.as_str().to_string()).collect();
+        let mut expected: Vec<StorePath> = under.to_vec();
         expected.sort();
 
         let mut listed = store.scan_keys(&prefix).unwrap();
@@ -431,7 +431,7 @@ fn scan_keys_and_scan_prefix_agree(backend: Backend) {
         let elsewhere = StorePath::from_segments(&elsewhere);
         for prefix in probe_prefixes(&written, &elsewhere) {
             let keys = store.scan_keys(&prefix).unwrap();
-            let entries: Vec<String> = store
+            let entries: Vec<StorePath> = store
                 .scan_prefix(&prefix)
                 .unwrap()
                 .into_iter()
@@ -478,14 +478,8 @@ fn every_key_a_scan_returns_is_a_path_under_the_prefix(backend: Backend) {
         let elsewhere = StorePath::from_segments(&elsewhere);
         for prefix in probe_prefixes(&written, &elsewhere) {
             for key in store.scan_keys(&prefix).unwrap() {
-                let parsed = StorePath::parse_joined(&key);
                 prop_assert!(
-                    parsed.is_ok(),
-                    "scanning {} gave {:?}, which is not a path: {:?}",
-                    prefix, key, parsed.unwrap_err()
-                );
-                prop_assert!(
-                    parsed.unwrap().starts_with(&prefix),
+                    key.starts_with(&prefix),
                     "scanning {} gave {:?}, which is not under it", prefix, key
                 );
             }
@@ -580,7 +574,7 @@ fn a_name_holding_the_separator_stays_one_level(backend: Backend) {
             );
             prop_assert_eq!(
                 store.scan_keys(&parent).unwrap(),
-                vec![one_level.as_str().to_string()]
+                vec![one_level.clone()]
             );
 
             store.flush_prefix(StorePath::root()).unwrap();
@@ -597,10 +591,7 @@ fn a_name_holding_the_separator_stays_one_level(backend: Backend) {
             Some(None),
             "the reopen split {} into levels", one_level
         );
-        prop_assert_eq!(
-            store.scan_keys(&parent).unwrap(),
-            vec![one_level.as_str().to_string()]
-        );
+        prop_assert_eq!(store.scan_keys(&parent).unwrap(), vec![one_level.clone()]);
     });
 }
 
@@ -729,7 +720,8 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
             .scan_keys(&at)
             .unwrap()
             .iter()
-            .filter_map(|k| at.entry_name(k))
+            .filter_map(|k| k.strip_prefix(&at))
+            .filter_map(|rest| rest.name().map(str::to_string))
             .collect();
 
         let mut membership = from_scan.clone();
@@ -894,8 +886,9 @@ fn the_order_keys_come_back_in(backend: Backend) {
         store.set([name], &1u32).unwrap();
     }
 
+    let listed = store.scan_keys(StorePath::root()).unwrap();
     assert_eq!(
-        store.scan_keys(StorePath::root()).unwrap(),
+        listed.iter().map(StorePath::as_str).collect::<Vec<_>>(),
         ["10", "9", "B", "a", "a\\.b", "ab", "\u{e9}"]
     );
 }
@@ -910,16 +903,16 @@ fn an_empty_store_lists_nothing(backend: Backend) {
 
         assert_eq!(
             store.scan_keys(StorePath::root()).unwrap(),
-            Vec::<String>::new()
+            Vec::<StorePath>::new()
         );
         assert_eq!(store.scan_prefix(StorePath::root()).unwrap(), Vec::new());
-        assert_eq!(store.scan_keys(["nothing"]).unwrap(), Vec::<String>::new());
+        assert_eq!(store.scan_keys(["nothing"]).unwrap(), Vec::<StorePath>::new());
         assert_eq!(store.get::<u32>(["nothing"]).unwrap(), None);
 
         store.delete_prefix(StorePath::root()).unwrap();
         assert_eq!(
             store.scan_keys(StorePath::root()).unwrap(),
-            Vec::<String>::new()
+            Vec::<StorePath>::new()
         );
 
         store.flush_prefix(StorePath::root()).unwrap();
@@ -928,7 +921,7 @@ fn an_empty_store_lists_nothing(backend: Backend) {
     let store = open(backend, &file);
     assert_eq!(
         store.scan_keys(StorePath::root()).unwrap(),
-        Vec::<String>::new()
+        Vec::<StorePath>::new()
     );
 }
 
@@ -1161,7 +1154,11 @@ fn the_initialization_marker_is_not_listed_as_data(backend: Backend) {
 
     let keys = store.scan_keys(["settings"]).unwrap();
 
-    assert_eq!(keys, ["settings.host"], "a scan returned bookkeeping");
+    assert_eq!(
+        keys.iter().map(StorePath::as_str).collect::<Vec<_>>(),
+        ["settings.host"],
+        "a scan returned bookkeeping"
+    );
 }
 
 /// The statements, once. Each one names the engine the module it lands in was

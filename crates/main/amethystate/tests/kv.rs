@@ -1,5 +1,6 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{LocalScope, amethystate};
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -77,7 +78,11 @@ fn keys_are_sorted_and_scoped_to_the_prefix() {
         .set("host", &"localhost".to_string())
         .unwrap();
 
-    assert_eq!(ui.keys().unwrap(), ["ui.theme", "ui.zoom"]);
+    let keys = ui.keys().unwrap();
+    assert_eq!(
+        keys.iter().map(StorePath::as_str).collect::<Vec<_>>(),
+        ["ui.theme", "ui.zoom"]
+    );
 }
 
 /// A declared path is the schema's. Writing there through Kv would not merely

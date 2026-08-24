@@ -226,7 +226,7 @@ fn scanning_over_a_hand_written_dot_key_does_not_yield_the_document() {
 
     let dot_entry = entries
         .iter()
-        .find(|(k, _)| k == "\\.")
+        .find(|(k, _)| k == &StorePath::segment("."))
         .map(|(_, v)| String::from_utf8_lossy(v).to_string());
 
     if let Some(rendered) = dot_entry {

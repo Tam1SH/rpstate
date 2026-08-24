@@ -1,5 +1,6 @@
 use amethystate::{ReactiveMap, StoreBuilder, amethystate};
 use amethystate_core::test_utils::unique_path;
+use std::time::Duration;
 
 #[amethystate(prefix = "durable")]
 pub struct Settings {
@@ -46,7 +47,7 @@ fn a_volatile_field_is_already_durable() {
 #[test]
 fn nothing_happens_until_the_future_is_polled() {
     let store = StoreBuilder::new(unique_path("durable_visible"))
-        .debounce(60_000)
+        .debounce(Duration::from_secs(60))
         .build()
         .unwrap();
     let state = Settings::new_with(&store).unwrap();
@@ -81,7 +82,7 @@ mod on_disk {
         let path = unique_path("durable_blocking");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let state = Settings::new_with(&store).unwrap();
@@ -108,7 +109,7 @@ mod on_disk {
         let path = unique_path("durable_async");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let state = Settings::new_with(&store).unwrap();
@@ -127,7 +128,7 @@ mod on_disk {
         let path = unique_path("durable_map_set");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let state = Mapped::new_with(&store).unwrap();
@@ -145,7 +146,7 @@ mod on_disk {
         let path = unique_path("durable_map_remove");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let state = Mapped::new_with(&store).unwrap();
@@ -169,7 +170,7 @@ mod on_disk {
         let path = unique_path("durable_kv");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let kv = store.kv();
@@ -190,7 +191,7 @@ mod on_disk {
         let path = unique_path("durable_cell");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let state = Settings::new_with(&store).unwrap();
@@ -209,7 +210,7 @@ mod on_disk {
         let path = unique_path("durable_entry");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
-            .debounce(60_000)
+            .debounce(Duration::from_secs(60))
             .build()
             .unwrap();
         let state = Mapped::new_with(&store).unwrap();

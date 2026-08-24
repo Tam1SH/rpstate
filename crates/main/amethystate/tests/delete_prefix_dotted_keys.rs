@@ -6,6 +6,7 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
 use amethystate_core::access::WritableMode;
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -56,7 +57,7 @@ fn a_scan_lists_the_value_at_a_prefix_whose_name_ends_in_the_separator() {
 
     assert_eq!(
         store.scan_keys(["cfg", "b."]).unwrap(),
-        vec!["cfg.b\\.".to_string()],
+        vec![StorePath::from_segments(["cfg", "b."])],
         "the value at the scanned prefix is missing from its own scan"
     );
     assert_eq!(store.get::<u32>(["cfg", "b."]).unwrap(), Some(7));

@@ -4,6 +4,7 @@ use amethystate::store::StoreBackend;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use std::time::Duration;
 
 fn settle() {
     std::thread::sleep(std::time::Duration::from_millis(120));
@@ -136,8 +137,8 @@ fn a_momentary_truncation_is_not_written_back_as_the_document() {
     {
         let store = StoreBuilder::new(path.path())
             .backend(Backend::Toml)
-            .debounce(20)
-            .watch_interval(20)
+            .debounce(Duration::from_millis(20))
+            .watch_interval(Duration::from_millis(20))
             .build()
             .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();

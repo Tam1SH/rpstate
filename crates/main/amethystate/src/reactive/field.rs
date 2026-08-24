@@ -654,7 +654,10 @@ where
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// // A debouncer a minute out: nothing reaches disk on its own.
-    /// # let store = StoreBuilder::new(&*path).debounce(60_000).build().unwrap();
+    /// # let store = StoreBuilder::new(&*path)
+    /// #     .debounce(std::time::Duration::from_secs(60))
+    /// #     .build()
+    /// #     .unwrap();
     /// let port = field_with_path::<u16, WritableMode>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();

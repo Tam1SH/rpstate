@@ -6,6 +6,7 @@ use amethystate::store::StorePath;
 use amethystate::{Store, StoreBuilder};
 use serde::Serialize;
 use std::hint::black_box;
+use std::time::Duration;
 
 #[derive(Serialize)]
 struct BenchData {
@@ -21,7 +22,10 @@ fn setup_store() -> Store {
         std::fs::remove_file(&path).ok();
     }
 
-    StoreBuilder::new(&path).debounce(100_000).build().unwrap()
+    StoreBuilder::new(&path)
+        .debounce(Duration::from_secs(100))
+        .build()
+        .unwrap()
 }
 
 #[cfg(feature = "redb")]

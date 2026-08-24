@@ -13,13 +13,14 @@ use amethystate::store::field_with_path;
 use amethystate::{StoreBuilder, WritableMode};
 use amethystate_core::test_utils::unique_path;
 use std::path::Path;
+use std::time::Duration;
 
 const CHILD: &str = "AME_DURABILITY_CHILD";
 
 fn write_then_abort(backend: Backend, path: &Path) -> ! {
     let store = StoreBuilder::new(path)
         .backend(backend)
-        .debounce(60_000)
+        .debounce(Duration::from_secs(60))
         .build()
         .unwrap();
 
