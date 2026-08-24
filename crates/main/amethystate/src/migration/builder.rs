@@ -1,4 +1,5 @@
 use crate::migration::fields::FieldDescriptor;
+use crate::migration::provided::Provided;
 use crate::migration::registry::MigrationDependency;
 use crate::migration::set::MigrationSet;
 use crate::store::StorageResult;
@@ -8,6 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 #[derive(Default)]
 pub struct MigrationBuilder {
     prefixes: HashMap<String, PrefixPlan>,
+    provided: Provided,
 }
 
 /// Migration plan for a single database prefix.
@@ -94,6 +96,11 @@ impl MigrationBuilder {
         self.prefixes.entry(prefix.to_string()).or_default()
     }
 
+    /// Hands a value to every step this builder's migrations produce.
+    pub fn provide<T: std::any::Any>(&mut self, value: T) {
+        self.provided.insert(value);
+    }
+
     pub(crate) fn into_set(self) -> MigrationSet {
         let mut set = MigrationSet::default();
         let mut prefixes = self.prefixes.into_iter().collect::<Vec<_>>();
@@ -104,6 +111,8 @@ impl MigrationBuilder {
             let deps: Vec<&str> = plan.dependencies.iter().map(|s| s.as_str()).collect();
             set = set.add(prefix, plan.migrator, plan.schema_hash, plan.fields, &deps);
         }
+
+        set.take_provided(self.provided);
         set
     }
 }

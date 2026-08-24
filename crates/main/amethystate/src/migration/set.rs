@@ -1,6 +1,7 @@
 use super::MigrationPlan;
 use crate::MigrationError;
 use crate::migration::fields::FieldDescriptor;
+use crate::migration::provided::Provided;
 use crate::store::StorageResult;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -13,9 +14,27 @@ pub struct MigrationSet {
     targets: HashMap<String, (u32, u32, &'static [FieldDescriptor])>,
     graph: DiGraph<String, ()>,
     nodes: HashMap<String, NodeIndex>,
+
+    /// What the steps need from outside the store. Carried here because a
+    /// step is a bare `fn` with nothing to capture, and because these exist
+    /// for the migrations and nothing else.
+    provided: Provided,
 }
 
 impl MigrationSet {
+    /// Hands a value to every step this set runs. See
+    /// [`StoreBuilder::provide`](crate::StoreBuilder::provide).
+    pub fn provide<T: std::any::Any>(&mut self, value: T) {
+        self.provided.insert(value);
+    }
+
+    pub(crate) fn take_provided(&mut self, provided: Provided) {
+        self.provided = provided;
+    }
+
+    pub(crate) fn provided(&self) -> &Provided {
+        &self.provided
+    }
     pub fn add(
         mut self,
         prefix: impl Into<String>,

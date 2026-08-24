@@ -7,6 +7,7 @@ pub mod error;
 pub mod fields;
 pub mod migrate_from;
 pub mod node;
+pub mod provided;
 pub mod registry;
 pub mod set;
 pub mod types;

@@ -240,6 +240,33 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     Ok(AmeData::<ProxyConfig> { name: old.name, endpoints })
 /// }
 /// ```
+///
+/// # What a step needs from outside the store
+///
+/// A step is collected at link time as a bare `fn`, so it captures nothing:
+/// anything the application has to hand it - a lookup table, a client, the
+/// settings it is porting away from - reaches it through
+/// `StoreBuilder::provide`, and is read back by type.
+///
+/// ```rust,ignore
+/// struct LegacyDefaults { port: u16 }
+///
+/// let (store, report) = StoreBuilder::new(path)
+///     .provide(LegacyDefaults { port: 8080 })
+///     .build_with_report()?;
+///
+/// #[migrate]
+/// fn migrate_settings_v1_to_v2(
+///     old: AmeData<v1::Settings>,
+///     ctx: &mut amethystate::migration::MigrationContext,
+/// ) -> amethystate::Result<AmeData<Settings>> {
+///     let legacy = ctx.require::<LegacyDefaults>()?;
+///     Ok(AmeData::<Settings> { host: old.host, port: legacy.port })
+/// }
+/// ```
+///
+/// `require` fails naming the type when nothing was provided for it;
+/// `provided` hands back an `Option` where the step can carry on without it.
 #[proc_macro_attribute]
 pub fn migrate(args: TokenStream, input: TokenStream) -> TokenStream {
     migrate::migrate_impl(args, input)

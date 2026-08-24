@@ -213,21 +213,61 @@ impl StoreBuilder {
 
         Ok(Self::new(path))
     }
-    /// How long a write waits in the buffer before it is flushed, in
-    /// milliseconds.
+    /// How long a write waits in the buffer before it is flushed.
     ///
     /// Raising this batches more writes into one commit; lowering it narrows
     /// the window a crash can take. Neither affects reads, which see buffered
     /// writes immediately either way.
-    pub fn debounce(mut self, ms: u64) -> Self {
-        self.config.save_debounce = Duration::from_millis(ms);
+    pub fn debounce(mut self, every: Duration) -> Self {
+        self.config.save_debounce = every;
         self
     }
 
-    /// How often the file watcher polls for changes made outside the
-    /// process, in milliseconds.
-    pub fn watch_interval(mut self, ms: u64) -> Self {
-        self.config.watch_interval = Duration::from_millis(ms);
+    /// How often the file watcher polls for changes made outside the process.
+    pub fn watch_interval(mut self, every: Duration) -> Self {
+        self.config.watch_interval = every;
+        self
+    }
+
+    /// How long a failed background flush waits before trying again.
+    ///
+    /// A retry is not a second write: it is the same buffered changes,
+    /// tried again. Nothing is lost between attempts.
+    pub fn retry_interval(mut self, every: Duration) -> Self {
+        self.config.retry_policy.interval = every;
+        self
+    }
+
+    /// How long a streak of failing flushes may run before the store says so
+    /// out loud.
+    ///
+    /// Not a deadline for giving up: the flush keeps being retried until it
+    /// lands or the store is dropped, so a disk someone frees up heals it
+    /// without a restart. This bounds how long that goes on quietly before
+    /// [`StoreBuilder::on_persist_failure`] is asked what writers should be
+    /// told.
+    pub fn retry_budget(mut self, within: Duration) -> Self {
+        self.config.retry_policy.budget = within;
+        self
+    }
+
+    /// Runs once per failing streak, with a rendered reason, when a flush
+    /// has been failing for longer than the retry budget - after any write
+    /// awaiting that flush has been told it failed.
+    ///
+    /// What it returns decides what writers see from then until a flush
+    /// lands: an error each ([`AfterGivingUp::Fail`], the default without a
+    /// callback), nothing at all ([`AfterGivingUp::Ignore`]), or a panic
+    /// ([`AfterGivingUp::Poison`]).
+    ///
+    /// [`AfterGivingUp::Fail`]: crate::store::config::AfterGivingUp::Fail
+    /// [`AfterGivingUp::Ignore`]: crate::store::config::AfterGivingUp::Ignore
+    /// [`AfterGivingUp::Poison`]: crate::store::config::AfterGivingUp::Poison
+    pub fn on_persist_failure<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&str) -> crate::store::config::AfterGivingUp + Send + Sync + 'static,
+    {
+        self.config.on_persist_failure = Some(std::sync::Arc::new(callback));
         self
     }
 
@@ -238,6 +278,37 @@ impl StoreBuilder {
     /// hand.
     pub fn migrations(mut self, configure: impl FnOnce(&mut MigrationBuilder)) -> Self {
         configure(&mut self.migration_builder);
+        self
+    }
+
+    /// Hands a value to every migration step that runs when this store opens.
+    ///
+    /// A step written with `#[migrate]` is collected at link time as a bare
+    /// `fn(&mut MigrationContext)`, so it captures nothing: anything it needs
+    /// from the application - a lookup table, a client, the settings it is
+    /// porting away from - has no way in except a global. This is that way in.
+    ///
+    /// One value per type; the step asks for it back with
+    /// [`MigrationContext::provided`] or [`MigrationContext::require`].
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// struct LegacyDefaults {
+    ///     port: u16,
+    /// }
+    ///
+    /// let store = StoreBuilder::new(&*path)
+    ///     .provide(LegacyDefaults { port: 8080 })
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = store;
+    /// ```
+    ///
+    /// [`MigrationContext::provided`]: crate::MigrationContext::provided
+    /// [`MigrationContext::require`]: crate::MigrationContext::require
+    pub fn provide<T: std::any::Any>(mut self, value: T) -> Self {
+        self.migration_builder.provide(value);
         self
     }
 

@@ -1,12 +1,14 @@
 use crate::codec::CodecError;
 use crate::migration::fields::AmeStateFields;
 use crate::migration::migrate_from::MigrateFrom;
+use crate::migration::provided::Provided;
 use crate::store::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::any::{Any, type_name};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::str::FromStr;
@@ -14,13 +16,121 @@ use std::str::FromStr;
 pub struct MigrationContext<'a> {
     prefix: String,
     storage: &'a mut dyn MigrationBackendAdapter,
+    provided: Option<&'a Provided>,
 }
 
 impl<'a> MigrationContext<'a> {
     /// Builds a context over one prefix. The engine does this; a migration
     /// step receives the result.
     pub fn new(prefix: String, storage: &'a mut dyn MigrationBackendAdapter) -> Self {
-        Self { prefix, storage }
+        Self {
+            prefix,
+            storage,
+            provided: None,
+        }
+    }
+
+    /// Lends the values the application handed to
+    /// [`StoreBuilder::provide`](crate::StoreBuilder::provide).
+    pub fn with_provided(mut self, provided: &'a Provided) -> Self {
+        self.provided = Some(provided);
+        self
+    }
+
+    /// A value the application provided, or `None` if it did not.
+    ///
+    /// A step is a bare `fn` and captures nothing, so this is how anything
+    /// from outside the store reaches it. Use [`MigrationContext::require`]
+    /// where the step cannot do its job without it.
+    ///
+    /// The borrow is on the provided values rather than on the context, so a
+    /// step can hold one and go on writing - `ctx.set` while a provided value
+    /// is in hand is the ordinary shape of a step, not a fight with the
+    /// borrow checker.
+    pub fn provided<T: Any>(&self) -> Option<&'a T> {
+        self.provided.and_then(Provided::get::<T>)
+    }
+
+    /// The same, as a failure rather than a `None`.
+    ///
+    /// A missing dependency is a wiring mistake in the application, not bad
+    /// data, and it is worth saying so plainly: the report names the type the
+    /// step asked for and lists what was actually on offer, because the usual
+    /// cause is providing a `Foo` where the step wanted an `Arc<Foo>`.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// // What the application knows and the store does not.
+    /// struct LegacyDefaults {
+    ///     port: u16,
+    /// }
+    ///
+    /// let (store, report) = StoreBuilder::new(&*path)
+    ///     .provide(LegacyDefaults { port: 8080 })
+    ///     .migrations(|m| {
+    ///         m.for_prefix("net").step(1, "carry the old port over", |ctx| {
+    ///             let legacy = ctx.require::<LegacyDefaults>()?;
+    ///             ctx.set("port", &legacy.port)
+    ///         });
+    ///     })
+    ///     .build_with_report()
+    ///     .unwrap();
+    ///
+    /// assert!(!report.has_failures());
+    /// assert_eq!(store.get::<u16>(["net", "port"]).unwrap(), Some(8080));
+    /// ```
+    ///
+    /// Asking for something nobody provided fails the step, and the report
+    /// names the type rather than reading as bad data:
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// struct NeverProvided;
+    ///
+    /// let (_store, report) = StoreBuilder::new(&*path)
+    ///     .migrations(|m| {
+    ///         m.for_prefix("net").step(1, "wants what nobody gave", |ctx| {
+    ///             ctx.require::<NeverProvided>()?;
+    ///             Ok(())
+    ///         });
+    ///     })
+    ///     .build_with_report()
+    ///     .unwrap();
+    ///
+    /// assert!(report.has_failures());
+    ///
+    /// let rendered = format!("{report:?}");
+    /// assert!(rendered.contains("NeverProvided"));
+    ///
+    /// // What the report says is pinned by an insta snapshot over in
+    /// // `tests/migration_provided.rs`. This reads the same file rather than
+    /// // quoting it, so rewording the guidance moves both together or fails
+    /// // here - the two cannot drift apart while nobody is looking.
+    /// let pinned = include_str!(
+    ///     "../../tests/snapshots/migration_provided__migration_wants_a_value_nobody_provided.snap"
+    /// );
+    /// let guidance = pinned.lines().last().unwrap().trim_start_matches(['╰', '╴']);
+    /// assert!(rendered.contains(guidance), "{rendered}");
+    /// ```
+    pub fn require<T: Any>(&self) -> StorageResult<&'a T> {
+        if let Some(value) = self.provided::<T>() {
+            return Ok(value);
+        }
+
+        let offered = self.provided.map(Provided::type_names).unwrap_or_default();
+        let offered = if offered.is_empty() {
+            "nothing was provided".to_string()
+        } else {
+            format!("provided: {}", offered.join(", "))
+        };
+
+        Err(Report::new(StorageError::Migrate)
+            .attach(format!("migrating {}", self.prefix))
+            .attach(format!("no value provided for {}", type_name::<T>()))
+            .attach(offered)
+            .attach("StoreBuilder::provide hands a value to every migration step"))
     }
 
     /// Migrates a nested struct held at `key`, running its own
@@ -218,6 +328,7 @@ impl<'a> MigrationContext<'a> {
         MigrationContext {
             prefix: self.scoped_path(sub_prefix),
             storage: self.storage,
+            provided: self.provided,
         }
     }
 
@@ -245,12 +356,17 @@ impl<'a> MigrationContext<'a> {
         let mut map = HashMap::new();
 
         for (path, bytes) in raw {
-            let name = full_prefix.entry_name(&path).ok_or_else(|| {
-                Report::new(StorageError::Path)
-                    .attach(format!("map: {full_prefix}"))
-                    .attach(format!("stored key: {path}"))
-                    .attach("the key is not a path this library could have written")
-            })?;
+            let name = path
+                .strip_prefix(&full_prefix)
+                .as_ref()
+                .and_then(StorePath::name)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    Report::new(StorageError::Path)
+                        .attach(format!("map: {full_prefix}"))
+                        .attach(format!("stored key: {path}"))
+                        .attach("the key is not under the map it was scanned from")
+                })?;
 
             let parsed = K::from_str(&name).map_err(|_| {
                 Report::new(StorageError::Codec)
@@ -396,7 +512,7 @@ mod tests {
             Ok(())
         }
 
-        fn scan_prefix(&self, _: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        fn scan_prefix(&self, _: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
             unreachable!()
         }
 

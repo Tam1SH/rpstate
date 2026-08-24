@@ -298,8 +298,15 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         if let Some(plan) = mset.get_migration_plan(prefix) {
             let mut history = storage.get_migration_log(&prefix_path)?.unwrap_or_default();
 
-            applied_steps =
-                self.run_migrator_steps(storage, prefix, plan, &mut meta, target_v, &mut history)?;
+            applied_steps = self.run_migrator_steps(
+                storage,
+                prefix,
+                plan,
+                &mut meta,
+                target_v,
+                &mut history,
+                mset.provided(),
+            )?;
 
             if !applied_steps.is_empty() {
                 meta.hash = target_hash;
@@ -342,9 +349,11 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         meta: &mut PrefixMeta,
         target_v: u32,
         history: &mut Vec<AppliedStep>,
+        provided: &crate::migration::provided::Provided,
     ) -> StorageResult<Vec<AppliedStep>> {
         let mut new_steps = Vec::new();
-        let mut ctx = MigrationContext::new(prefix.to_string(), storage);
+        let mut ctx =
+            MigrationContext::new(prefix.to_string(), storage).with_provided(provided);
 
         for step in &migrator.steps {
             let sv = step.target_version();
@@ -438,11 +447,11 @@ mod tests {
             self.data.remove(key);
             Ok(())
         }
-        fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
             let mut res = Vec::new();
             for (k, v) in &self.data {
                 if k.starts_with(prefix.as_str()) {
-                    res.push((k.clone(), v.clone()));
+                    res.push((StorePath::parse_joined(k).unwrap(), v.clone()));
                 }
             }
             Ok(res)
