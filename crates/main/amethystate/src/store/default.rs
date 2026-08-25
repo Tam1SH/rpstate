@@ -31,6 +31,13 @@ use std::sync::Arc;
 ///
 /// Cheap to clone and shared by every clone: the file stays open as long as one
 /// handle is alive, and closes when the last is dropped.
+///
+/// Dropping the last handle writes what is still buffered, but it is the one
+/// write whose failure it cannot report: `Drop` has no caller to return an
+/// error to, and by then there is rarely anyone left to tell. An application
+/// that would rather find out while it can still act - offer to retry, save
+/// somewhere else, or not exit yet - calls [`Store::close`] on the way out and
+/// reads the result.
 #[derive(Clone)]
 pub struct Store(Arc<dyn StoreBackend>);
 
@@ -55,6 +62,33 @@ impl Store {
         mset: crate::migration::set::MigrationSet,
     ) -> StorageResult<(Self, MigrationReport)> {
         crate::store::builder::default_backend().open_public(config, mset)
+    }
+
+    /// Writes everything buffered and says whether it landed.
+    ///
+    /// This is the fallible half of dropping the store, and the point of
+    /// calling it is the `Result`: a full disk, a locked file or a permission
+    /// error at exit is answered here, while the application is still running
+    /// and can do something about it. Left to `Drop`, the same failure can only
+    /// be logged.
+    ///
+    /// It does not invalidate this handle or any other. A store is shared by
+    /// its clones and the file is released when the last one goes; what closes
+    /// here is the buffer, and the store is usable afterwards. Calling it more
+    /// than once is fine, and on a store with nothing buffered it does nothing.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc_close");
+    /// let store = StoreBuilder::new(&*path).build().unwrap();
+    /// store.kv().set("port", &8080u16).unwrap();
+    ///
+    /// if let Err(report) = store.close() {
+    ///     eprintln!("settings were not saved: {report:?}");
+    /// }
+    /// ```
+    pub fn close(&self) -> StorageResult<()> {
+        self.0.save_now()
     }
 }
 

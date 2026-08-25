@@ -135,7 +135,7 @@ fn test_confy_amethystate_coexistence() {
         fs::create_dir_all(parent).expect("Failed to create parent directory");
     }
 
-    StoreBuilder::new(&file_path).init_global();
+    let _ame = StoreBuilder::new(&file_path).init_global();
 
     let legacy = TestConfig {
         name: "legacy".to_string(),
