@@ -42,6 +42,47 @@ pub fn report_closing_flush(outcome: StorageResult<()>, file: &Path) {
     }
 }
 
+/// Lays the write buffer over what the engine holds, both already sorted.
+///
+/// One pass down two lists rather than a tree built from one and searched by
+/// the other: a buffered write replaces the committed value at its key, a
+/// buffered delete leaves nothing there, and everything keeps the order the
+/// engine ranges in - which is the order a scan promises.
+#[cfg(any(feature = "redb", feature = "sqlite"))]
+pub fn merge_buffered(
+    committed: Vec<(StorePath, Vec<u8>)>,
+    buffered: Vec<(StorePath, Option<Vec<u8>>)>,
+) -> Vec<(StorePath, Vec<u8>)> {
+    let mut out = Vec::with_capacity(committed.len() + buffered.len());
+    let mut left = committed.into_iter().peekable();
+    let mut right = buffered.into_iter().peekable();
+
+    loop {
+        let take_left = match (left.peek(), right.peek()) {
+            (Some((a, _)), Some((b, _))) => a <= b,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+
+        if take_left {
+            let (key, value) = left.next().expect("peeked");
+            // A buffered op at the same key wins, and is taken on its own turn.
+            if right.peek().is_some_and(|(b, _)| *b == key) {
+                continue;
+            }
+            out.push((key, value));
+        } else {
+            let (key, value) = right.next().expect("peeked");
+            if let Some(value) = value {
+                out.push((key, value));
+            }
+        }
+    }
+
+    out
+}
+
 /// Where a subtree stops, for engines that store a key whole.
 ///
 /// A key belongs to `prefix` when it is `prefix` itself or begins with it

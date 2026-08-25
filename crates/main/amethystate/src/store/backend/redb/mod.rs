@@ -6,7 +6,7 @@ use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use migration::RedbMigrationBackend;
 use redb::{Database, ReadableDatabase, TableHandle};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
@@ -115,6 +115,7 @@ struct RedbStoreInner {
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
     write_lock: Arc<Mutex<()>>,
+    parallel_reads: bool,
 }
 
 impl RedbStoreInner {
@@ -355,6 +356,7 @@ impl RedbStore {
             subscriptions,
             next_sub_id: Arc::new(AtomicU64::new(1)),
             write_lock,
+            parallel_reads: config.parallel_reads,
         });
 
         let store = Self { inner };
@@ -582,6 +584,10 @@ impl StoreBackend for RedbStore {
         Ok(())
     }
 
+    fn parallel_reads(&self) -> bool {
+        self.inner.parallel_reads
+    }
+
     fn save_now(&self) -> StorageResult<()> {
         self.inner.save_now()
     }
@@ -589,7 +595,13 @@ impl StoreBackend for RedbStore {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
-        let mut results: BTreeMap<StorePath, Vec<u8>> = BTreeMap::new();
+
+        // Both sides arrive sorted - the engine ranges in key order, and the
+        // buffer is sorted once - so the two are merged rather than folded
+        // into a tree. A tree charged a walk of twenty-odd path comparisons
+        // for every committed key, and at a million entries those comparisons
+        // stopped fitting in cache.
+        let mut committed: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         let read_txn = self
             .inner
@@ -611,39 +623,33 @@ impl StoreBackend for RedbStore {
             let (k, v) = result
                 .doing(StorageError::Scan, &self.inner.path)
                 .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("entries read so far: {}", results.len()))?;
+                .attach_with(|| format!("entries read so far: {}", committed.len()))?;
             let key_str = k.value();
             if utils::is_under(key_str, prefix, &bound) {
-                results.insert(utils::stored_path(key_str)?, Vec::from(&v.value()[..]));
+                committed.push((utils::stored_path(key_str)?, Vec::from(&v.value()[..])));
             } else if !key_str.starts_with(prefix) {
                 break;
             }
         }
 
-        let mut pending_map = HashMap::new();
-        {
+        let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
-            for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if utils::is_under(k, prefix, &bound) {
-                    pending_map.insert(utils::stored_path(k)?, op.value().map(Vec::from));
-                }
-            }
-        }
+            lock.iter()
+                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix, &bound))
+                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(Vec::from))))
+                .collect::<StorageResult<_>>()?
+        };
+        buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        for (k, opt_v) in pending_map {
-            match opt_v {
-                Some(v) => results.insert(k, v),
-                None => results.remove(&k),
-            };
-        }
-
-        Ok(results.into_iter().collect())
+        Ok(utils::merge_buffered(committed, buffered))
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
-        let mut keys: BTreeSet<StorePath> = BTreeSet::new();
+        // Values carried as empty vectors so the same merge serves both scans;
+        // nothing reads them.
+        let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         let read_txn = self
             .inner
@@ -674,24 +680,22 @@ impl StoreBackend for RedbStore {
                 }
                 continue;
             }
-            keys.insert(utils::stored_path(key)?);
+            keys.push((utils::stored_path(key)?, Vec::new()));
         }
 
-        {
+        let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
-            for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if !utils::is_under(k, prefix, &bound) {
-                    continue;
-                }
-                let key = utils::stored_path(k)?;
-                match op.value() {
-                    Some(_) => keys.insert(key),
-                    None => keys.remove(&key),
-                };
-            }
-        }
+            lock.iter()
+                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix, &bound))
+                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(|_| Vec::new()))))
+                .collect::<StorageResult<_>>()?
+        };
+        buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        Ok(keys.into_iter().collect())
+        Ok(utils::merge_buffered(keys, buffered)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect())
     }
 
     fn delete_with_source(&self, path: &StorePath, source: Option<Uuid>) -> StorageResult<()> {

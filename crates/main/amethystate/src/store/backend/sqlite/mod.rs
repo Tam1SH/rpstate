@@ -20,7 +20,7 @@ use error::SqliteStoreError;
 use error_stack::ResultExt;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -303,12 +303,19 @@ impl SqliteStoreInner {
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let bound = utils::subtree_bound(prefix);
-        let mut storage_results: BTreeMap<StorePath, Vec<u8>> = BTreeMap::new();
+
+        // Ordered by the engine and merged rather than folded into a tree, so
+        // a scan costs one pass instead of a tree walk per row. `ORDER BY` is
+        // load-bearing now: without it sqlite is free to return the range in
+        // any order, and the tree that used to hide that is gone.
+        let mut storage_results: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         {
             let conn = self.conn.lock();
             let mut stmt = conn
-                .prepare_cached("SELECT key, value FROM data WHERE key >= ? AND key < ?")
+                .prepare_cached(
+                    "SELECT key, value FROM data WHERE key >= ? AND key < ? ORDER BY key",
+                )
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
@@ -330,38 +337,32 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("rows read: {}", storage_results.len()))?;
-                storage_results.insert(utils::stored_path(&k)?, v);
+                storage_results.push((utils::stored_path(&k)?, v));
             }
         }
 
-        let mut pending_map = HashMap::new();
-        {
+        let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.pending.lock();
-            for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if utils::is_under(k, prefix.as_str(), &bound) {
-                    pending_map.insert(utils::stored_path(k)?, op.value().map(Vec::from));
-                }
-            }
-        }
+            lock.iter()
+                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix.as_str(), &bound))
+                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(Vec::from))))
+                .collect::<StorageResult<_>>()?
+        };
+        buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        for (k, opt_v) in pending_map {
-            match opt_v {
-                Some(v) => storage_results.insert(k, v),
-                None => storage_results.remove(&k),
-            };
-        }
-
-        Ok(storage_results.into_iter().collect())
+        Ok(utils::merge_buffered(storage_results, buffered))
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let bound = utils::subtree_bound(prefix);
-        let mut keys: BTreeSet<StorePath> = BTreeSet::new();
+        // Values carried as empty vectors so the same merge serves both scans;
+        // nothing reads them.
+        let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         {
             let conn = self.conn.lock();
             let mut stmt = conn
-                .prepare_cached("SELECT key FROM data WHERE key >= ? AND key < ?")
+                .prepare_cached("SELECT key FROM data WHERE key >= ? AND key < ? ORDER BY key")
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
@@ -381,25 +382,23 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("keys read: {}", keys.len()))?;
-                keys.insert(utils::stored_path(&key)?);
+                keys.push((utils::stored_path(&key)?, Vec::new()));
             }
         }
 
-        {
+        let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.pending.lock();
-            for (k, op) in lock.iter().filter(|(_, o)| o.is_data()) {
-                if !utils::is_under(k, prefix.as_str(), &bound) {
-                    continue;
-                }
-                let key = utils::stored_path(k)?;
-                match op.value() {
-                    Some(_) => keys.insert(key),
-                    None => keys.remove(&key),
-                };
-            }
-        }
+            lock.iter()
+                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix.as_str(), &bound))
+                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(|_| Vec::new()))))
+                .collect::<StorageResult<_>>()?
+        };
+        buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        Ok(keys.into_iter().collect())
+        Ok(utils::merge_buffered(keys, buffered)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect())
     }
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
