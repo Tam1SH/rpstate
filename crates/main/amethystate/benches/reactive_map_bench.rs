@@ -20,6 +20,21 @@ use std::time::Duration;
 
 type Map = ReactiveMap<String, u64, WritableMode>;
 
+/// A stored value with more than one field in it, which is what a declared
+/// struct actually is.
+///
+/// A `u64` decodes in about eleven nanoseconds, so measuring parallelism
+/// against one measures the handing out and nothing else. This is the smallest
+/// shape that is not that.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, PartialEq)]
+struct Row {
+    title: String,
+    host: String,
+    port: u16,
+    done: bool,
+    updated_at: i64,
+}
+
 const SIZES: [usize; 3] = [10, 1_000, 10_000];
 
 /// The sizes for the two groups that answer "what does it cost to have this
@@ -99,12 +114,12 @@ fn bench_writes(c: &mut Criterion) {
 
         let (_tmp, _store, map) = populated("map-update", n.max(1));
         group.bench_with_input(BenchmarkId::new("update", n), &n, |b, _| {
-            b.iter(|| black_box(map.update(key(0), &7).unwrap()))
+            b.iter(|| black_box(map.update(&key(0), &7).unwrap()))
         });
 
         let (_tmp, _store, map) = populated("map-modify", n.max(1));
         group.bench_with_input(BenchmarkId::new("modify", n), &n, |b, _| {
-            b.iter(|| black_box(map.modify(key(0), |v| *v += 1).unwrap()))
+            b.iter(|| black_box(map.modify(&key(0), |v| *v += 1).unwrap()))
         });
     }
 
@@ -248,7 +263,7 @@ fn bench_subscribers(c: &mut Criterion) {
             .collect();
 
         group.bench_with_input(BenchmarkId::new("subscribe_any", subs), &subs, |b, _| {
-            b.iter(|| black_box(map.update(key(0), &7).unwrap()))
+            b.iter(|| black_box(map.update(&key(0), &7).unwrap()))
         });
 
         drop(handles);
@@ -259,7 +274,7 @@ fn bench_subscribers(c: &mut Criterion) {
         black_box(change);
     });
     group.bench_function("subscribe_key_hit", |b| {
-        b.iter(|| black_box(map.update(key(0), &7).unwrap()))
+        b.iter(|| black_box(map.update(&key(0), &7).unwrap()))
     });
 
     group.finish();
@@ -303,21 +318,45 @@ fn bench_open_parallelism(c: &mut Criterion) {
     let mut group = c.benchmark_group("open_parallelism");
     group.sample_size(10);
 
-    for n in [10_000usize, 100_000, 1_000_000] {
+    // Close enough together to find where splitting the work starts paying
+    // for itself: below some size the handing out and collecting costs more
+    // than the work does, and a decade between samples cannot say where.
+    for n in [
+        100usize, 300, 1_000, 3_000, 10_000, 30_000, 100_000, 1_000_000,
+    ] {
         let joined: Vec<String> = (0..n).map(|i| format!("bench.{}", key(i))).collect();
         let encoded: Vec<Vec<u8>> = (0..n)
             .map(|i| rmp_serde::to_vec(&(i as u64)).unwrap())
             .collect();
+        let rows: Vec<Vec<u8>> = (0..n)
+            .map(|i| {
+                rmp_serde::to_vec(&Row {
+                    title: format!("row number {i}"),
+                    host: "127.0.0.1".to_string(),
+                    port: (i % 65535) as u16,
+                    done: i.is_multiple_of(3),
+                    updated_at: i as i64,
+                })
+                .unwrap()
+            })
+            .collect();
 
         group.throughput(Throughput::Elements(n as u64));
 
+        // Folded rather than counted: a `map` whose results are thrown away is
+        // a computation the compiler may drop, and a benchmark that measures
+        // nothing reports something.
+        //
+        // Folded on `as_str`, not on `len`: a path splits its levels lazily,
+        // `len` is one of the things that asks for the split, and a scan never
+        // does - so measuring it would price work the scan does not pay.
         group.bench_with_input(BenchmarkId::new("parse_keys_seq", n), &n, |b, _| {
             b.iter(|| {
                 black_box(
                     joined
                         .iter()
-                        .map(|j| StorePath::parse_joined(j).unwrap())
-                        .count(),
+                        .map(|j| StorePath::parse_joined(j).unwrap().as_str().len())
+                        .sum::<usize>(),
                 )
             })
         });
@@ -326,8 +365,28 @@ fn bench_open_parallelism(c: &mut Criterion) {
                 black_box(
                     joined
                         .par_iter()
-                        .map(|j| StorePath::parse_joined(j).unwrap())
-                        .count(),
+                        .map(|j| StorePath::parse_joined(j).unwrap().as_str().len())
+                        .sum::<usize>(),
+                )
+            })
+        });
+
+        group.bench_with_input(BenchmarkId::new("decode_rows_seq", n), &n, |b, _| {
+            b.iter(|| {
+                black_box(
+                    rows.iter()
+                        .map(|v| rmp_serde::from_slice::<Row>(v).unwrap())
+                        .fold(0i64, |acc, r| acc ^ r.updated_at),
+                )
+            })
+        });
+        group.bench_with_input(BenchmarkId::new("decode_rows_par", n), &n, |b, _| {
+            b.iter(|| {
+                black_box(
+                    rows.par_iter()
+                        .map(|v| rmp_serde::from_slice::<Row>(v).unwrap())
+                        .map(|r| r.updated_at)
+                        .reduce(|| 0i64, |a, b| a ^ b),
                 )
             })
         });
@@ -338,7 +397,7 @@ fn bench_open_parallelism(c: &mut Criterion) {
                     encoded
                         .iter()
                         .map(|v| rmp_serde::from_slice::<u64>(v).unwrap())
-                        .count(),
+                        .fold(0u64, |acc, v| acc ^ v),
                 )
             })
         });
@@ -348,7 +407,7 @@ fn bench_open_parallelism(c: &mut Criterion) {
                     encoded
                         .par_iter()
                         .map(|v| rmp_serde::from_slice::<u64>(v).unwrap())
-                        .count(),
+                        .reduce(|| 0u64, |a, b| a ^ b),
                 )
             })
         });

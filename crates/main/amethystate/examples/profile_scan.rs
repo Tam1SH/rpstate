@@ -26,6 +26,30 @@ use std::time::{Duration, Instant};
 
 const SCANS: usize = 3;
 
+/// A stored value with fields in it, which is what a declared struct is.
+///
+/// Measuring on a `u64` measures the store and not the codec: an integer
+/// decodes in about eleven nanoseconds, where this takes two hundred, and the
+/// difference is most of what opening a large collection costs.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, PartialEq)]
+struct Row {
+    title: String,
+    host: String,
+    port: u16,
+    done: bool,
+    updated_at: i64,
+}
+
+fn row(i: usize) -> Row {
+    Row {
+        title: format!("row number {i}"),
+        host: "127.0.0.1".to_string(),
+        port: (i % 65535) as u16,
+        done: i.is_multiple_of(3),
+        updated_at: i as i64,
+    }
+}
+
 /// Counts every allocation and attributes it to where it was made, which a
 /// sampling profiler cannot: it says a third of the run is in the allocator
 /// and not which lines put it there.
@@ -46,17 +70,21 @@ fn main() {
     #[cfg(feature = "dhat-heap")]
     let _dhat = dhat::Profiler::new_heap();
 
+    let parallel = std::env::var("PARALLEL").is_ok_and(|v| v != "0");
+    println!("parallel_reads: {parallel}");
+
     let path = TempPath::new("profile-scan");
     let store: Store = StoreBuilder::new(path.path())
         .debounce(Duration::from_secs(600))
+        .parallel_reads(parallel)
         .build()
         .unwrap();
 
-    let map = store.kv().map::<String, u64>("bench").unwrap();
+    let map = store.kv().map::<String, Row>("bench").unwrap();
 
     let t = Instant::now();
     for i in 0..entries {
-        map.insert(format!("k{i:07}"), &(i as u64)).unwrap();
+        map.insert(format!("k{i:07}"), &row(i)).unwrap();
     }
     println!("populate {entries}: {:?}", t.elapsed());
 
@@ -80,7 +108,7 @@ fn main() {
 
     for _ in 0..SCANS {
         let t = Instant::now();
-        let opened = store.kv().map::<String, u64>("bench").unwrap();
+        let opened = store.kv().map::<String, Row>("bench").unwrap();
         println!("open {}: {:?}", opened.len(), t.elapsed());
     }
 }

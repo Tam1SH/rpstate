@@ -187,18 +187,6 @@ impl StorePath {
         }
     }
 
-    /// A path whose joined form is already in hand, taken rather than rebuilt.
-    ///
-    /// Only for [`StorePath::parse_joined`], which was handed the joined form
-    /// and split it: joining the pieces back reproduces the string it started
-    /// from, which `a_key_that_parses_joins_back_to_itself` pins.
-    fn from_parsed(segments: Vec<Arc<str>>, joined: &str) -> Self {
-        Self {
-            segments: Segments::Owned(Arc::from(segments)),
-            joined: Joined::Owned(Arc::from(joined)),
-        }
-    }
-
     /// This path with one more level under it.
     ///
     /// # Panics
