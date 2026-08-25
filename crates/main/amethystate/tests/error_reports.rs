@@ -136,7 +136,7 @@ fn a_strict_write_to_an_absent_key() {
     let (_dir, store) = store("report_map_absent");
     let widths = store.kv().map::<String, u64>("cols").unwrap();
 
-    let err = widths.update("cpu".to_string(), &1).unwrap_err();
+    let err = widths.update("cpu", &1).unwrap_err();
 
     insta::assert_snapshot!("map_update_on_an_absent_key", shape(&err));
 }
@@ -150,10 +150,10 @@ fn a_read_modify_write_on_an_absent_key() {
 
     let refused = [
         widths
-            .update_with("cpu".to_string(), |w| w + 1)
+            .update_with("cpu", |w| w + 1)
             .map(|_| ())
             .unwrap_err(),
-        widths.modify("cpu".to_string(), |w| *w += 1).unwrap_err(),
+        widths.modify("cpu", |w| *w += 1).unwrap_err(),
     ];
 
     for (way, err) in ["update_with", "modify"].into_iter().zip(refused) {

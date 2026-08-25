@@ -37,7 +37,7 @@ fn an_update_reports_the_value_that_was_there_before() {
             }
         });
 
-    cfg.items().update("k".into(), &7).unwrap();
+    cfg.items().update("k", &7).unwrap();
 
     assert_eq!(
         *seen.lock().unwrap(),
@@ -64,7 +64,7 @@ fn an_unflushed_write_is_the_old_value_for_the_next_one() {
             }
         });
 
-    cfg.items().update("k".into(), &2).unwrap();
+    cfg.items().update("k", &2).unwrap();
 
     assert_eq!(
         *seen.lock().unwrap(),

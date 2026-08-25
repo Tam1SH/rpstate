@@ -258,7 +258,7 @@ where
     /// assert_eq!(widths.len(), 2);
     ///
     /// // Writing an existing key does not add one.
-    /// widths.update("cpu".into(), &200).unwrap();
+    /// widths.update("cpu", &200).unwrap();
     /// assert_eq!(widths.len(), 2);
     /// ```
     pub fn len(&self) -> usize {
@@ -297,7 +297,7 @@ where
     /// });
     ///
     /// widths.insert("cpu".into(), &120).unwrap();
-    /// widths.update("cpu".into(), &200).unwrap();
+    /// widths.update("cpu", &200).unwrap();
     /// widths.remove("cpu").unwrap();
     /// assert_eq!(*seen.lock().unwrap(), ["insert", "update", "remove"]);
     ///
@@ -340,7 +340,7 @@ where
     ///
     /// widths.insert("cpu".into(), &120).unwrap();
     /// widths.insert("mem".into(), &80).unwrap();   // a different key
-    /// widths.update("cpu".into(), &200).unwrap();
+    /// widths.update("cpu", &200).unwrap();
     ///
     /// assert_eq!(*hits.lock().unwrap(), 2, "only the two writes to `cpu`");
     /// ```
@@ -439,11 +439,13 @@ where
     /// then yields the new value. [`ReactiveMap::modify`] does the same
     /// through `&mut` instead. Fails with
     /// [`ReactiveMapError::KeyNotFound`] when the key is absent.
-    pub fn update_with<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    pub fn update_with<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
         F: FnOnce(V) -> V,
     {
-        if let Some(val) = self.get(&key) {
+        if let Some(val) = self.get(key) {
             let new_val = f(val);
             self.update(key, &new_val)?;
             Ok(Some(new_val))
@@ -455,11 +457,13 @@ where
 
     /// Reads the key, lets `f` change the value in place and writes it back.
     /// Fails with [`ReactiveMapError::KeyNotFound`] when the key is absent.
-    pub fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
+    pub fn modify<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
         F: FnOnce(&mut V),
     {
-        if let Some(mut val) = self.get(&key) {
+        if let Some(mut val) = self.get(key) {
             f(&mut val);
             self.update(key, &val)
         } else {
@@ -490,23 +494,34 @@ where
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
     ///
     /// // `update` refuses a key that is not there yet.
-    /// assert!(widths.update("cpu".into(), &120).is_err());
+    /// assert!(widths.update("cpu", &120).is_err());
     ///
     /// // `insert` is the one that adds it.
     /// widths.insert("cpu".into(), &120).unwrap();
     /// assert_eq!(widths.get("cpu"),Some(120));
     ///
     /// // Once the key exists, the strict write lands.
-    /// widths.update("cpu".into(), &200).unwrap();
+    /// widths.update("cpu", &200).unwrap();
     /// assert_eq!(widths.get("cpu"),Some(200));
     /// ```
-    pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+    pub fn update<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
+    {
+        // Strict, so the key is already here and its owned form with it. Only
+        // `insert` has to be handed one.
+        let Some(owned) = self.inner.core.cache.get(key).map(|e| e.key().clone()) else {
+            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(format!("map: {}", self.inner.path)));
+        };
+
         let backend = SyncBridge::new(self.inner.store.clone());
         Ok(amethystate_core::map_update(
             &backend,
             &self.inner.core,
             self.inner.path.clone(),
-            key,
+            owned,
             value,
             Some(self.inner.instance_id),
         )?)
@@ -673,7 +688,11 @@ where
     /// [`ReactiveMapError::KeyNotFound`].
     ///
     /// Returns only once the change is on disk rather than buffered.
-    pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+    pub fn update<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
+    {
         self.0.update(key, value)?;
         self.commit()
     }
@@ -684,7 +703,11 @@ where
     /// Resolves once the change is on disk rather than buffered.
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn update_async(&self, key: K, value: &V) -> ReactiveMapResult<()> {
+    pub async fn update_async<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
+    {
         self.0.update(key, value)?;
         self.commit_async().await
     }
@@ -756,8 +779,10 @@ where
     /// Reads the key, writes back what `f` returns, and yields the new value.
     ///
     /// Returns only once the change is on disk rather than buffered.
-    pub fn update_with<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    pub fn update_with<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         let value = self.0.update_with(key, f)?;
@@ -770,8 +795,10 @@ where
     /// Resolves once the change is on disk rather than buffered.
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn update_with_async<F>(&self, key: K, f: F) -> ReactiveMapResult<Option<V>>
+    pub async fn update_with_async<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         let value = self.0.update_with(key, f)?;
@@ -782,8 +809,10 @@ where
     /// Reads the key, lets `f` change the value in place, and writes it back.
     ///
     /// Returns only once the change is on disk rather than buffered.
-    pub fn modify<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
+    pub fn modify<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;
@@ -792,8 +821,10 @@ where
 
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn modify_async<F>(&self, key: K, f: F) -> ReactiveMapResult<()>
+    pub async fn modify_async<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
+        K: Borrow<Q>,
+        Q: Hash + Eq + std::fmt::Display + ?Sized,
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;
@@ -870,7 +901,7 @@ mod tests {
         });
 
         map.insert("a".to_string(), &1).unwrap(); // Insert - delivered
-        map.update("a".to_string(), &2).unwrap(); // Update - filtered
+        map.update("a", &2).unwrap(); // Update - filtered
         map.insert("a".to_string(), &3).unwrap(); // Update - filtered
         map.remove("a").unwrap(); // Remove - delivered
 
@@ -894,7 +925,7 @@ mod tests {
         seen.lock().unwrap().clear();
         let other = map.fork();
         other.insert("c".to_string(), &5).unwrap();
-        other.update("c".to_string(), &6).unwrap();
+        other.update("c", &6).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -932,7 +963,7 @@ mod tests {
             });
 
         map.insert("a".to_string(), &1).unwrap();
-        map.update("a".to_string(), &2).unwrap();
+        map.update("a", &2).unwrap();
         map.insert("b".to_string(), &3).unwrap(); // other key, not ours
         map.remove("a").unwrap();
 
@@ -961,10 +992,10 @@ mod tests {
         assert_eq!(map.get("a"),Some(10));
         assert_eq!(map.len(),1);
 
-        map.update("a".into(), &20).unwrap();
+        map.update("a", &20).unwrap();
         assert_eq!(map.get("a"),Some(20));
 
-        let res = map.update("missing".into(), &30);
+        let res = map.update("missing", &30);
         assert!(matches!(
             res.unwrap_err().current_context(),
             ReactiveMapError::KeyNotFound(_)
@@ -1071,8 +1102,8 @@ mod tests {
         });
 
         map.insert("key1".into(), &1).unwrap();
-        map.update("key1".into(), &2).unwrap();
-        map.remove("key1".into()).unwrap();
+        map.update("key1", &2).unwrap();
+        map.remove("key1").unwrap();
 
         std::thread::sleep(Duration::from_millis(100));
 
@@ -1101,13 +1132,13 @@ mod tests {
             if let MapChange::Update { key, .. } = &change
                 && key == "a"
             {
-                let _ = map_clone.update("a".into(), &999);
+                let _ = map_clone.update("a", &999);
             }
             Some(change)
         });
 
         map.insert("a".into(), &1).unwrap();
-        map.update("a".into(), &2).unwrap();
+        map.update("a", &2).unwrap();
 
         assert_eq!(map.get("a"),Some(2));
     }
@@ -1170,11 +1201,11 @@ mod tests {
             let _sub = map.subscribe_any(move |_| {
                 c_clone.fetch_add(1, Ordering::SeqCst);
             });
-            map.update("key1".into(), &2).unwrap();
+            map.update("key1", &2).unwrap();
             assert_eq!(call_count.load(Ordering::SeqCst), 1);
         }
 
-        map.update("key1".into(), &3).unwrap();
+        map.update("key1", &3).unwrap();
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
@@ -1199,8 +1230,8 @@ mod tests {
             t_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        map.update("target".into(), &11).unwrap();
-        map.update("other".into(), &21).unwrap();
+        map.update("target", &11).unwrap();
+        map.update("other", &21).unwrap();
         assert_eq!(target_calls.load(Ordering::SeqCst), 1);
 
         map.intercept_key("target".into(), |change| {
@@ -1212,14 +1243,14 @@ mod tests {
             Some(change)
         });
 
-        map.update("target".into(), &50).unwrap();
-        let res = map.update("target".into(), &150);
+        map.update("target", &50).unwrap();
+        let res = map.update("target", &150);
         assert!(matches!(
             res.unwrap_err().current_context(),
             ReactiveMapError::Intercepted
         ));
 
-        map.update("other".into(), &150).unwrap();
+        map.update("other", &150).unwrap();
     }
 
     /// Reopening a map's path under a different key type is a refusal, not a
@@ -1344,10 +1375,10 @@ mod tests {
             "Creation (Insert) is NOT ignored"
         );
 
-        map.update("a".into(), &10).unwrap();
+        map.update("a", &10).unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "Own updates are ignored");
 
-        fork.update("a".into(), &20).unwrap();
+        fork.update("a", &20).unwrap();
 
         assert_eq!(
             calls.load(Ordering::SeqCst),

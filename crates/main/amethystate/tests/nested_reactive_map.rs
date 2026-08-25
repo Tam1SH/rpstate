@@ -43,7 +43,7 @@ fn reactive_map_inside_nested_struct_seeds_defaults_only_once() {
         settings
             .columns()
             .widths_px()
-            .update("name".to_string(), &999u64)
+            .update("name", &999u64)
             .unwrap();
     }
 

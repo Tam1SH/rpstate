@@ -150,7 +150,7 @@ fn map_changes_reach_a_local_subscriber() {
         });
 
     cfg.items().insert("a".into(), &1).unwrap();
-    cfg.items().update("a".into(), &2).unwrap();
+    cfg.items().update("a", &2).unwrap();
     cfg.items().remove("a").unwrap();
     ui.drain();
 
@@ -198,7 +198,7 @@ fn external_on_a_map_filters_updates_only() {
     );
 
     cfg.items().insert("a".into(), &1).unwrap();
-    cfg.items().update("a".into(), &2).unwrap();
+    cfg.items().update("a", &2).unwrap();
     cfg.items().remove("a").unwrap();
 
     assert_eq!(*seen.lock().unwrap(), vec!["insert", "remove"]);

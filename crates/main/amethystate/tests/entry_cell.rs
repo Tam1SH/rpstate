@@ -69,7 +69,7 @@ fn external_map_write_lands_in_cell() {
     let config = TableConfig::new_with(&store).unwrap();
 
     let entry = config.widths().entry_cell("cpu".to_string());
-    config.widths().update("cpu".to_string(), &99).unwrap();
+    config.widths().update("cpu", &99).unwrap();
 
     assert_eq!(entry.get(), Some(99));
 }
@@ -175,7 +175,7 @@ fn a_cell_survives_the_handle_it_was_made_from() {
         widths.entry_cell("cpu".to_string())
     };
 
-    config.widths().update("cpu".to_string(), &55).unwrap();
+    config.widths().update("cpu", &55).unwrap();
 
     assert_eq!(entry.get(), Some(55), "cache must still be fed");
 }

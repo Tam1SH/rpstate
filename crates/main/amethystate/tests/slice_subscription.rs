@@ -110,14 +110,14 @@ fn test_slice_subscribe_all_external() {
         "New field creation (Insert) must not be ignored"
     );
 
-    state.tags().update("region".into(), &"us".into()).unwrap();
+    state.tags().update("region", &"us".into()).unwrap();
     assert_eq!(
         change_count.load(Ordering::SeqCst),
         3,
         "Own map updates (Update) must be ignored"
     );
 
-    fork.tags().update("region".into(), &"asia".into()).unwrap();
+    fork.tags().update("region", &"asia".into()).unwrap();
     assert_eq!(
         change_count.load(Ordering::SeqCst),
         4,

@@ -855,14 +855,14 @@ fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Ba
     let store = open(backend, &file);
     let map = store.kv().map::<String, u32>("m").unwrap();
 
-    let refusal = map.update("absent".to_string(), &1).unwrap_err();
+    let refusal = map.update("absent", &1).unwrap_err();
     assert!(
         matches!(refusal.current_context(), WriteError::KeyNotFound(key) if key == "absent"),
         "{refusal:?}"
     );
 
     map.insert("absent".to_string(), &1).unwrap();
-    map.update("absent".to_string(), &2).unwrap();
+    map.update("absent", &2).unwrap();
     assert_eq!(map.get("absent"), Some(2));
 
     let refusal = map.insert(String::new(), &1).unwrap_err();

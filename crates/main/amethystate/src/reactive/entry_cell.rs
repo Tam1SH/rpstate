@@ -49,7 +49,7 @@ where
     /// assert_eq!(widths.get("cpu"), Some(120));
     ///
     /// // And a write to the map reaches the cell.
-    /// widths.update("cpu".into(), &200).unwrap();
+    /// widths.update("cpu", &200).unwrap();
     /// assert_eq!(cpu.get(), Some(200));
     ///
     /// // Removing the key empties the cell, and it refuses to put it back.
@@ -110,7 +110,7 @@ where
                     inner,
                     _mode: std::marker::PhantomData,
                 };
-                map.update(write_key.clone(), &value)
+                map.update(&write_key, &value)
             }),
             Some(Arc::new(move || alive.strong_count() > 0)),
             origin,
