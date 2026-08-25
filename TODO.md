@@ -127,9 +127,16 @@ Nothing about this is documented, and nothing rejects the write.
 **Re-measured, and the account above is wrong twice.**
 `tests/non_finite_float.rs` writes `f64::NAN` through a field on every engine.
 
-It is one engine's problem, not the text engines'. TOML and RON have `nan` and
-`inf` in their grammars and carry the value intact, as msgpack does; only JSON
-cannot spell it. Four of five are fine.
+It is not the text engines' problem, and it is not one engine's either. TOML
+and RON have `nan` and `inf` in their grammars and carry the value intact, as
+msgpack does. JSON cannot spell it - and **two** engines store JSON, because
+sqlite encodes its values with `sonic_rs`, which answers the same way
+`serde_json` does. So three of five are fine, and the one that is not named for
+a text format is among the two that are not.
+
+Which makes it a property of the format rather than of the file. Reading the
+engine list as "the text ones" was what hid it: the failure follows the codec,
+and the codec is not visible in the engine's name.
 
 And nothing substitutes a default. `StoreExt::decode` stopped doing that this
 release, and the field's subscription never did: handed bytes it cannot decode,
@@ -1205,6 +1212,35 @@ That also makes `Borrow<str>` sound for the first time - all three of `Eq`,
 `Ord` and `Hash` now answer from one form - so a map keyed by paths could be
 probed with a key a flat engine already holds. Not implemented, but the door is
 open and `a_path_hashes_like_its_key` is what keeps it that way.
+
+**Then the fold, which was the larger half.** A scan built a
+`BTreeMap<StorePath, Vec<u8>>` from the engine and searched it with the write
+buffer. Both sides already arrive sorted, so the tree bought nothing and cost a
+walk per committed key. Merging two sorted lists took `scan_prefix` at a
+million from 1.11 s to 0.60 s and an open from 1.73 s to 1.20 s - half again
+on top of the path work, and the largest single win of the lot. sqlite needed
+`ORDER BY key` added: it always depended on that order and the tree was hiding
+it.
+
+**And what a benchmark says depends on what it benchmarks.** Three conclusions
+here were drawn from measuring the wrong thing, and each survived until
+something forced a second look:
+
+- `.map(..).count()` throws its results away, and a compiler may throw the work
+  away with them. Folding instead.
+- Folding on `StorePath::len` forces the very split the laziness avoids, so it
+  priced work a scan does not do: parsing a million keys reads 448 ms that way
+  and 159 ms on `as_str`.
+- Decoding was measured on `u64` and called not worth dividing. A `u64` decodes
+  in eleven nanoseconds; a value with five fields in it takes two hundred, and
+  a million of them are 204 ms rather than 11. It divides ×4.9, same as the
+  keys. Nothing about the first measurement was wrong except what it was of.
+
+The crossover for both is between three hundred and a thousand entries, which
+is why `parallel_reads` does not divide below a thousand. Watch the shape of a
+run rather than its numbers when the machine is busy: a run that reported 10^4
+taking as long as 3·10^4 was contaminated, and the arithmetic said so before
+any intuition did.
 
 **What is left, and it is measured rather than suspected.** The deferred split
 is cached in an `Arc<OnceLock<..>>`, and that `Arc` is an allocation on every

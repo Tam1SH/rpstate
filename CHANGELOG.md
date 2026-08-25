@@ -17,6 +17,14 @@ deliberate: every one of them is.
 
 ### Breaking
 
+- **Only `insert` takes the key by value.** `update`, `update_with`, `modify`
+  and `remove` all require the key to be there already, so the owned key is in
+  the map's projection and the caller need not spell one: they take
+  `&Q where K: Borrow<Q>`, and `widths.update("cpu", &200)` replaces
+  `widths.update("cpu".to_string(), &200)`. The signature now says which is
+  which - a method that takes ownership can create, one that borrows needs the
+  key to exist - where before all five looked alike and only the documentation
+  said which were strict.
 - **`ReactiveMap`'s reads no longer return `Result`.** `get`, `contains_key`,
   `entries`, `keys`, `len` and `is_empty` answer from the map's in-memory
   projection and had no fallible step left in them - every one was an `Ok(..)`
@@ -254,6 +262,14 @@ deliberate: every one of them is.
 
 ### Added
 
+- `Field::try_get`, the fallible twin of `Field::get`. A read tolerates and a
+  write complains, so `get` keeps answering with something a render function
+  can draw; `try_get` is where a caller that cares finds out whether what it
+  drew is what the store holds. It is `Err` while a change that arrived would
+  not decode into the field's type - and the field now takes its declared
+  default in that case rather than going on reporting the value from before,
+  which was indistinguishable from a write that worked. `Ok` again as soon as a
+  change decodes.
 - `Store::close` and `amethystate::shutdown`, the fallible half of closing a
   store. Dropping one writes what is buffered but cannot report a failure -
   there is no caller left to hand it to - so a full disk or a locked file at
@@ -403,6 +419,26 @@ deliberate: every one of them is.
 
 ### Performance
 
+- A scan lays the write buffer over what the engine holds by merging two sorted
+  lists rather than folding one into a tree. Both sides already arrive in
+  order - the engine ranges by key, and the buffer is sorted once - so the tree
+  was charging a walk of twenty-odd path comparisons per committed key, and at
+  a million entries those comparisons had stopped fitting in cache. On redb at
+  a million: `scan_prefix` 1.11 s to 0.60 s, `scan_keys` 1.00 s to 0.55 s, and
+  an open 1.73 s to 1.20 s. sqlite's range query now says `ORDER BY key`, which
+  it always relied on and the tree used to hide.
+- `StoreBuilder::parallel_reads` divides the per-entry work of reading a large
+  collection across cores. Opening a million rows of five fields takes 2.2 s
+  with it off and 1.55 s with it on, and only the decoding is divided so far -
+  the keys are still parsed on one thread. Decoding is worth dividing because
+  it is most of the cost: a value with a few fields in it takes about two
+  hundred nanoseconds where an integer takes eleven, which is also why the same
+  map holding `u64` opens in half the time.
+
+  Off by default, because it is a thread pool inside a state library and an
+  application that has one should say whether it wants a second; nothing is
+  spawned while it is off. Below about a thousand entries the work is not
+  divided either way - the crossover was measured, not assumed.
 - Opening a map is about a third faster, and a scan a fifth, because a
   `StorePath` no longer splits itself into levels until something asks. At a
   million entries on redb, committed: open 2.45 s to 1.73 s, `scan_prefix`
