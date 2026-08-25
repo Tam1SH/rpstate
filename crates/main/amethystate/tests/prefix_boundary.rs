@@ -81,8 +81,8 @@ fn a_map_at_a_path_with_glob_metacharacters_reports_its_entries() {
     map.insert("mem".into(), &80).unwrap();
     store.flush_prefix(StorePath::root()).unwrap();
 
-    assert_eq!(map.get(&"cpu".to_string()).unwrap(), Some(120));
-    assert_eq!(map.len().unwrap(), 2, "both entries are visible");
+    assert_eq!(map.get("cpu"), Some(120));
+    assert_eq!(map.len(), 2, "both entries are visible");
 
     map.clear().unwrap();
     store.flush_prefix(StorePath::root()).unwrap();
@@ -108,7 +108,7 @@ fn a_map_at_a_plain_path_reports_its_entries() {
     map.insert("mem".into(), &80).unwrap();
     store.flush_prefix(StorePath::root()).unwrap();
 
-    assert_eq!(map.len().unwrap(), 2);
+    assert_eq!(map.len(), 2);
 
     map.clear().unwrap();
     store.flush_prefix(StorePath::root()).unwrap();

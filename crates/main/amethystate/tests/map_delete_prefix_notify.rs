@@ -39,7 +39,7 @@ fn deleting_a_maps_prefix_notifies_its_subscribers() {
 
     store.delete_prefix(["columns"]).unwrap();
 
-    assert_eq!(map.len().unwrap(), 0, "the entries are gone");
+    assert_eq!(map.len(), 0, "the entries are gone");
     assert_eq!(
         hits.load(Ordering::SeqCst),
         1,

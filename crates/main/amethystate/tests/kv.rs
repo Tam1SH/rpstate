@@ -63,7 +63,7 @@ fn a_map_takes_a_key_set_that_is_not_known_up_front() {
     flags.insert("beta".into(), &true).unwrap();
     flags.insert("alpha".into(), &false).unwrap();
 
-    assert_eq!(flags.keys().unwrap(), ["alpha", "beta"]);
+    assert_eq!(flags.keys(), ["alpha", "beta"]);
 }
 
 #[test]

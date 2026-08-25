@@ -152,7 +152,7 @@ mod on_disk {
         let state = Mapped::new_with(&store).unwrap();
 
         state.limits().durable().insert("gpu".into(), &90).unwrap();
-        state.limits().durable().remove("gpu".into()).unwrap();
+        state.limits().durable().remove("gpu").unwrap();
 
         let found = contents(&path);
         assert!(

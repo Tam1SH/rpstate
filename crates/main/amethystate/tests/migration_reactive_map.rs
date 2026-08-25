@@ -83,7 +83,7 @@ fn test_embedded_map_migration() {
 
     assert_eq!(config.name().get(), "legacy-proxy");
 
-    let entries: Vec<_> = config.endpoints().entries().unwrap().collect();
+    let entries: Vec<_> = config.endpoints().entries().collect();
 
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0, "api");

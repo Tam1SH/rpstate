@@ -46,7 +46,7 @@ fn entry_cell_on_a_missing_key_is_empty_and_refuses_writes() {
     let err = entry.set(110).unwrap_err();
     insta::assert_snapshot!("write_to_an_absent_key", shape(&err));
 
-    assert_eq!(config.widths().get(&"disk".to_string()).unwrap(), None);
+    assert_eq!(config.widths().get("disk"), None);
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn write_lands_in_store() {
     let entry = config.widths().entry_cell("cpu".to_string());
     entry.set(144).unwrap();
 
-    assert_eq!(config.widths().get(&"cpu".to_string()).unwrap(), Some(144));
+    assert_eq!(config.widths().get("cpu"), Some(144));
     assert_eq!(entry.get(), Some(144));
 }
 
@@ -85,14 +85,14 @@ fn removed_key_empties_the_cell() {
     let entry = config.widths().entry_cell("cpu".to_string());
     assert_eq!(entry.get(), Some(80));
 
-    config.widths().remove("cpu".to_string()).unwrap();
+    config.widths().remove("cpu").unwrap();
 
     assert_eq!(entry.get(), None);
 
     let err = entry.set(110).unwrap_err();
     insta::assert_snapshot!("write_to_a_removed_key", shape(&err));
 
-    assert_eq!(config.widths().get(&"cpu".to_string()).unwrap(), None);
+    assert_eq!(config.widths().get("cpu"), None);
 }
 
 /// Two independent cells on the same key - a table column and, say, a settings
@@ -121,7 +121,7 @@ fn two_cells_on_one_key_fire_once_per_write() {
     b.set(200).unwrap();
 
     assert_eq!(a.get(), Some(200), "b's write must reach a");
-    assert_eq!(config.widths().get(&"cpu".to_string()).unwrap(), Some(200));
+    assert_eq!(config.widths().get("cpu"), Some(200));
     assert_eq!(
         fires.load(Ordering::SeqCst),
         1,
@@ -159,7 +159,7 @@ fn rejected_write_reports_and_leaves_the_cell_alone() {
         Some(80),
         "cell must not hold a value the map refused"
     );
-    assert_eq!(config.widths().get(&"cpu".to_string()).unwrap(), Some(80));
+    assert_eq!(config.widths().get("cpu"), Some(80));
 }
 
 /// The cell holds the map weakly, and a handle is not the map: dropping the
@@ -215,10 +215,7 @@ fn entry_cell_write_persists_across_store_rebuild() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let config = TableConfig::new_with(&store).unwrap();
-        assert_eq!(
-            config.widths().get(&"memory".to_string()).unwrap(),
-            Some(256)
-        );
+        assert_eq!(config.widths().get("memory"), Some(256));
 
         let entry = config.widths().entry_cell("memory".to_string());
         assert_eq!(entry.get(), Some(256));

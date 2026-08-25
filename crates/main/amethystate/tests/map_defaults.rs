@@ -31,7 +31,7 @@ fn a_map_added_later_still_gets_its_defaults() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let old = before::Cfg::new_with(&store).unwrap();
-        assert_eq!(old.first().len().unwrap(), 1);
+        assert_eq!(old.first().len(), 1);
         store.save_now().unwrap();
     }
 
@@ -39,11 +39,11 @@ fn a_map_added_later_still_gets_its_defaults() {
     let cfg = Cfg::new_with(&store).unwrap();
 
     assert_eq!(
-        cfg.second().keys().unwrap(),
+        cfg.second().keys(),
         ["x", "y"],
         "the map added in this version must be seeded"
     );
-    assert_eq!(cfg.first().keys().unwrap(), ["a"]);
+    assert_eq!(cfg.first().keys(), ["a"]);
 }
 
 /// Reopening must not undo removals: keys already on disk count as evidence the
@@ -57,15 +57,15 @@ fn reopening_does_not_restore_a_removed_entry() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
-        cfg.second().remove("x".to_string()).unwrap();
-        assert_eq!(cfg.second().keys().unwrap(), ["y"]);
+        cfg.second().remove("x").unwrap();
+        assert_eq!(cfg.second().keys(), ["y"]);
         store.save_now().unwrap();
     }
 
     let store = StoreBuilder::new(&path).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
-    assert_eq!(cfg.second().keys().unwrap(), ["y"], "x stays removed");
+    assert_eq!(cfg.second().keys(), ["y"], "x stays removed");
 }
 
 #[test]
@@ -74,6 +74,6 @@ fn a_fresh_store_seeds_every_map() {
     let store = StoreBuilder::new(&path).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
-    assert_eq!(cfg.first().keys().unwrap(), ["a"]);
-    assert_eq!(cfg.second().keys().unwrap(), ["x", "y"]);
+    assert_eq!(cfg.first().keys(), ["a"]);
+    assert_eq!(cfg.second().keys(), ["x", "y"]);
 }

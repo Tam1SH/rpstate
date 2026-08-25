@@ -46,19 +46,19 @@ where
     ///
     /// // Writing through the cell writes the map entry.
     /// cpu.set(120).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    /// assert_eq!(widths.get("cpu"), Some(120));
     ///
     /// // And a write to the map reaches the cell.
     /// widths.update("cpu".into(), &200).unwrap();
     /// assert_eq!(cpu.get(), Some(200));
     ///
     /// // Removing the key empties the cell, and it refuses to put it back.
-    /// widths.remove("cpu".to_string()).unwrap();
+    /// widths.remove("cpu").unwrap();
     /// assert_eq!(cpu.get(), None);
     /// assert!(cpu.set(80).is_err());
     /// ```
     pub fn entry_cell(&self, key: K) -> ReactiveCell<V> {
-        let cache = Signal::new(self.get(&key).ok().flatten());
+        let cache = Signal::new(self.get(&key));
 
         let sink = cache.clone();
         let read = self.subscribe_key(key.clone(), move |change| {

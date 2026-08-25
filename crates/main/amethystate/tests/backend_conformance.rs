@@ -722,9 +722,9 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
         distinct.sort();
         distinct.dedup();
 
-        prop_assert_eq!(map.len().unwrap(), distinct.len(), "len");
-        prop_assert_eq!(map.keys().unwrap().len(), distinct.len(), "keys");
-        prop_assert_eq!(map.entries().unwrap().count(), distinct.len(), "entries");
+        prop_assert_eq!(map.len(), distinct.len(), "len");
+        prop_assert_eq!(map.keys().len(), distinct.len(), "keys");
+        prop_assert_eq!(map.entries().count(), distinct.len(), "entries");
 
         let from_scan: Vec<String> = store
             .scan_keys(&at)
@@ -739,12 +739,12 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
         prop_assert_eq!(&membership, &distinct, "the scan disagrees with the map");
 
         prop_assert_eq!(
-            &map.keys().unwrap(),
+            &map.keys(),
             &from_scan,
             "keys came back in an order the scan does not use"
         );
         prop_assert_eq!(
-            &map.entries().unwrap().map(|(k, _)| k).collect::<Vec<_>>(),
+            &map.entries().map(|(k, _)| k).collect::<Vec<_>>(),
             &from_scan,
             "entries came back in an order the scan does not use"
         );
@@ -863,7 +863,7 @@ fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Ba
 
     map.insert("absent".to_string(), &1).unwrap();
     map.update("absent".to_string(), &2).unwrap();
-    assert_eq!(map.get(&"absent".to_string()).unwrap(), Some(2));
+    assert_eq!(map.get("absent"), Some(2));
 
     let refusal = map.insert(String::new(), &1).unwrap_err();
     assert!(
@@ -877,7 +877,7 @@ fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Ba
         ),
         "{refusal:?}"
     );
-    assert_eq!(map.len().unwrap(), 1, "the refused key was not added");
+    assert_eq!(map.len(), 1, "the refused key was not added");
 }
 
 /// 19. Golden: one fixed set of names comes back in one exact order, the same

@@ -29,8 +29,8 @@ fn reactive_map_inside_nested_struct_seeds_defaults() {
     let settings = ProcessSettings::new_with(&store).unwrap();
 
     let widths = settings.columns().widths_px();
-    assert_eq!(widths.get(&"name".to_string()).unwrap(), Some(200u64));
-    assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(90u64));
+    assert_eq!(widths.get("name"), Some(200u64));
+    assert_eq!(widths.get("cpu"), Some(90u64));
 }
 
 #[test]
@@ -56,8 +56,7 @@ fn reactive_map_inside_nested_struct_seeds_defaults_only_once() {
             settings
                 .columns()
                 .widths_px()
-                .get(&"name".to_string())
-                .unwrap(),
+                .get("name"),
             Some(999u64)
         );
     }

@@ -27,7 +27,7 @@ fn deleting_a_subtree_takes_the_dotted_names_with_it() {
 
     map.insert("a.exe".to_string(), &1).unwrap();
     map.insert("plain".to_string(), &2).unwrap();
-    assert_eq!(map.len().unwrap(), 2, "both entries were written");
+    assert_eq!(map.len(), 2, "both entries were written");
 
     drop(map);
     store.delete_prefix(["dotted"]).unwrap();
@@ -40,8 +40,8 @@ fn deleting_a_subtree_takes_the_dotted_names_with_it() {
     )
     .unwrap();
 
-    assert_eq!(reopened.get(&"plain".to_string()).unwrap(), None, "plain");
-    assert_eq!(reopened.get(&"a.exe".to_string()).unwrap(), None, "a.exe");
+    assert_eq!(reopened.get("plain"), None, "plain");
+    assert_eq!(reopened.get("a.exe"), None, "a.exe");
 }
 
 /// A scan of a prefix lists the value stored at the prefix itself, and a name

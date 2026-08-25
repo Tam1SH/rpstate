@@ -6,6 +6,8 @@ use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableM
 use amethystate_core::path::{StorePath, cmp_names};
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::{Report, ResultExt};
+use std::borrow::Borrow;
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 use std::sync::Arc;
@@ -140,12 +142,16 @@ where
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
     ///
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), None);
+    /// assert_eq!(widths.get("cpu"), None);
     /// widths.insert("cpu".into(), &120).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    /// assert_eq!(widths.get("cpu"), Some(120));
     /// ```
-    pub fn get(&self, key: &K) -> ReactiveMapResult<Option<V>> {
-        Ok(self.inner.core.cache.get(key).map(|v| v.clone()))
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner.core.cache.get(key).map(|v| v.clone())
     }
 
     /// Whether `key` has a value, without cloning it.
@@ -156,12 +162,16 @@ where
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
     ///
-    /// assert!(!widths.contains_key(&"cpu".to_string()).unwrap());
+    /// assert!(!widths.contains_key("cpu"));
     /// widths.insert("cpu".into(), &120).unwrap();
-    /// assert!(widths.contains_key(&"cpu".to_string()).unwrap());
+    /// assert!(widths.contains_key("cpu"));
     /// ```
-    pub fn contains_key(&self, key: &K) -> ReactiveMapResult<bool> {
-        Ok(self.inner.core.cache.contains_key(key))
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner.core.cache.contains_key(key)
     }
 
     /// Every entry, sorted by key.
@@ -172,7 +182,7 @@ where
     /// Read from the map's projection, so nothing is decoded and the disk is
     /// not touched, but the whole map is cloned and sorted before the iterator
     /// is handed over.
-    pub fn entries(&self) -> ReactiveMapResult<impl Iterator<Item = (K, V)>> {
+    pub fn entries(&self) -> impl Iterator<Item = (K, V)> {
         let mut entries: Vec<(String, K, V)> = self
             .inner
             .core
@@ -181,7 +191,7 @@ where
             .map(|e| (e.key().to_string(), e.key().clone(), e.value().clone()))
             .collect();
         entries.sort_by(|(a, ..), (b, ..)| cmp_names(a, b));
-        Ok(entries.into_iter().map(|(_, k, v)| (k, v)))
+        entries.into_iter().map(|(_, k, v)| (k, v))
     }
 
     /// Every key, sorted. Values are neither read nor deserialized.
@@ -203,23 +213,23 @@ where
     /// widths.insert("cpu".into(), &120).unwrap();
     /// widths.insert("disk".into(), &60).unwrap();
     ///
-    /// assert_eq!(widths.keys().unwrap(), ["cpu", "disk", "mem"]);
+    /// assert_eq!(widths.keys(), ["cpu", "disk", "mem"]);
     ///
     /// // Numeric keys sort as text, so 10 lands before 9.
     /// let ports = store.kv().map::<u16, bool>("ports").unwrap();
     /// ports.insert(9, &true).unwrap();
     /// ports.insert(10, &true).unwrap();
     /// ports.insert(100, &true).unwrap();
-    /// assert_eq!(ports.keys().unwrap(), [10, 100, 9]);
+    /// assert_eq!(ports.keys(), [10, 100, 9]);
     ///
     /// // A name holding the separator sorts by the key it becomes, so it lands
     /// // where a scan puts it rather than where the bare name would.
     /// let odd = store.kv().map::<String, u8>("odd").unwrap();
     /// odd.insert("a.b".into(), &1).unwrap();
     /// odd.insert("a1b".into(), &2).unwrap();
-    /// assert_eq!(odd.keys().unwrap(), ["a1b", "a.b"]);
+    /// assert_eq!(odd.keys(), ["a1b", "a.b"]);
     /// ```
-    pub fn keys(&self) -> ReactiveMapResult<Vec<K>> {
+    pub fn keys(&self) -> Vec<K> {
         let mut keys: Vec<(String, K)> = self
             .inner
             .core
@@ -228,7 +238,7 @@ where
             .map(|e| (e.key().to_string(), e.key().clone()))
             .collect();
         keys.sort_by(|(a, _), (b, _)| cmp_names(a, b));
-        Ok(keys.into_iter().map(|(_, k)| k).collect())
+        keys.into_iter().map(|(_, k)| k).collect()
     }
 
     /// How many entries the map holds.
@@ -242,22 +252,22 @@ where
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
     ///
-    /// assert_eq!(widths.len().unwrap(), 0);
+    /// assert_eq!(widths.len(), 0);
     /// widths.insert("cpu".into(), &120).unwrap();
     /// widths.insert("mem".into(), &80).unwrap();
-    /// assert_eq!(widths.len().unwrap(), 2);
+    /// assert_eq!(widths.len(), 2);
     ///
     /// // Writing an existing key does not add one.
     /// widths.update("cpu".into(), &200).unwrap();
-    /// assert_eq!(widths.len().unwrap(), 2);
+    /// assert_eq!(widths.len(), 2);
     /// ```
-    pub fn len(&self) -> ReactiveMapResult<usize> {
-        Ok(self.inner.core.cache.len())
+    pub fn len(&self) -> usize {
+        self.inner.core.cache.len()
     }
 
     /// Whether the map holds nothing.
-    pub fn is_empty(&self) -> ReactiveMapResult<bool> {
-        Ok(self.inner.core.cache.is_empty())
+    pub fn is_empty(&self) -> bool {
+        self.inner.core.cache.is_empty()
     }
 
     /// Calls `callback` on every change to any key.
@@ -288,7 +298,7 @@ where
     ///
     /// widths.insert("cpu".into(), &120).unwrap();
     /// widths.update("cpu".into(), &200).unwrap();
-    /// widths.remove("cpu".to_string()).unwrap();
+    /// widths.remove("cpu").unwrap();
     /// assert_eq!(*seen.lock().unwrap(), ["insert", "update", "remove"]);
     ///
     /// drop(sub);
@@ -433,7 +443,7 @@ where
     where
         F: FnOnce(V) -> V,
     {
-        if let Some(val) = self.get(&key)? {
+        if let Some(val) = self.get(&key) {
             let new_val = f(val);
             self.update(key, &new_val)?;
             Ok(Some(new_val))
@@ -449,7 +459,7 @@ where
     where
         F: FnOnce(&mut V),
     {
-        if let Some(mut val) = self.get(&key)? {
+        if let Some(mut val) = self.get(&key) {
             f(&mut val);
             self.update(key, &val)
         } else {
@@ -484,11 +494,11 @@ where
     ///
     /// // `insert` is the one that adds it.
     /// widths.insert("cpu".into(), &120).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    /// assert_eq!(widths.get("cpu"),Some(120));
     ///
     /// // Once the key exists, the strict write lands.
     /// widths.update("cpu".into(), &200).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(200));
+    /// assert_eq!(widths.get("cpu"),Some(200));
     /// ```
     pub fn update(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.inner.store.clone());
@@ -516,12 +526,12 @@ where
     ///
     /// // A key that was not there.
     /// widths.insert("cpu".into(), &120).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(120));
+    /// assert_eq!(widths.get("cpu"),Some(120));
     ///
     /// // The same call replaces one that was.
     /// widths.insert("cpu".into(), &200).unwrap();
-    /// assert_eq!(widths.get(&"cpu".to_string()).unwrap(), Some(200));
-    /// assert_eq!(widths.len().unwrap(), 1, "replacing is not adding");
+    /// assert_eq!(widths.get("cpu"),Some(200));
+    /// assert_eq!(widths.len(),1, "replacing is not adding");
     /// ```
     pub fn insert(&self, key: K, value: &V) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.inner.store.clone());
@@ -545,16 +555,26 @@ where
     /// let widths = store.kv().map::<String, u64>("columns").unwrap();
     ///
     /// widths.insert("cpu".into(), &120).unwrap();
-    /// assert_eq!(widths.remove("cpu".to_string()).unwrap(), Some(120));
-    /// assert_eq!(widths.remove("cpu".to_string()).unwrap(), None);
+    /// assert_eq!(widths.remove("cpu").unwrap(), Some(120));
+    /// assert_eq!(widths.remove("cpu").unwrap(), None);
     /// ```
-    pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
+    pub fn remove<Q>(&self, key: &Q) -> ReactiveMapResult<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        // The owned key comes from the projection rather than the caller, so a
+        // removal costs no allocation and the change still carries a `K`.
+        let Some(owned) = self.inner.core.cache.get(key).map(|e| e.key().clone()) else {
+            return Ok(None);
+        };
+
         let backend = SyncBridge::new(self.inner.store.clone());
         Ok(amethystate_core::map_remove(
             &backend,
             &self.inner.core,
             self.inner.path.clone(),
-            key,
+            owned,
             Some(self.inner.instance_id),
         )?)
     }
@@ -572,7 +592,7 @@ where
     /// widths.insert("cpu".into(), &120).unwrap();
     /// widths.insert("mem".into(), &80).unwrap();
     /// widths.clear().unwrap();
-    /// assert!(widths.is_empty().unwrap());
+    /// assert!(widths.is_empty());
     /// ```
     pub fn clear(&self) -> ReactiveMapResult<()> {
         let backend = SyncBridge::new(self.inner.store.clone());
@@ -606,11 +626,11 @@ where
     ///
     /// widths.insert("cpu".into(), &120).unwrap();
     /// assert!(widths.insert("mem".into(), &900).is_err(), "over the limit");
-    /// assert_eq!(widths.len().unwrap(), 1);
+    /// assert_eq!(widths.len(),1);
     ///
     /// guard.remove();
     /// widths.insert("mem".into(), &900).unwrap();
-    /// assert_eq!(widths.len().unwrap(), 2);
+    /// assert_eq!(widths.len(),2);
     /// ```
     ///
     /// Interceptors run before the value reaches the buffer at all - see
@@ -690,7 +710,11 @@ where
     /// Drops a key and yields the value it held.
     ///
     /// Returns only once the change is on disk rather than buffered.
-    pub fn remove(&self, key: K) -> ReactiveMapResult<Option<V>> {
+    pub fn remove<Q>(&self, key: &Q) -> ReactiveMapResult<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let previous = self.0.remove(key)?;
         self.commit()?;
         Ok(previous)
@@ -701,7 +725,11 @@ where
     /// Resolves once the change is on disk rather than buffered.
     /// Like every future, this does nothing until awaited - the write
     /// included. See [`Durable::set_async`].
-    pub async fn remove_async(&self, key: K) -> ReactiveMapResult<Option<V>> {
+    pub async fn remove_async<Q>(&self, key: &Q) -> ReactiveMapResult<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let previous = self.0.remove(key)?;
         self.commit_async().await?;
         Ok(previous)
@@ -844,7 +872,7 @@ mod tests {
         map.insert("a".to_string(), &1).unwrap(); // Insert - delivered
         map.update("a".to_string(), &2).unwrap(); // Update - filtered
         map.insert("a".to_string(), &3).unwrap(); // Update - filtered
-        map.remove("a".to_string()).unwrap(); // Remove - delivered
+        map.remove("a").unwrap(); // Remove - delivered
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -906,7 +934,7 @@ mod tests {
         map.insert("a".to_string(), &1).unwrap();
         map.update("a".to_string(), &2).unwrap();
         map.insert("b".to_string(), &3).unwrap(); // other key, not ours
-        map.remove("a".to_string()).unwrap();
+        map.remove("a").unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -930,11 +958,11 @@ mod tests {
             .unwrap();
 
         map.insert("a".into(), &10).unwrap();
-        assert_eq!(map.get(&"a".into()).unwrap(), Some(10));
-        assert_eq!(map.len().unwrap(), 1);
+        assert_eq!(map.get("a"),Some(10));
+        assert_eq!(map.len(),1);
 
         map.update("a".into(), &20).unwrap();
-        assert_eq!(map.get(&"a".into()).unwrap(), Some(20));
+        assert_eq!(map.get("a"),Some(20));
 
         let res = map.update("missing".into(), &30);
         assert!(matches!(
@@ -943,15 +971,15 @@ mod tests {
         ));
 
         map.insert("b".into(), &100).unwrap();
-        let entries: Vec<_> = map.entries().unwrap().collect();
+        let entries: Vec<_> = map.entries().collect();
         assert_eq!(entries.len(), 2);
 
-        let removed = map.remove("a".into()).unwrap();
+        let removed = map.remove("a").unwrap();
         assert_eq!(removed, Some(20));
-        assert_eq!(map.len().unwrap(), 1);
+        assert_eq!(map.len(),1);
 
         store.save_now().unwrap();
-        assert_eq!(map.get(&"a".into()).unwrap(), None);
+        assert_eq!(map.get("a"),None);
     }
 
     #[test]
@@ -981,10 +1009,10 @@ mod tests {
         ));
 
         store.save_now().unwrap();
-        assert_eq!(map.get(&"val".into()).unwrap(), None);
+        assert_eq!(map.get("val"),None);
 
         map.insert("val".into(), &10).unwrap();
-        assert_eq!(map.get(&"val".into()).unwrap(), Some(10));
+        assert_eq!(map.get("val"),Some(10));
     }
 
     #[test]
@@ -1020,7 +1048,7 @@ mod tests {
         });
 
         map.insert("x".into(), &5).unwrap();
-        assert_eq!(map.get(&"x".into()).unwrap(), Some(10));
+        assert_eq!(map.get("x"), Some(10));
     }
 
     #[test]
@@ -1081,7 +1109,7 @@ mod tests {
         map.insert("a".into(), &1).unwrap();
         map.update("a".into(), &2).unwrap();
 
-        assert_eq!(map.get(&"a".into()).unwrap(), Some(2));
+        assert_eq!(map.get("a"),Some(2));
     }
 
     #[test]
@@ -1099,7 +1127,7 @@ mod tests {
         map.insert("k1".into(), &1).unwrap();
         map.insert("k2".into(), &2).unwrap();
 
-        assert_eq!(map.len().unwrap(), 2);
+        assert_eq!(map.len(),2);
 
         let clear_events_count = Arc::new(AtomicUsize::new(0));
         let clear_events_count_clone = clear_events_count.clone();
@@ -1113,8 +1141,8 @@ mod tests {
         map.clear().unwrap();
         store.save_now().unwrap();
 
-        assert_eq!(map.len().unwrap(), 0);
-        assert!(map.is_empty().unwrap());
+        assert_eq!(map.len(),0);
+        assert!(map.is_empty());
 
         assert_eq!(clear_events_count.load(Ordering::SeqCst), 1);
     }
@@ -1133,8 +1161,8 @@ mod tests {
 
         map.insert("key1".into(), &1).unwrap();
 
-        assert!(map.contains_key(&"key1".into()).unwrap());
-        assert!(!map.contains_key(&"key2".into()).unwrap());
+        assert!(map.contains_key("key1"));
+        assert!(!map.contains_key("key2"));
 
         let call_count = Arc::new(AtomicUsize::new(0));
         let c_clone = call_count.clone();
@@ -1250,15 +1278,15 @@ mod tests {
             )
             .unwrap();
 
-        let res = map.remove("none".into()).unwrap();
+        let res = map.remove("none").unwrap();
         assert!(res.is_none());
 
         map.insert("ghost".into(), &1).unwrap();
         store.delete(["test", "remove", "ghost"]).unwrap();
 
-        let res = map.remove("ghost".into()).unwrap();
+        let res = map.remove("ghost").unwrap();
         assert!(res.is_none());
-        assert!(!map.contains_key(&"ghost".into()).unwrap());
+        assert!(!map.contains_key("ghost"));
     }
 
     #[test]

@@ -34,11 +34,11 @@ fn test_map_defaults_applied_only_on_first_init() {
 
         let env = config.env();
         assert_eq!(
-            env.get(&"HTTP_PROXY".to_string()).unwrap(),
+            env.get("HTTP_PROXY"),
             Some("http://127.0.0.1:8080".to_string())
         );
         assert_eq!(
-            env.get(&"NO_PROXY".to_string()).unwrap(),
+            env.get("NO_PROXY"),
             Some("localhost".to_string())
         );
     }
@@ -49,11 +49,11 @@ fn test_map_defaults_applied_only_on_first_init() {
 
         let env = config.env();
         assert_eq!(
-            env.get(&"HTTP_PROXY".to_string()).unwrap(),
+            env.get("HTTP_PROXY"),
             Some("http://127.0.0.1:8080".to_string())
         );
         assert_eq!(
-            env.get(&"NO_PROXY".to_string()).unwrap(),
+            env.get("NO_PROXY"),
             Some("localhost".to_string())
         );
     }
@@ -66,13 +66,13 @@ fn test_deleted_map_key_does_not_resurrect() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let config = v1::AppConfig::new_with(&store).unwrap();
-        config.env().remove("NO_PROXY".to_string()).unwrap();
+        config.env().remove("NO_PROXY").unwrap();
     }
 
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let config = v1::AppConfig::new_with(&store).unwrap();
-        assert_eq!(config.env().get(&"NO_PROXY".to_string()).unwrap(), None);
+        assert_eq!(config.env().get("NO_PROXY"), None);
     }
 }
 
@@ -83,7 +83,7 @@ fn test_new_defaults_applied_on_version_upgrade() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let config = v1::AppConfig::new_with(&store).unwrap();
-        config.env().remove("NO_PROXY".to_string()).unwrap();
+        config.env().remove("NO_PROXY").unwrap();
     }
 
     {
@@ -91,14 +91,14 @@ fn test_new_defaults_applied_on_version_upgrade() {
         let config = AppConfig::new_with(&store).unwrap();
         let env = config.env();
 
-        assert_eq!(env.get(&"NO_PROXY".to_string()).unwrap(), None);
+        assert_eq!(env.get("NO_PROXY"), None);
 
         assert_eq!(
-            env.get(&"HTTP_PROXY".to_string()).unwrap(),
+            env.get("HTTP_PROXY"),
             Some("http://127.0.0.1:8080".to_string())
         );
 
-        assert_eq!(env.get(&"NEW_KEY".to_string()).unwrap(), None);
+        assert_eq!(env.get("NEW_KEY"), None);
     }
 }
 
@@ -119,7 +119,7 @@ fn test_user_set_value_not_overwritten_by_defaults() {
         let store = StoreBuilder::new(&path).build().unwrap();
         let config = v1::AppConfig::new_with(&store).unwrap();
         assert_eq!(
-            config.env().get(&"HTTP_PROXY".to_string()).unwrap(),
+            config.env().get("HTTP_PROXY"),
             Some("http://custom:9999".to_string())
         );
     }

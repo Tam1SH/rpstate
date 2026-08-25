@@ -92,7 +92,7 @@ fn a_removal_reports_the_flushed_value() {
             }
         });
 
-    cfg.items().remove("k".into()).unwrap();
+    cfg.items().remove("k").unwrap();
 
     assert_eq!(*seen.lock().unwrap(), vec![42]);
 }

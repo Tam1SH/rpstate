@@ -61,10 +61,10 @@ fn clear_empties_every_handle() {
 
     a.items().clear().unwrap();
 
-    assert_eq!(a.items().len().unwrap(), 0);
-    assert_eq!(b.items().len().unwrap(), 0);
-    assert_eq!(a.items().get(&"a".to_string()).unwrap(), None);
-    assert_eq!(b.items().get(&"a".to_string()).unwrap(), None);
+    assert_eq!(a.items().len(), 0);
+    assert_eq!(b.items().len(), 0);
+    assert_eq!(a.items().get("a"), None);
+    assert_eq!(b.items().get("a"), None);
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn clear_survives_a_store_rebuild() {
     {
         let store = StoreBuilder::new(&path).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
-        assert_eq!(cfg.items().len().unwrap(), 0);
+        assert_eq!(cfg.items().len(), 0);
     }
 }
 
