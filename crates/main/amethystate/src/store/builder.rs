@@ -118,22 +118,33 @@ pub struct StoreBuilder {
     backend: Backend,
     config: StoreConfig,
     migration_builder: MigrationBuilder,
+    /// Whether the extension on the path was spelled by the caller.
+    ///
+    /// An extension this crate chose belongs to whichever engine is going to
+    /// run, and so has to follow [`StoreBuilder::backend`]; one the caller
+    /// wrote is theirs, and naming an engine does not overrule it.
+    caller_named_extension: bool,
 }
 
 impl StoreBuilder {
     /// A store at an explicit path.
     ///
-    /// The extension is left as given; [`StoreBuilder::for_app`] is the
-    /// variant that picks a location and an extension for you.
+    /// An extension that is given is kept, whatever engine ends up running -
+    /// the path is the caller's. Without one the engine's own extension is
+    /// used, and it follows [`StoreBuilder::backend`] if that names another
+    /// engine later. [`StoreBuilder::for_app`] is the variant that picks a
+    /// location as well.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let mut path: PathBuf = path.into();
-        if path.extension().is_none() {
+        let caller_named_extension = path.extension().is_some();
+        if !caller_named_extension {
             path.set_extension(default_backend().extension());
         }
         Self {
             backend: default_backend(),
             config: StoreConfig::new(path),
             migration_builder: MigrationBuilder::default(),
+            caller_named_extension,
         }
     }
 
@@ -314,8 +325,17 @@ impl StoreBuilder {
 
     /// Picks the engine explicitly. Without this the store uses
     /// [`default_backend`].
+    ///
+    /// An extension this crate chose moves with the engine: a path left
+    /// without one by [`StoreBuilder::new`] or [`StoreBuilder::for_app`] is
+    /// named for whichever engine actually runs, so a store asked for as
+    /// `json` is not opened on a file called `.redb`. An extension the caller
+    /// spelled stays as it is.
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
+        if !self.caller_named_extension {
+            self.config.path.set_extension(backend.extension());
+        }
         self
     }
 
@@ -346,5 +366,67 @@ impl StoreBuilder {
         let (store, report) = self.backend.open_public(self.config, migration_set)?;
         report.log_to_tracing();
         Ok((store, report))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A path with no extension gets one from the engine that is actually
+    /// going to open it, whenever the engine is named. Otherwise a store asked
+    /// for as `json` is opened on a file this crate called `.redb`, and the
+    /// engine meets another engine's bytes: `for_app` names a config without an
+    /// extension, so this is the ordinary way to reach it rather than a corner.
+    #[cfg(all(feature = "redb", feature = "json"))]
+    #[test]
+    fn a_defaulted_extension_follows_the_engine_that_is_named() {
+        let builder = StoreBuilder::new("app/settings").backend(Backend::Json);
+
+        assert_eq!(
+            builder.config.path.extension().and_then(|e| e.to_str()),
+            Some("json"),
+            "the engine was named after the path was built, and the path did not follow"
+        );
+    }
+
+    /// The engine named last is the one that runs, so it is the one the
+    /// extension has to agree with.
+    #[cfg(all(feature = "redb", feature = "json", feature = "toml"))]
+    #[test]
+    fn the_last_engine_named_is_the_one_the_path_follows() {
+        let builder = StoreBuilder::new("app/settings")
+            .backend(Backend::Json)
+            .backend(Backend::Toml);
+
+        assert_eq!(
+            builder.config.path.extension().and_then(|e| e.to_str()),
+            Some("toml")
+        );
+    }
+
+    /// An extension the caller spelled is the caller's, and naming an engine
+    /// does not overrule it - a `.conf` a user's tooling already looks for
+    /// stays `.conf`.
+    #[cfg(all(feature = "redb", feature = "json"))]
+    #[test]
+    fn an_extension_the_caller_wrote_is_left_alone() {
+        let builder = StoreBuilder::new("app/settings.conf").backend(Backend::Json);
+
+        assert_eq!(
+            builder.config.path.extension().and_then(|e| e.to_str()),
+            Some("conf")
+        );
+    }
+
+    /// Without a named engine the default's extension is right, and stays.
+    #[test]
+    fn an_unnamed_engine_keeps_the_default_extension() {
+        let builder = StoreBuilder::new("app/settings");
+
+        assert_eq!(
+            builder.config.path.extension().and_then(|e| e.to_str()),
+            Some(default_backend().extension())
+        );
     }
 }
