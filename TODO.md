@@ -124,6 +124,28 @@ depending on which read reaches them.
 
 Nothing about this is documented, and nothing rejects the write.
 
+**Re-measured, and it still holds.** `tests/non_finite_float.rs` writes
+`f64::NAN` through a field on both families and prints what each answers:
+
+```
+set returned: true
+field.get() = 0.0
+store.get() = Err(the store could not read ..)
+document: { "nonfinite": { "ratio": null } }
+```
+
+Worth saying because the obvious suspect was cleared and the behaviour did not
+change with it: `StoreExt::decode` no longer substitutes `T::default()` for a
+decode failure - that was fixed this release - and the field still reports
+zero. The zero arrives by another route, the field falling back to its own
+declared default when the event it was handed will not decode. So the split
+between a read that substitutes and a read that fails is not one place, and
+fixing `decode` did not close it.
+
+The test asserts the disagreement rather than a fix, so it goes green today and
+its failure message becomes the finding on the day any of the four answers
+moves.
+
 At minimum, say so: a field holding a float that can go non-finite is not
 portable across backends. Better, refuse the write on a codec that cannot
 represent the value, so it fails where it happens instead of turning into a
@@ -214,7 +236,30 @@ what it was traded for. What a path holds is the writer's business; what refuses
 a write is ownership of the path, and that is spelled out under "Done: ownership
 is by declared path".
 
-## Reordering struct fields silently corrupts data on redb
+## Reordering struct fields silently corrupts data on redb - it does not
+
+**The heading was wrong, and the code says so.** `generate/data.rs` sorts the
+fields by name before writing the `_Data` struct, and `_Data` is what gets
+serialised, so the layout is alphabetical however the declaration was written.
+Moving a field in the source moves nothing on disk. The sort arrived with the
+drift machinery itself, `5445026` on 2026-05-13, so this entry was written
+without it in view. `tests/schema_hash_order.rs` pins the bytes rather than the
+hash, because the sort is what makes it true and the test should fail if the
+sort goes.
+
+What is real is the other half below: two fields trading types. Every name and
+every type survives that, only the pairing moves, and a fold that XORs the
+fields cannot see it - so `u64` bytes are read as `u32` with nothing said.
+`tests/type_identity.rs` already records that one, along with five more the
+same fold is blind to.
+
+**Not being fixed, deliberately.** The running fold was written and reverted:
+it closes the trade and four of the collisions in that catalogue, and the cost
+is that every entry in the catalogue has to be rewritten - a document about a
+gate that is expected to go. The hashes stand or fall with the fork below on
+whether the file is a store or a picture of a type, and there is no sense
+sharpening a gate that question may remove. What follows is kept as the record
+of what the gate can and cannot see, not as a plan.
 
 Two facts that are each defensible on their own, and together lose data.
 
@@ -664,6 +709,20 @@ Found while chasing a suspected loss that turned out to be the separator bug
 above. The flush had in fact succeeded - which was only knowable by adding a
 probe to `Drop`.
 
+**Done for the first, by one helper the three share.**
+`utils::report_closing_flush` logs at `error` with the file, and each `Drop`
+hands it the result it used to throw away. `error` rather than `warn` because
+the store is past the point of retrying or telling anyone: the background
+ladder keeps `warn` for a flush that is being retried and `error` for one that
+gave up, and this is the second kind with nobody left to inform.
+`a_closing_flush_that_fails_leaves_a_trace` breaks the disk under a redb store,
+drops it, and reads the log back.
+
+The second is already there under another name: `save_now` is on `StoreBackend`
+and returns the result, so a caller who wants to know calls it before dropping.
+What is uneven is the named form - `close` exists on redb and sqlite and not on
+text, and sqlite's takes `&mut self` where redb's takes `&self`.
+
 ## Migration cleanup addresses a field by its Rust name, not by where it is stored
 
 `#[amestate(key = "...")]` moves a field somewhere else on disk, and the
@@ -1033,6 +1092,214 @@ a clean return from `main`.
 This also qualifies the debouncer fix: the pending write reaches disk on drop,
 where a drop happens.
 
+**Half done: the step exists, and has to be called.** `shutdown()` writes what
+the global store holds and returns the result, and `Store::close` does the same
+for an ordinary one. That is the whole of what a library can do here - nothing
+in the process tells it that `main` is returning. Statics are not dropped,
+there is no stable `atexit` in std, and `ctor`-style destructors run at a time
+nobody controls and cannot run Rust destructors safely.
+
+The debouncer thread cannot stand in for the call, which is worth writing down
+because it looks like it could. It leaves on `RecvTimeoutError::Disconnected` -
+the sender being dropped, which is the store being dropped, which is exactly
+the event that never happens for a static. The signal is derived from the thing
+whose absence is the problem.
+
+## `#[migrate]` can only be found through the linker
+
+`inventory` is link-time collection, and it is the only way a `#[migrate]` step
+reaches a store. An application that would rather hand its steps over
+explicitly has nowhere to hand them to.
+
+The shape wanted is an attribute - `#[migrate(link, ...)]` - where the linker
+path is the one that is asked for, and the plain form yields something the
+caller passes in themselves.
+
+**A slice of `fn` will not carry it.** A step is
+`MigrationStepEntry { prefix, target_version, description, dependencies,
+struct_name, schema_hash, fields, run }`, and everything but `run` is derived
+from the type; a bare `fn(&mut MigrationContext) -> StorageResult<()>` cannot
+be walked back to the type it came from. The macro also submits the entry
+anonymously, inside `inventory::submit!`, so there is nothing to name. The
+non-linker form has to emit a named `const` of the entry, and the builder needs
+a method taking `&[MigrationStepEntry]` - with `collect_codegen` rewritten as
+that method fed from `inventory::iter`, so both paths join in one place.
+
+**Which way round the default goes decides how loud the mistake is.** With
+`link` opt-in, an existing `#[migrate]` keeps compiling and stops running, and
+today that is silent in exactly the case that matters:
+
+- `MigrationError::Gap` does exist, fails the component and leaves the version
+  in the meta where it was - `engine.rs` has a test for it;
+- but the target version reaches the plan through `collect_codegen`. Without
+  it the plan never learns that version 2 is expected, so there is nothing to
+  compare and no gap to report;
+- and `build` drops the report without logging, where `build_with_report` calls
+  `log_to_tracing`.
+
+So before the default moves, the target version has to come from the type
+rather than from the collector, and `build` has to say something when a
+component failed. With those two, an unregistered step is a failure with a
+name; without them it is a store that quietly keeps reading old data with a new
+struct.
+
+**Done the second way: linker by default, `#[migrate(explicit)]` to opt out.**
+Nothing that exists changes behaviour, which is worth more here than the
+tidier default - the mistake the other order allows is a store that keeps
+reading old data under a new struct, with no error and no log line, and the
+two repairs it needs are on this list rather than done.
+
+The macro emits the entry as a `const` named for the function - uppercased, so
+`fn settings_v1_to_v2` leaves `SETTINGS_V1_TO_V2` - and skips the
+`inventory::submit!`. `MigrationBuilder::add_steps` takes them, and
+`collect_codegen` is that method fed from `inventory::iter`, so the grouping
+lives once. `tests/migration_explicit.rs` is one fixture opened twice: the step
+is invisible to the sweep, and runs when it is handed over.
+
+## Opening a large map, and where the time actually went
+
+Measured because the reactive-table design needed a number and the one it had
+was an extrapolation. At a million entries on redb, committed, warm:
+
+| | before | after |
+|---|---|---|
+| `scan_keys` | 1.31 s | 0.99 s |
+| `scan_prefix` | 1.42 s | 1.11 s |
+| open | 2.45 s | 1.73 s |
+
+**Two guesses were wrong before a profiler settled it.** Reserving capacity in
+the two hash maps an open builds - `load_map`'s `HashMap` and the projection's
+`DashMap`, both of which grew from nothing - changed nothing measurable. The
+capacity is still reserved, because sizing a map whose size is known is right,
+but it bought nothing and is not a performance change. Then the sampling
+profile said a third of the run was in `RtlFreeHeap` and friends and named no
+single hot function of ours, which reads as allocation-bound, spread thin.
+
+**`dhat` is what answered it**, by counting blocks and attributing them, where
+a sampling profile only says how much time the allocator got. At 20 000
+entries, `StorePath::parse_joined` was the largest single site at 18% of all
+allocations, and `split_checked` - splitting a key into a level per `Arc<str>`
+- another 14%. Both for levels that the map load reads once and the flat
+engines never read at all.
+
+**So a `StorePath` splits its levels only when asked.** `parse_joined`
+validates the string without allocating - it has to stay eager, because a key
+that will not parse must be refused where it is read - and defers the split.
+`PartialEq` and `Hash` moved to the joined form, where `Ord` already was, which
+is sound because the escaping is injective and which stops equality from waking
+the levels. `StorePath::name_under` reads the level below a prefix straight off
+the joined string, borrowing unless the name carries an escape, and `load_map`
+uses it instead of `starts_with` plus `segment_at`. After that `split_checked`
+does not appear in the allocation profile at all.
+
+That also makes `Borrow<str>` sound for the first time - all three of `Eq`,
+`Ord` and `Hash` now answer from one form - so a map keyed by paths could be
+probed with a key a flat engine already holds. Not implemented, but the door is
+open and `a_path_hashes_like_its_key` is what keeps it that way.
+
+**What is left, and it is measured rather than suspected.** The deferred split
+is cached in an `Arc<OnceLock<..>>`, and that `Arc` is an allocation on every
+parsed key - 10% of all allocations, for a cache the scan path never reads.
+Removing it means `Segments::Deferred` carries nothing and
+`segments()`/`segment_at` return `Cow<'_, str>`, since a level with an escaped
+separator is not a run of the joined string and has nowhere to be borrowed
+from. Fourteen call sites, all in the text engines, all mechanical. The cell
+cannot simply be held inline: the macro builds paths as `static`, and a
+`OnceLock` in the type makes every `StorePath` non-`Freeze`, which the borrow
+checker refuses there.
+
+## `amethystate-tauri` does not compile
+
+Nine errors, all one thing: `impl AmeBackendAsync for TauriBackend` declares
+`type Error = String`, and the trait now wants an `error_stack::Report`, whose
+context must implement `StdError` - which `String` does not. The trait moved to
+`error-stack` and the adapter stayed where it was.
+
+It stopped being cosmetic. `cargo build --workspace` fails on it, and so does
+anything that builds the workspace by default - `cargo flamegraph` did, which
+is how it turned up: a profiling run died on an adapter it had no interest in.
+Every workspace-wide command now needs `-p amethystate` to step around it.
+
+The repair is mechanical - the error type becomes something that implements
+`StdError`, and the nine signatures follow.
+
+## The macro guesses what a field is, and could ask instead
+
+A field's storage kind is decided three different ways today. A scalar is the
+default. A nested struct is declared by attribute, `#[amestate(nested)]`. A map
+is not declared at all - `get_map_types` compares the last segment of the
+type's path against the string `"ReactiveMap"`. So the map is the one category
+the macro guesses, and it guesses from spelling.
+
+The compiler is already consulted for part of this: the nested branch emits
+`<#ty as AmeState>::Data` and does not care what the type is. But the decision
+to emit that came from the attribute, so what the compiler resolves is the
+associated type, not the question. Asking the question needs uniform emission -
+always `<#ty as AmeField>::Stored`, with the impl deciding - and then neither
+the attribute nor the string comparison has anything left to do, and a new
+collection arrives as an impl rather than as a fourth branch.
+
+**What stands in the way is coherence, not effort.** Leaves need a blanket
+impl:
+
+```rust
+impl<T: Serialize + DeserializeOwned + Default + Clone> AmeField for T { .. }
+impl<K, V> AmeField for ReactiveMap<K, V> { .. }
+```
+
+and the compiler refuses the pair as overlapping - not because they overlap
+now, since `ReactiveMap` implements neither trait, but because it may not
+assume they never will. Specialization is not stable. The way through is
+autoref specialization, the trick `anyhow` uses for its error conversions: emit
+a call whose impl is chosen by method resolution, where an inherent method
+beats a trait method. It works and it is used in earnest, at the price of
+generated code that reads badly and diagnostics that read worse when it fails
+to apply.
+
+**Two steps, and the first does not wait for the second.** The guess can be
+made loud where it stands: the macro knows which branch it took, so a
+compile-time check beside the scalar branch can fail with a sentence naming the
+field and the reason. That removes the whole hazard for the cost of one place
+rather than four.
+
+Making the guess unnecessary belongs with the fork below on whether the file is
+a store or a picture of a type. That fork moves what is generated, and writing
+the uniform emission before it is answered means writing it twice.
+
+## The debouncer has two states and needs four
+
+Alive and `is_poisoned`, and the second means a panic. There is no way to say
+"stop taking work, write what is left, and be done", which is what closing
+wants:
+
+- after `shutdown()` the thread is still running and can schedule another
+  flush, so the store is closed in the sense that matters and open in the sense
+  that shows;
+- a retry streak on the way out keeps retrying into a process that is about to
+  end, where one report and a stop would do;
+- "stopped because it was asked to" and "stopped because it died" are the same
+  observable, and only one of them is a bug.
+
+Not a fix for the static above - that needs the call either way - but it is
+what makes the call mean something definite.
+
+**Where the trigger comes from, since the phases do not invent it.** pingora
+models the same thing as an enum of service phases, and the transition into
+graceful shutdown is driven by a `SIGTERM` handler the server installs: the
+library holds the phases, the outside world delivers the event. A desktop
+application has the same event under other names - a window closing, winit's
+`LoopExiting`, Tauri's exit event - and this crate already has an integration
+sitting on each of them. So `shutdown()` need not stay on the user's memory:
+the integration that already knows the application is quitting can call it.
+
+`atexit` is the other candidate and is worth less than it looks. It exists on
+both platforms through the C runtime, takes an `extern "C" fn()` with no
+context - which suits a static fine - and runs when `main` returns or `exit` is
+called. It does not run on `abort`, `panic = "abort"`, `_exit`, a kill, or a
+power cut, so it covers only the case an application can already handle with
+one line, and none of the cases where data is actually lost. Other threads keep
+running while its handlers do.
+
 ## `.pipe()` keeps its sources alive with two of them and drops them with one
 
 `IntoPipeline for R: Reactive<T>` (`core/primitives/pipeline.rs:250`) subscribes
@@ -1117,9 +1384,27 @@ render function with nothing to return an error to. `get` also takes `&K`, so
 with a `String` key it is `widths.get(&"cpu".to_string())` - the doctests do
 exactly that seven times.
 
-Drop the `Result` from all six, and take `&Q where K: Borrow<Q>` on
-`get`/`contains_key`/`remove`. Both are breaking and get cheaper the sooner they
-land.
+**Done, both halves.** The six reads return their values, and
+`get`/`contains_key`/`remove` take `&Q where K: Borrow<Q>`.
+
+`remove` needed no change in `amethystate-core`: `map_remove` wants an owned
+`K` because `MapChange::Remove` carries one, and the projection already holds
+it - so the wrapper looks the key up and hands the owned one down. A removal of
+an absent key still costs nothing and still returns `Ok(None)`.
+
+Roughly sixty call sites across the tests, the benches and the doctests, each
+of which was an `.unwrap()` or a `.to_string()` that now reads as what it
+means.
+
+**And it decides something for the table.** A read is infallible here only
+because the map is resident - the projection holds everything, so a lookup
+cannot touch disk and cannot fail. A collection that is not resident has a
+`get` that reads, and a read that fails. So residency is not a detail of the
+table's design either: it is the thing that settles whether a read returns a
+value or a `Result`, and `ReactiveMap` has already answered it one way. Any
+windowed form is a second type rather than a parameter on this one, or the
+`Result` comes back to the line a GUI writes most often. See the reactive-table
+RFC, which is being written against this.
 
 ## `AmeType` locks every foreign type out, and the user cannot let it back in
 
@@ -1169,7 +1454,12 @@ at 364 ms. The async twins are live; the sync four are not.
   four lines above fall back to `Default::default()`.
 - `get_map_types` decides a field is a map by matching the last path segment
   against the literal string `"ReactiveMap"`, so a type alias or a renaming
-  import silently generates a scalar field.
+  import generates a scalar field instead. It does not reach disk: the `_Data`
+  struct derives `Serialize` and `Deserialize` and `ReactiveMap` implements
+  neither, so it stops at a compile error - an obscure one, about a missing
+  `Serialize` in generated code, naming neither the field nor the reason. Make
+  the misclassification say so itself. See the entry below on asking the
+  compiler instead of guessing.
 - Every prefixed struct gets a generated `new()` that calls `global_store()`,
   so the most obviously named constructor is the one that panics when there is
   no global store. There is no `try_init_global`.
@@ -1326,14 +1616,58 @@ writes. The doc's own wording says how to recover: close and reopen the
 swappable (`ArcSwap` is already a workspace dependency) that notices
 `PreviousIo`/`DatabaseClosed` and reopens rather than a bare `Arc`.
 
-**Not decided, and it is the one thing `AfterGivingUp` cannot paper over.**
-The choice of what writers are told is the application's now; whether redb can
-ever *recover* is not, and today it cannot. `Fail` and `Ignore` both promise
-that a flush landing later heals the store, and on sqlite and the text engines
-it does. On redb the retry can never land after a real I/O error, so the store
-stays failed until it is reopened - the promise is kept everywhere except the
-engine that most needs it. Building the reopen is what would close that; it is
-parked rather than guessed at.
+**Done: redb trades the handle in.** `Fail` and `Ignore` both promise that a
+flush landing later heals the store; on redb that was a promise the engine
+could not keep, since the retry could never land. It now reopens instead.
+
+`db` is an `ArcSwapOption<Database>` rather than an `Arc<Database>`, and the
+`None` is the point: redb holds the file lock for as long as a `Database` is
+alive, so reopening is not "make the new one and swap it in" - the old has to
+be dropped before `Database::create` can take the lock back. The caller holds
+`write_lock` across the gap.
+
+Which also settles what a durable write does, and it needed no separate code:
+`flush_prefix` takes `write_lock` first and the reopen holds the same lock, so
+a commit runs before or after the swap and never during. A durable write waits,
+which is what it promises anyway; a read or a scan takes no such lock, sees the
+`None` and is told, rather than blocking a UI thread on a file operation. Keep
+the two on one lock and that stays true for free.
+
+Both flush paths reopen on `PreviousIo` - the background one so the retry loop
+lands on the next attempt, the synchronous one so a durable write recovers
+instead of reporting something the caller can do nothing about.
+
+The one thing that had to be true is that nobody else holds a `Database`, or
+the lock never comes back. One did: the background flush held its own clone,
+which would have kept the file locked for the life of the thread. It holds the
+swap now. `the_database_can_be_traded_for_a_fresh_one_under_a_live_store`
+exists to fail the moment a second handle reappears anywhere.
+
+A real `PreviousIo` end to end is covered too, and it was worth the trouble.
+`a_disk_that_fails_for_real_is_recovered_by_trading_the_handle` opens the store
+on a `StorageBackend` that fails its writes - redb's own seam, reached through
+`create_with_backend`, so the latch that follows is redb's rather than a
+simulation of it - takes the disk away, gives it back, and asserts the
+buffered write lands. It failed on its first run, because `is_previous_io`
+answered `false` to a genuine `PreviousIo`: the predicate matched on this
+crate's `RedbStoreError`, and the errors that actually carry the latch are
+redb's own. `begin_write` fails with a `TransactionError` and `commit` with a
+`CommitError`, and `.doing()` is a `change_context` that leaves them in the
+report unwrapped. So the reopen would never have fired on the one failure it
+was built for, and every test that passed until then had reached the latch by
+constructing it rather than by breaking a disk.
+
+The whole of it lives in `backend\redb\recovery.rs` - the swappable handle, the
+predicate, the trade, and the tests that break a disk to reach it.
+
+The failing disk is armed by path rather than by a flag, and that is not
+tidiness. A global switch is consulted by `create_database`, so while one test
+held it on, any store opening in parallel got a broken disk - which is exactly
+what `test_drop_behavior_is_deterministic` did, being one of the tests here
+without `#[serial]`. It arrives as a failure in a test that has nothing to do
+with any of this, whose own code never mentions a disk. Naming the one path
+that may break means a test that did not ask for one cannot be handed it, and
+the guard puts the disk away even when an assertion panics.
 
 **sqlite and the text engines do not share redb's problem.** Neither rusqlite
 nor SQLite itself has anything resembling `io_failed`: a failed write rolls
@@ -2069,3 +2403,31 @@ cannot afford to lose. What it should cover:
 
 When the list is empty, turn on `#![deny(missing_docs)]` for the documented
 modules so the next undocumented public item cannot land quietly.
+
+## The builder named a file for one engine and opened it with another
+
+Reported from an application built on this, not found here, which is the part
+worth keeping: it is reachable by the shortest path the API offers.
+
+```rust
+StoreBuilder::for_app(app, config)   // settings.redb, from the default engine
+    .backend(Backend::Json)          // changes the engine, not the file
+```
+
+`for_app` ends in `new`, which fills in an extension when the path has none,
+and it takes it from `default_backend()`. `backend` set only its own field. So
+the json engine opened a redb file and failed on its first byte with `stream
+did not contain valid UTF-8` - a message about encoding, for a mistake about
+which file to open, which is why it cost the reporter a debugging session
+rather than a glance. `StoreBuilder::new("app/settings").backend(Json)` does
+the same thing without `for_app` anywhere near it.
+
+**Done by remembering who chose the extension.** The builder keeps
+`caller_named_extension`, and `backend` re-derives the extension when the
+answer is no. An extension the caller spelled is theirs - a `.conf` some other
+tool already watches is not renamed because an engine was named - and one this
+crate invented belongs to whichever engine actually runs. Four tests in
+`store::builder::tests`, including the two-`backend`-calls case.
+
+The application worked around it by rebuilding the path with `etcetera` and the
+right extension, ten lines duplicating this crate's logic. Those can go.

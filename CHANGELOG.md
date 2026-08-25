@@ -17,6 +17,17 @@ deliberate: every one of them is.
 
 ### Breaking
 
+- **`ReactiveMap`'s reads no longer return `Result`.** `get`, `contains_key`,
+  `entries`, `keys`, `len` and `is_empty` answer from the map's in-memory
+  projection and had no fallible step left in them - every one was an `Ok(..)`
+  around an infallible lookup. This is the line a GUI writes most often, in a
+  render function with nothing to return an error to, so the `Result` bought
+  nothing and cost an `.unwrap()` per read. Drop the `.unwrap()`.
+- **`ReactiveMap::get`, `contains_key` and `remove` borrow the key.** They take
+  `&Q where K: Borrow<Q>`, so a `String`-keyed map is addressed as
+  `widths.get("cpu")` rather than `widths.get(&"cpu".to_string())` - an
+  allocation per lookup, for a lookup that never needed one. `remove` takes the
+  owned key from the projection instead of from the caller.
 - **A path is a list of levels, not a string with dots in it.** `IntoStorePath`
   is deliberately not implemented for `&str`, because `store.get(["ui",
   "width"])` and `store.get("ui.width")` would look alike and mean different
@@ -243,6 +254,27 @@ deliberate: every one of them is.
 
 ### Added
 
+- `Store::close` and `amethystate::shutdown`, the fallible half of closing a
+  store. Dropping one writes what is buffered but cannot report a failure -
+  there is no caller left to hand it to - so a full disk or a locked file at
+  exit ended the process reporting success. These return the result while the
+  application is still running and can offer to retry or save elsewhere.
+- `GlobalStoreGuard`, from `init_global`. Statics are never dropped, so the
+  process-wide store never got the closing flush every other store gets for
+  free, and every write younger than the debounce interval was lost on a clean
+  return. A guard is a local, and locals are dropped: bound in `main`, it
+  closes the store at the end of `main`, where the logger and the threads are
+  still up.
+- `#[migrate(explicit)]` and `MigrationBuilder::add_steps`, for handing
+  migration steps over by name instead of having them found. `inventory`
+  collects at link time, which was the only way a step could reach a store;
+  a step declared `explicit` is left as a `const` named for its function and
+  stays out of the sweep. `collect_codegen` is now `add_steps` fed from
+  `inventory::iter`, so both routes meet in one place.
+- `StoreBuilder::init_global_with_report`, and with it the same split
+  `build`/`build_with_report` already has: `init_global` runs the steps
+  declared by hand, and the `_with_report` form also sweeps the binary and says
+  what the pass did.
 - `StorePath`, the path built from segments and only from segments. It keeps
   both forms - the levels for engines that walk a document tree, the joined and
   escaped string for engines that store a key whole - so reading either borrows
@@ -314,6 +346,18 @@ deliberate: every one of them is.
 
 ### Fixed
 
+- An extension this crate chose follows the engine that is named.
+  `StoreBuilder::for_app` and `new` fill in an extension when the path has none,
+  and it came from the default engine; naming another with `backend` changed the
+  engine and left the path, so a store asked for as `json` was opened on
+  `settings.redb` and the engine met another engine's bytes - reported as
+  `stream did not contain valid UTF-8`. An extension the caller spelled is still
+  the caller's and stays.
+- A closing flush that fails leaves a trace. All three backend families flush
+  from `Drop` and discarded the result, so the one flush a short-lived process
+  depends on - a locked file, a full disk, a permission error on the way out -
+  ended the process reporting success with the data not written. `Drop` still
+  cannot return an error, but it now logs one.
 - What is still buffered when the store is dropped is written. The debouncer's
   inner wait returned on a closed channel instead of breaking, so the last quiet
   period was skipped - which is the one case dropping the store exists to cover.
@@ -358,6 +402,22 @@ deliberate: every one of them is.
   recursing at startup.
 
 ### Performance
+
+- Opening a map is about a third faster, and a scan a fifth, because a
+  `StorePath` no longer splits itself into levels until something asks. At a
+  million entries on redb, committed: open 2.45 s to 1.73 s, `scan_prefix`
+  1.42 s to 1.11 s, `scan_keys` 1.31 s to 0.99 s. A key read back from a store
+  arrives as one string, and the engines that store keys whole address it by
+  that string throughout - splitting it into an allocation per level was work
+  thrown away on every key of every scan. `parse_joined` still validates
+  eagerly, so a key that will not parse is refused where it is read.
+  `StorePath::name_under` reads the level below a prefix off the joined form
+  without splitting either path, which is what a map load wants from each
+  scanned key.
+- `StorePath`'s `PartialEq` and `Hash` answer from the joined form, where `Ord`
+  already did. The escaping is injective, so this is the same question asked of
+  the cheaper form - and with all three agreeing on one representation,
+  `Borrow<str>` becomes sound.
 
 - `ReactiveMap`'s reads come from the projection it already builds at
   construction. On ten thousand entries `len` goes from 386 ms to 620 ns and
