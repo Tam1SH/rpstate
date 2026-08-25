@@ -151,19 +151,20 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let mut entries = HashMap::new();
-
     let scanned = store
         .scan_prefix(path)
         .attach_with(|| format!("map: {path}"))?;
 
-    for (stored, bytes) in scanned {
-        let below = stored
-            .starts_with(path)
-            .then(|| stored.segment_at(path.len()))
-            .flatten();
+    // Sized from the scan rather than grown into. At a million entries the
+    // difference is not a constant factor: a table that grows from nothing
+    // rehashes everything it holds about twenty times on the way up, and that
+    // rehashing was most of what opening a large map cost.
+    let mut entries = HashMap::with_capacity(scanned.len());
 
-        let name = match below {
+    for (stored, bytes) in scanned {
+        let below = stored.name_under(path);
+
+        let name = match below.as_deref() {
             Some(name) => name,
             None if &stored == path => continue,
             None => {
@@ -227,7 +228,7 @@ where
     }
     store.mark_initialized(path.as_str())?;
 
-    let core = ReactiveMapCore::new();
+    let core = ReactiveMapCore::with_capacity(known_cache.len());
     for (k, v) in known_cache {
         core.cache.insert(k, v);
     }

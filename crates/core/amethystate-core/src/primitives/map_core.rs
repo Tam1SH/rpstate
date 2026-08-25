@@ -112,6 +112,17 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> Default for ReactiveMapCore<K, V> {
 
 impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
     pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    /// The same, with the projection sized for `entries` up front.
+    ///
+    /// The projection is behind an `Arc` from the moment it exists, so it
+    /// cannot be reserved afterwards - `DashMap::try_reserve` wants `&mut
+    /// self`. The size is known when a map is loaded from a store, and a table
+    /// that grows into a million entries rehashes everything it holds on the
+    /// way there.
+    pub fn with_capacity(entries: usize) -> Self {
         Self {
             interceptors_any: Arc::new(Mutex::new(Vec::new())),
             interceptors_key: Arc::new(DashMap::new()),
@@ -119,7 +130,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             subscribers_key: Arc::new(DashMap::new()),
             next_id: Arc::new(AtomicU64::new(0)),
             intercept_depth: Arc::new(AtomicUsize::new(0)),
-            cache: Arc::new(dashmap::DashMap::new()),
+            cache: Arc::new(dashmap::DashMap::with_capacity(entries)),
         }
     }
 

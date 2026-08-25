@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
 
 const SEPARATOR: char = '.';
 const ESCAPE: char = '\\';
@@ -21,6 +22,26 @@ pub struct StorePath {
 enum Segments {
     Static(&'static [&'static str]),
     Owned(Arc<[Arc<str>]>),
+
+    /// Not split yet, and possibly never.
+    ///
+    /// A path read back from a store arrives as one string, and the engines
+    /// that read it back that way - the ones storing a key whole - address it
+    /// by that string from end to end: equality, order and hashing all answer
+    /// from the joined form. Splitting it into a level per `Arc<str>` is an
+    /// allocation for the list and one for each level, taken on every key of
+    /// every scan, for levels nobody looks at.
+    ///
+    /// Whoever does look at them pays then, once, and every clone of the path
+    /// shares that one payment. The split is not validated here because
+    /// [`StorePath::parse_joined`] validated the string before building this,
+    /// without allocating anything.
+    ///
+    /// The cell is behind an `Arc` so that the type stays free of interior
+    /// mutability: a `OnceLock` held directly would make every `StorePath`
+    /// non-`Freeze`, and the macro builds paths as `static`, which the borrow
+    /// checker refuses for a type that could mutate itself.
+    Deferred(Arc<OnceLock<Arc<[Arc<str>]>>>),
 }
 
 #[derive(Clone)]
@@ -30,24 +51,38 @@ enum Joined {
 }
 
 impl Segments {
-    fn len(&self) -> usize {
+    /// The levels, splitting the joined form first if that has not happened.
+    fn split(&self, joined: &str) -> &[Arc<str>] {
+        match self {
+            Segments::Owned(s) => s,
+            Segments::Deferred(cell) => cell.get_or_init(|| split_checked(joined)),
+            // A static path knows its levels as `&'static str` and never needs
+            // this; the two callers that would reach it go through `get`.
+            Segments::Static(_) => &[],
+        }
+    }
+
+    fn len(&self, joined: &str) -> usize {
         match self {
             Segments::Static(s) => s.len(),
             Segments::Owned(s) => s.len(),
+            Segments::Deferred(_) => self.split(joined).len(),
         }
     }
 
-    fn get(&self, index: usize) -> Option<&str> {
+    fn get(&self, joined: &str, index: usize) -> Option<&str> {
         match self {
             Segments::Static(s) => s.get(index).copied(),
             Segments::Owned(s) => s.get(index).map(|s| &**s),
+            Segments::Deferred(_) => self.split(joined).get(index).map(|s| &**s),
         }
     }
 
-    fn to_owned_vec(&self) -> Vec<Arc<str>> {
+    fn to_owned_vec(&self, joined: &str) -> Vec<Arc<str>> {
         match self {
             Segments::Static(s) => s.iter().map(|s| Arc::from(*s)).collect(),
             Segments::Owned(s) => s.to_vec(),
+            Segments::Deferred(_) => self.split(joined).to_vec(),
         }
     }
 }
@@ -179,31 +214,29 @@ impl StorePath {
     pub fn try_push(&self, name: impl AsRef<str>) -> Result<Self, StorePathError> {
         let name = name.as_ref();
         if name.is_empty() {
-            return Err(StorePathError::EmptySegment {
-                at: self.segments.len(),
-            });
+            return Err(StorePathError::EmptySegment { at: self.len() });
         }
 
-        let mut segments = self.segments.to_owned_vec();
+        let mut segments = self.segments.to_owned_vec(self.as_str());
         segments.push(Arc::from(name));
         Ok(Self::from_checked(segments))
     }
 
     /// This path with `other`'s levels under it.
     pub fn join(&self, other: &StorePath) -> Self {
-        let mut segments = self.segments.to_owned_vec();
-        segments.extend(other.segments.to_owned_vec());
+        let mut segments = self.segments.to_owned_vec(self.as_str());
+        segments.extend(other.segments.to_owned_vec(other.as_str()));
         Self::from_checked(segments)
     }
 
     /// The levels, outermost first.
     pub fn segments(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
-        (0..self.segments.len()).map(|i| self.segments.get(i).unwrap())
+        (0..self.len()).map(|i| self.segment_at(i).unwrap())
     }
 
     /// One level, or `None` past the end.
     pub fn segment_at(&self, index: usize) -> Option<&str> {
-        self.segments.get(index)
+        self.segments.get(self.as_str(), index)
     }
 
     /// The whole path as one string, with the separator escaped inside names.
@@ -218,11 +251,11 @@ impl StorePath {
     }
 
     pub fn is_root(&self) -> bool {
-        self.segments.len() == 0
+        self.as_str().is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.segments.len()
+        self.segments.len(self.as_str())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -234,22 +267,23 @@ impl StorePath {
     /// Compared level by level, so `ui` does not start `uix.width` - which
     /// comparing the joined strings would say it does.
     pub fn starts_with(&self, prefix: &StorePath) -> bool {
-        prefix.segments.len() <= self.segments.len()
-            && prefix.segments().zip(self.segments()).all(|(a, b)| a == b)
+        prefix.len() <= self.len() && prefix.segments().zip(self.segments()).all(|(a, b)| a == b)
     }
 
     /// The levels below `prefix`, or `None` when `prefix` does not start this
     /// path.
     pub fn strip_prefix(&self, prefix: &StorePath) -> Option<StorePath> {
         self.starts_with(prefix).then(|| {
-            StorePath::from_checked(self.segments.to_owned_vec()[prefix.segments.len()..].to_vec())
+            StorePath::from_checked(
+                self.segments.to_owned_vec(self.as_str())[prefix.len()..].to_vec(),
+            )
         })
     }
 
     /// The path one level up, or `None` at the root.
     pub fn parent(&self) -> Option<StorePath> {
         (!self.is_root()).then(|| {
-            let mut segments = self.segments.to_owned_vec();
+            let mut segments = self.segments.to_owned_vec(self.as_str());
             segments.pop();
             StorePath::from_checked(segments)
         })
@@ -257,7 +291,49 @@ impl StorePath {
 
     /// The last level, or `None` at the root.
     pub fn name(&self) -> Option<&str> {
-        self.segments.get(self.segments.len().checked_sub(1)?)
+        self.segment_at(self.len().checked_sub(1)?)
+    }
+
+    /// The level that follows `prefix`, read straight off the joined form.
+    ///
+    /// The same answer as `starts_with(prefix)` followed by
+    /// `segment_at(prefix.len())`, reached without splitting either path into
+    /// levels. That matters where it is used: a scan hands back a path per
+    /// stored key, and the caller wants one name from each, so splitting every
+    /// key into a level per allocation is work thrown away as soon as it is
+    /// done.
+    ///
+    /// Borrowed unless the name carries an escaped separator, which is the
+    /// only case where the level is not a run of the joined string.
+    pub fn name_under(&self, prefix: &StorePath) -> Option<Cow<'_, str>> {
+        let whole = self.as_str();
+
+        let rest = if prefix.is_root() {
+            whole
+        } else {
+            let head = prefix.as_str();
+            // A level boundary, not a string one: `ui` does not start
+            // `uix.width`, and only the separator says so.
+            whole
+                .strip_prefix(head)
+                .and_then(|rest| rest.strip_prefix(SEPARATOR))?
+        };
+
+        if rest.is_empty() {
+            return None;
+        }
+
+        let mut escaped = false;
+        for (at, ch) in rest.char_indices() {
+            match ch {
+                _ if escaped => escaped = false,
+                ESCAPE => escaped = true,
+                SEPARATOR => return Some(unescape(&rest[..at])),
+                _ => {}
+            }
+        }
+
+        Some(unescape(rest))
     }
 
     /// The name `key` is stored under, below this path.
@@ -280,59 +356,123 @@ impl StorePath {
     /// this library did not write can hold a level with no name, and such a
     /// path is not one.
     pub fn parse_joined(joined: &str) -> Result<Self, StorePathError> {
-        let mut segments: Vec<Arc<str>> = Vec::new();
-        let mut start = 0;
-        let mut unescaped: Option<String> = None;
-        let mut escaped = false;
+        validate_joined(joined)?;
 
-        for (at, ch) in joined.char_indices() {
-            match ch {
-                _ if escaped => {
-                    if ch != SEPARATOR && ch != ESCAPE {
-                        return Err(StorePathError::DanglingEscape);
-                    }
-                    unescaped.get_or_insert_default().push(ch);
-                    escaped = false;
+        Ok(Self {
+            segments: Segments::Deferred(Arc::new(OnceLock::new())),
+            joined: Joined::Owned(Arc::from(joined)),
+        })
+    }
+}
+
+/// Whether a joined key is one this type could have written, without building
+/// anything to find out.
+///
+/// The same walk the split does, counting levels instead of collecting them.
+/// It runs eagerly where the split does not, because a key that will not parse
+/// has to be refused where it is read rather than wherever someone first asks
+/// for its levels.
+fn validate_joined(joined: &str) -> Result<(), StorePathError> {
+    let mut at_level = 0;
+    let mut level_len = 0usize;
+    let mut escaped = false;
+
+    for ch in joined.chars() {
+        match ch {
+            _ if escaped => {
+                if ch != SEPARATOR && ch != ESCAPE {
+                    return Err(StorePathError::DanglingEscape);
                 }
-                ESCAPE => {
-                    let taken = unescaped.get_or_insert_default();
-                    if taken.is_empty() {
-                        taken.push_str(&joined[start..at]);
-                    }
-                    escaped = true;
+                level_len += 1;
+                escaped = false;
+            }
+            ESCAPE => escaped = true,
+            SEPARATOR => {
+                if level_len == 0 {
+                    return Err(StorePathError::EmptySegment { at: at_level });
                 }
-                SEPARATOR => {
-                    segments.push(match unescaped.take() {
-                        Some(name) => Arc::from(name.as_str()),
-                        None => Arc::from(&joined[start..at]),
-                    });
-                    start = at + ch.len_utf8();
+                at_level += 1;
+                level_len = 0;
+            }
+            _ => level_len += 1,
+        }
+    }
+
+    if escaped {
+        return Err(StorePathError::DanglingEscape);
+    }
+
+    if !joined.is_empty() && level_len == 0 {
+        return Err(StorePathError::EmptySegment { at: at_level });
+    }
+
+    Ok(())
+}
+
+/// One level as it was written, borrowing when nothing was escaped.
+fn unescape(level: &str) -> Cow<'_, str> {
+    if !level.contains(ESCAPE) {
+        return Cow::Borrowed(level);
+    }
+
+    let mut out = String::with_capacity(level.len());
+    let mut escaped = false;
+    for ch in level.chars() {
+        match ch {
+            _ if escaped => {
+                out.push(ch);
+                escaped = false;
+            }
+            ESCAPE => escaped = true,
+            _ => out.push(ch),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Splits a joined key that [`validate_joined`] has already accepted.
+fn split_checked(joined: &str) -> Arc<[Arc<str>]> {
+    let mut segments: Vec<Arc<str>> = Vec::new();
+    let mut start = 0;
+    let mut unescaped: Option<String> = None;
+    let mut escaped = false;
+
+    for (at, ch) in joined.char_indices() {
+        match ch {
+            _ if escaped => {
+                unescaped.get_or_insert_default().push(ch);
+                escaped = false;
+            }
+            ESCAPE => {
+                let taken = unescaped.get_or_insert_default();
+                if taken.is_empty() {
+                    taken.push_str(&joined[start..at]);
                 }
-                _ => {
-                    if let Some(name) = unescaped.as_mut() {
-                        name.push(ch);
-                    }
+                escaped = true;
+            }
+            SEPARATOR => {
+                segments.push(match unescaped.take() {
+                    Some(name) => Arc::from(name.as_str()),
+                    None => Arc::from(&joined[start..at]),
+                });
+                start = at + ch.len_utf8();
+            }
+            _ => {
+                if let Some(name) = unescaped.as_mut() {
+                    name.push(ch);
                 }
             }
         }
-
-        if escaped {
-            return Err(StorePathError::DanglingEscape);
-        }
-
-        if !joined.is_empty() {
-            segments.push(match unescaped {
-                Some(name) => Arc::from(name.as_str()),
-                None => Arc::from(&joined[start..]),
-            });
-        }
-
-        if let Some(at) = segments.iter().position(|s| s.is_empty()) {
-            return Err(StorePathError::EmptySegment { at });
-        }
-
-        Ok(Self::from_parsed(segments, joined))
     }
+
+    if !joined.is_empty() {
+        segments.push(match unescaped {
+            Some(name) => Arc::from(name.as_str()),
+            None => Arc::from(&joined[start..]),
+        });
+    }
+
+    Arc::from(segments)
 }
 
 /// Why a set of segments is not a path.
@@ -507,10 +647,14 @@ fn join(segments: &[Arc<str>]) -> Arc<str> {
     Arc::from(out.as_str())
 }
 
+/// Equal paths are the ones that address the same place, and the joined form
+/// says which that is: the escaping is injective, so two paths join to one
+/// string exactly when they hold the same levels. Comparing the string rather
+/// than walking the levels is the same question asked of the cheaper form, and
+/// it agrees with [`Ord`] by construction.
 impl PartialEq for StorePath {
     fn eq(&self, other: &Self) -> bool {
-        self.segments.len() == other.segments.len()
-            && self.segments().zip(other.segments()).all(|(a, b)| a == b)
+        self.as_str() == other.as_str()
     }
 }
 
@@ -534,10 +678,7 @@ impl PartialOrd for StorePath {
 
 impl std::hash::Hash for StorePath {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_usize(self.segments.len());
-        for segment in self.segments() {
-            segment.hash(state);
-        }
+        self.as_str().hash(state);
     }
 }
 
@@ -1068,16 +1209,19 @@ mod tests {
         assert_eq!(path.as_str(), "a*b[c]?\u{0}d");
     }
 
-    /// The hash is taken over the levels, not over the key, so the two do not
-    /// agree even though equality does. A map keyed by a path cannot be probed
-    /// with the string a flat engine already holds - `Borrow<str>` would be
-    /// unsound - so every lookup from a stored key has to build a path first.
+    /// A path hashes as its key, because equality and order are that key too.
+    ///
+    /// All three answer from the joined form, which the escaping makes
+    /// injective: two paths join to one string exactly when they hold the same
+    /// levels. Agreeing on one form is what would make `Borrow<str>` sound, so
+    /// a map keyed by paths could be probed with the string a flat engine
+    /// already holds, instead of building a path for every lookup.
     #[test]
-    fn a_path_does_not_hash_like_its_key() {
+    fn a_path_hashes_like_its_key() {
         let path = StorePath::segment("ui");
 
         assert_eq!(path.as_str(), "ui");
-        assert_ne!(hash_of(&path), hash_of(&"ui"));
+        assert_eq!(hash_of(&path), hash_of(&"ui"));
     }
 
     /// A name is bytes, so two spellings a person and most editors read as one
