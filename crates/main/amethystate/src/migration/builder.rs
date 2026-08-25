@@ -1,6 +1,6 @@
 use crate::migration::fields::FieldDescriptor;
 use crate::migration::provided::Provided;
-use crate::migration::registry::MigrationDependency;
+use crate::migration::registry::{MigrationDependency, MigrationStepEntry};
 use crate::migration::set::MigrationSet;
 use crate::store::StorageResult;
 use crate::{MigrationContext, MigrationPlan, StateScope};
@@ -32,12 +32,38 @@ impl MigrationBuilder {
     /// [`StoreBuilder::build_with_report`](crate::StoreBuilder::build_with_report)
     /// calls this; a store opened with plain
     /// [`build`](crate::StoreBuilder::build) runs only the steps added by hand.
+    ///
+    /// This is the linker's answer to the question:
+    /// [`inventory`](https://docs.rs/inventory) collects at link time, and a
+    /// step written `#[migrate(explicit)]` stays out of it and is handed over
+    /// through [`MigrationBuilder::add_steps`] instead.
     pub fn collect_codegen(&mut self) -> &mut Self {
         use crate::migration::registry::MigrationStepEntry;
-        use std::collections::HashSet;
-        let mut groups: HashMap<&'static str, Vec<&'static MigrationStepEntry>> = HashMap::new();
 
-        for entry in inventory::iter::<MigrationStepEntry> {
+        self.add_steps(inventory::iter::<MigrationStepEntry>)
+    }
+
+    /// Takes steps as given, for an application that would rather name them
+    /// than have them found.
+    ///
+    /// A step written `#[migrate(explicit)]` is not submitted to `inventory`
+    /// and so is invisible to [`MigrationBuilder::collect_codegen`]; the macro
+    /// leaves a `const` named for the function instead, and this is where it
+    /// goes.
+    ///
+    /// ```ignore
+    /// StoreBuilder::new("./app")
+    ///     .migrations(|m| { m.add_steps(&[SETTINGS_TO_V2, PANELS_TO_V3]); })
+    ///     .build()?;
+    /// ```
+    pub fn add_steps<'a>(
+        &mut self,
+        steps: impl IntoIterator<Item = &'a MigrationStepEntry>,
+    ) -> &mut Self {
+        use std::collections::HashSet;
+        let mut groups: HashMap<&'static str, Vec<&'a MigrationStepEntry>> = HashMap::new();
+
+        for entry in steps {
             groups.entry(entry.prefix).or_default().push(entry);
         }
 
