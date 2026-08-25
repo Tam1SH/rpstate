@@ -124,27 +124,36 @@ depending on which read reaches them.
 
 Nothing about this is documented, and nothing rejects the write.
 
-**Re-measured, and it still holds.** `tests/non_finite_float.rs` writes
-`f64::NAN` through a field on both families and prints what each answers:
+**Re-measured, and the account above is wrong twice.**
+`tests/non_finite_float.rs` writes `f64::NAN` through a field on every engine.
 
-```
-set returned: true
-field.get() = 0.0
-store.get() = Err(the store could not read ..)
-document: { "nonfinite": { "ratio": null } }
-```
+It is one engine's problem, not the text engines'. TOML and RON have `nan` and
+`inf` in their grammars and carry the value intact, as msgpack does; only JSON
+cannot spell it. Four of five are fine.
 
-Worth saying because the obvious suspect was cleared and the behaviour did not
-change with it: `StoreExt::decode` no longer substitutes `T::default()` for a
-decode failure - that was fixed this release - and the field still reports
-zero. The zero arrives by another route, the field falling back to its own
-declared default when the event it was handed will not decode. So the split
-between a read that substitutes and a read that fails is not one place, and
-fixing `decode` did not close it.
+And nothing substitutes a default. `StoreExt::decode` stopped doing that this
+release, and the field's subscription never did: handed bytes it cannot decode,
+it logs and **leaves the signal alone**. So the handle keeps reporting the value
+it held before - a field last set to `5.0` goes on saying `5.0` about a store
+that now holds `null`. The zero in the original table was the value that
+happened to be there already, and reading it as a default sent this entry after
+the wrong mechanism.
 
-The test asserts the disagreement rather than a fix, so it goes green today and
-its failure message becomes the finding on the day any of the four answers
+Which makes it worse than recorded, not better: a substituted default is at
+least a value nobody wrote, while a stale one is indistinguishable from a
+successful write.
+
+`set` still returns `Ok`, and a typed read of the same path still fails, so the
+disagreement between the two reads stands. The test pins all of it and goes
+green today; its failure message becomes the finding on the day any answer
 moves.
+
+**Deprioritised.** The upstream half has been open since January 2017
+(`serde-rs/json#202`) and is a property of the format rather than the crate:
+JSON has no non-finite floats, and `serde_json` follows `JSON.stringify` in
+writing `null`. Nothing here is waiting on that. The part worth doing when this
+comes back up is the stale value, which is not about floats at all - any decode
+failure leaves a handle confidently reporting the past.
 
 At minimum, say so: a field holding a float that can go non-finite is not
 portable across backends. Better, refuse the write on a codec that cannot

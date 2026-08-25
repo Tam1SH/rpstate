@@ -62,15 +62,21 @@ fn a_format_that_can_hold_it_keeps_it() {
     );
 }
 
-/// JSON takes a write it cannot store, and the value is gone three ways at
-/// once.
+/// JSON takes a write it cannot store, and the write is lost between the store
+/// and the handle.
 ///
 /// `serde_json` maps a non-finite float to `null` rather than refusing it, so
-/// nothing downstream has an error to raise: the write returns `Ok`, the
-/// document holds `null`, the handle falls back to the field's declared
-/// default - which is an ordinary number, indistinguishable from one that was
-/// written - and only a typed read of the same path fails. The same bytes mean
-/// two things depending on which read reaches them.
+/// the write returns `Ok` and the document holds `null`. The field's own
+/// subscription then cannot decode what it is handed, logs it, and leaves the
+/// signal alone - so the handle goes on reporting **the value it held before**,
+/// which is an ordinary number indistinguishable from one that was written.
+/// Only a typed read of the same path fails. The same bytes mean two things
+/// depending on which read reaches them.
+///
+/// The stale value is the part worth pinning, and the part easiest to mistake
+/// for something milder: nothing substitutes a default here, and a field whose
+/// last good value was `5.0` keeps saying `5.0` about a store that holds
+/// nothing.
 ///
 /// Pinned as it stands rather than as it should be. The repair belongs in the
 /// codec: a format that cannot represent a value should refuse it at the write,
@@ -87,6 +93,7 @@ fn json_takes_a_write_it_cannot_store() {
         .unwrap();
 
     let state = Readings::new_with(&store).unwrap();
+    state.ratio().set(5.0).unwrap();
 
     assert!(
         state.ratio().set(f64::NAN).is_ok(),
@@ -94,8 +101,8 @@ fn json_takes_a_write_it_cannot_store() {
     );
     assert_eq!(
         state.ratio().get(),
-        0.0,
-        "the handle reports the field's default, not what was written"
+        5.0,
+        "the handle still reports what it held before the write it accepted"
     );
     assert!(
         StoreExt::get::<f64>(&store, ratio_path()).is_err(),
