@@ -20,6 +20,28 @@ impl<R: ResultExt> Attempted for R {
     }
 }
 
+/// Reports what a store's closing flush did, from the `Drop` where nothing
+/// else can.
+///
+/// That flush is the one a short-lived process depends on, and the one whose
+/// failure nobody is in a position to see: a locked file, a full disk, a
+/// permission error on the way out, and the process ends reporting success
+/// with the data not written. `Drop` cannot return an error and cannot be
+/// given a caller to hand one to, so a log line is the whole of what the loss
+/// can leave behind - which is why it is at `error` rather than `warn`. A
+/// caller that would rather find out while it can still act calls `save_now`
+/// or `close` and reads the result.
+pub fn report_closing_flush(outcome: StorageResult<()>, file: &Path) {
+    if let Err(report) = outcome {
+        tracing::error!(
+            target: "amethystate",
+            file = %file.display(),
+            error = ?report,
+            "the store's closing flush failed: what it still held is not on disk",
+        );
+    }
+}
+
 /// Where a subtree stops, for engines that store a key whole.
 ///
 /// A key belongs to `prefix` when it is `prefix` itself or begins with it

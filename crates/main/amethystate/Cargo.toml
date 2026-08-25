@@ -16,7 +16,7 @@ toml = ["dep:toml_edit", "text"]
 ron = ["dep:ron", "text"]
 sqlite = ["dep:rusqlite", "dep:sonic-rs", "dep:parking_lot"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
-redb = ["dep:redb", "dep:rmp-serde", "dep:parking_lot"]
+redb = ["dep:redb", "dep:rmp-serde", "dep:parking_lot", "dep:arc-swap"]
 text = ["dep:tempfile", "dep:parking_lot", "dep:notify"]
 
 async = ["amethystate-core/async"]
@@ -25,6 +25,11 @@ tauri = ["amethystate-macros/tauri", "amethystate-tauri", "async"]
 confy-compat-0-6 = ["dep:directories"]
 confy-compat = []
 test-utils = ["amethystate-core/test-utils"]
+
+# Counts every allocation in the profiling example and attributes it to where
+# it was made. Off by default because it replaces the global allocator and
+# records a backtrace per allocation, which makes any timing meaningless.
+dhat-heap = []
 
 # The macro goldens: trybuild and macrotest, which compile a crate per case
 # and cost more than the rest of the suite put together. Off by default so an
@@ -47,6 +52,7 @@ error-stack = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 redb = { workspace = true, optional = true }
+arc-swap = { workspace = true, optional = true }
 rmp-serde = { workspace = true, optional = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 directories = { workspace = true, optional = true }
@@ -77,6 +83,8 @@ trybuild = { workspace = true }
 tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
 real-confy = { package = "confy", version = "2.0.0" }
 serial_test = "3.5.0"
+rmp-serde = { workspace = true }
+dhat = "0.3"
 
 [[bench]]
 name = "store_bench"

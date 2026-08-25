@@ -534,7 +534,7 @@ impl SqliteStoreInner {
 
 impl Drop for SqliteStoreInner {
     fn drop(&mut self) {
-        let _ = self.close();
+        utils::report_closing_flush(self.close(), &self.path);
     }
 }
 

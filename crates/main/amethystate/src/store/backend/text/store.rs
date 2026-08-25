@@ -228,7 +228,7 @@ impl<D: TextDocument> TextStoreInner<D> {
 
 impl<D: TextDocument> Drop for TextStoreInner<D> {
     fn drop(&mut self) {
-        let _ = self.save_now();
+        utils::report_closing_flush(self.save_now(), &self.files.data.path);
     }
 }
 

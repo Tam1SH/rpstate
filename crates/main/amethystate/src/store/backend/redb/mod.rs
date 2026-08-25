@@ -35,7 +35,10 @@ use uuid::Uuid;
 pub mod error;
 mod inspector;
 mod migration;
+mod recovery;
 mod tables;
+
+use recovery::{OpenDatabase, create_database, is_previous_io, reopen};
 
 const BUF_SIZE: usize = 64 * 1024;
 
@@ -102,7 +105,7 @@ fn apply_pending(
 }
 
 struct RedbStoreInner {
-    db: Arc<Database>,
+    db: OpenDatabase,
     path: Arc<Path>,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
@@ -125,15 +128,33 @@ impl RedbStoreInner {
         self.flush_prefix(&StorePath::root())
     }
 
+    /// Commits what is buffered under `prefix`, trading the handle in if redb
+    /// has stopped touching the disk.
+    ///
+    /// This is the path a durable write waits on, so it recovers rather than
+    /// reporting a failure the caller can do nothing about: a handle that has
+    /// seen an I/O error answers everything with `PreviousIo` for good, and
+    /// only a fresh one can land the write. One retry, because the second
+    /// failure is the disk rather than the handle.
     pub fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         let _write_guard = self.write_lock.lock();
 
+        match self.flush_locked(prefix) {
+            Err(report) if is_previous_io(&report) => {
+                reopen(&self.db, &self.path)?;
+                self.flush_locked(prefix)
+            }
+            other => other,
+        }
+    }
+
+    fn flush_locked(&self, prefix: &StorePath) -> StorageResult<()> {
         let changes = {
             let lock = self.pending.lock();
             utils::pending_prefix(&lock, prefix.as_str())
         };
         let txn = self
-            .db
+            .db()?
             .begin_write()
             .doing(StorageError::Flush, &self.path)
             .attach_with(|| format!("prefix: {prefix}"))
@@ -149,6 +170,27 @@ impl RedbStoreInner {
         utils::clear_committed(&mut self.pending.lock(), &changes);
         self.commits.finished(true);
         Ok(())
+    }
+
+    /// The database to work against, or a failure if it is being replaced.
+    ///
+    /// A read or a scan calling this during the gap is told so rather than
+    /// waiting: a reopen is triggered by a disk that already failed, and a UI
+    /// thread blocking on a file operation is what this library avoids
+    /// everywhere else.
+    ///
+    /// A durable write does wait, and needs no code here to do it: it goes
+    /// through `flush_prefix`, which takes `write_lock` first, and the reopen
+    /// holds that same lock for the whole swap. So a commit either runs before
+    /// the reopen or after it, and never during - which is the blocking a
+    /// durable write already promises. Keep the two on one lock and that stays
+    /// true for free.
+    fn db(&self) -> StorageResult<Arc<Database>> {
+        self.db.load_full().ok_or_else(|| {
+            error_stack::Report::new(StorageError::Read)
+                .attach("the database is being reopened after an I/O failure")
+                .attach(format!("file: {}", self.path.display()))
+        })
     }
 
     /// Whether a write may proceed.
@@ -173,7 +215,7 @@ impl RedbStoreInner {
 
 impl Drop for RedbStoreInner {
     fn drop(&mut self) {
-        let _ = self.close();
+        utils::report_closing_flush(self.close(), &self.path);
     }
 }
 
@@ -202,9 +244,9 @@ impl RedbStore {
     ) -> StorageResult<(Self, MigrationReport)> {
         let path: Arc<Path> = Arc::from(config.path.as_path());
 
-        let db = Arc::new(Database::create(&config.path).doing(StorageError::Open, &path)?);
+        let opened = Arc::new(create_database(&config.path).doing(StorageError::Open, &path)?);
 
-        let write_txn = db.begin_write().doing(StorageError::Open, &path)?;
+        let write_txn = opened.begin_write().doing(StorageError::Open, &path)?;
         {
             for table in [
                 TABLE_DATA,
@@ -226,6 +268,11 @@ impl RedbStore {
         let commits = Arc::new(crate::store::durable::CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
 
+        let db: OpenDatabase = Arc::new(arc_swap::ArcSwapOption::from(Some(opened)));
+
+        // The swap, not the database: a clone of the `Database` here would
+        // hold redb's file lock for the life of this thread, and a reopen
+        // could never take it back.
         let db_save = db.clone();
         let pending_save = pending.clone();
         let path_save = path.clone();
@@ -260,7 +307,11 @@ impl RedbStore {
                 }
 
                 let landed: StorageResult<()> = (|| {
-                    let txn = db_save
+                    let db = db_save.load_full().ok_or_else(|| {
+                        error_stack::Report::new(StorageError::Flush)
+                            .attach("the database is being reopened")
+                    })?;
+                    let txn = db
                         .begin_write()
                         .doing(StorageError::Flush, &path_save)
                         .attach_with(|| format!("buffered entries: {}", changes.len()))?;
@@ -275,7 +326,20 @@ impl RedbStore {
                         utils::clear_committed(&mut pending_save.lock(), &changes);
                         Ok(())
                     }
-                    Err(report) => Err(format!("{report:#}")),
+                    Err(report) => {
+                        // Retrying against a handle that answers `PreviousIo`
+                        // is spinning: it has stopped going near the disk at
+                        // all. Trading it for a fresh one is the only thing
+                        // that turns a recovered disk back into a working
+                        // store, and the next attempt of this same retry loop
+                        // is the one that lands.
+                        if is_previous_io(&report)
+                            && let Err(failed) = reopen(&db_save, &path_save)
+                        {
+                            return Err(format!("{report:#}; and {failed:#}"));
+                        }
+                        Err(format!("{report:#}"))
+                    }
                 }
             },
         );
@@ -319,7 +383,7 @@ impl RedbStore {
 
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .doing(StorageError::Read, &self.inner.path)
             .attach_with(|| format!("key: {path}"))?;
@@ -363,8 +427,9 @@ impl SchemaAwareStore for RedbStore {
             }
         }
 
+        let db = self.inner.db()?;
         let provider = RedbProvider {
-            db: &self.inner.db,
+            db: &db,
             path: &self.inner.path,
         };
         let engine = MigrationEngine::new(&provider);
@@ -384,7 +449,7 @@ impl StoreBackend for RedbStore {
 
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .doing(StorageError::Read, &self.inner.path)
             .attach_with(|| format!("key: {path}"))?;
@@ -426,7 +491,7 @@ impl StoreBackend for RedbStore {
 
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .doing(StorageError::Read, &self.inner.path)
             .attach_with(|| format!("key: {path}"))?;
@@ -528,7 +593,7 @@ impl StoreBackend for RedbStore {
 
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .doing(StorageError::Scan, &self.inner.path)
             .attach_with(|| format!("prefix: {prefix}"))?;
@@ -582,7 +647,7 @@ impl StoreBackend for RedbStore {
 
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .doing(StorageError::Scan, &self.inner.path)
             .attach_with(|| format!("prefix: {prefix}"))?;
@@ -734,7 +799,7 @@ impl StoreBackend for RedbStore {
         let key = utils::init_key(namespace);
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .doing(StorageError::Meta, &self.inner.path)
             .attach_with(|| format!("namespace: {namespace}"))?;
@@ -808,7 +873,7 @@ mod tests {
         store.set(["config", "port"], &8080u16).unwrap();
 
         {
-            let read_txn = store.inner.db.begin_read().unwrap();
+            let read_txn = store.inner.db().unwrap().begin_read().unwrap();
             let table = read_txn.open_table(TABLE_DATA).unwrap();
             assert!(table.get("config.port").unwrap().is_none());
         }
@@ -816,7 +881,7 @@ mod tests {
         thread::sleep(Duration::from_millis(500));
 
         {
-            let read_txn = store.inner.db.begin_read().unwrap();
+            let read_txn = store.inner.db().unwrap().begin_read().unwrap();
             let table = read_txn.open_table(TABLE_DATA).unwrap();
             assert!(table.get("config.port").unwrap().is_some());
         }
@@ -837,7 +902,7 @@ mod tests {
 
         store.save_now().unwrap();
 
-        let read_txn = store.inner.db.begin_read().unwrap();
+        let read_txn = store.inner.db().unwrap().begin_read().unwrap();
         let table = read_txn.open_table(TABLE_DATA).unwrap();
         assert!(table.get("temp.key").unwrap().is_none());
     }
@@ -913,7 +978,7 @@ mod tests {
             assert_eq!(pending.len(), 3);
         }
         {
-            let read_txn = store.inner.db.begin_read().unwrap();
+            let read_txn = store.inner.db().unwrap().begin_read().unwrap();
             let table = read_txn.open_table(TABLE_DATA).unwrap();
             assert!(table.get("net.host").unwrap().is_none());
             assert!(table.get("ui.theme").unwrap().is_none());
@@ -924,7 +989,7 @@ mod tests {
             .unwrap();
 
         {
-            let read_txn = store.inner.db.begin_read().unwrap();
+            let read_txn = store.inner.db().unwrap().begin_read().unwrap();
             let table = read_txn.open_table(TABLE_DATA).unwrap();
             assert_eq!(
                 store
@@ -965,7 +1030,7 @@ mod tests {
             );
         }
         {
-            let read_txn = store.inner.db.begin_read().unwrap();
+            let read_txn = store.inner.db().unwrap().begin_read().unwrap();
             let table = read_txn.open_table(TABLE_DATA).unwrap();
             assert!(
                 table.get("ui.theme").unwrap().is_some(),
@@ -1159,5 +1224,32 @@ mod tests {
         );
 
         SIMULATE_WRITE_FAILURE.store(false, Ordering::Relaxed);
+    }
+
+    /// The flush a short-lived process depends on is the one nobody is left to
+    /// ask about: `Drop` has no caller to hand an error to. It leaves a line
+    /// instead, and this is what fails if that line ever goes away.
+    #[test]
+    #[serial]
+    #[tracing_test::traced_test]
+    fn a_closing_flush_that_fails_leaves_a_trace() {
+        let path = unique_path("redb_closing_flush");
+        let _disk = recovery::arm_failing_disk(&path);
+
+        let mut config = StoreConfig::new(&path);
+        config.save_debounce = Duration::from_secs(60);
+        let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
+
+        store
+            .set(StorePath::from_segments(["lost"]), &1u32)
+            .unwrap();
+
+        recovery::WRITES_LEFT.store(0, Ordering::SeqCst);
+        drop(store);
+
+        assert!(
+            logs_contain("the store's closing flush failed"),
+            "a store that could not write on the way out said nothing"
+        );
     }
 }

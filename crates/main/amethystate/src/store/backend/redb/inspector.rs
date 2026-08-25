@@ -24,7 +24,7 @@ impl InspectorBackend for RedbStore {
     fn get_schema_snapshots(&self) -> StorageResult<Vec<(String, SchemaSnapshot)>> {
         let read_txn = self
             .inner
-            .db
+            .db()?
             .begin_read()
             .change_context(StorageError::Meta)
             .attach_with(|| format!("store: {}", self.inner.path.display()))?;
