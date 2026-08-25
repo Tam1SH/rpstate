@@ -129,6 +129,16 @@ pub trait StoreBackend: Send + Sync + 'static {
     #[doc = include_str!("scan_contract.md")]
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>>;
 
+    /// Whether this store was asked to read large collections on more than one
+    /// core - [`StoreConfig::parallel_reads`](crate::store::config::StoreConfig).
+    ///
+    /// Defaulted so a backend implemented outside this crate need not know the
+    /// question exists; answering `false` only means its reads stay on the
+    /// calling thread, which is what they did before the question was asked.
+    fn parallel_reads(&self) -> bool {
+        false
+    }
+
     fn save_now(&self) -> StorageResult<()>;
 
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId;

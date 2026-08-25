@@ -53,6 +53,20 @@ pub struct StoreConfig {
     pub watch_interval: Duration,
     pub retry_policy: RetryPolicy,
     pub on_persist_failure: Option<PersistFailureCallback>,
+
+    /// Whether reading a large collection back may use more than one core.
+    ///
+    /// Parsing every stored key and decoding every value is around four
+    /// hundred milliseconds of a million-entry open, and dividing them takes
+    /// that to about eighty. Off by default: this is a thread pool inside a
+    /// state library, and an application that already has one should say
+    /// whether it wants a second. Nothing is spawned while this is false -
+    /// rayon builds its pool on first use.
+    ///
+    /// Small collections are unaffected either way. Below roughly a thousand
+    /// entries the handing out costs more than the work, and the split does
+    /// not happen there.
+    pub parallel_reads: bool,
 }
 
 impl StoreConfig {
@@ -66,6 +80,7 @@ impl StoreConfig {
                 budget: Duration::from_secs(60),
             },
             on_persist_failure: None,
+            parallel_reads: false,
         }
     }
 }

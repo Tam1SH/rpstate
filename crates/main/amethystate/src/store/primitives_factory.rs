@@ -58,12 +58,32 @@ where
     let path_log: Arc<str> = Arc::from(path.as_str());
     let on_delete = default.clone();
 
+    let unreadable = crate::reactive::field::Unreadable::default();
+    let unreadable_sub = unreadable.clone();
+    let on_unreadable = default.clone();
+
     let id = store.subscribe(
         SubscriptionKind::ExactPath(Arc::from(path.as_str())),
         Arc::new(move |event| match &event.new {
             Some(raw) => match store_clone.decode::<TValue>(raw) {
-                Ok(parsed) => sig_clone.set_forwarded(parsed, event.source),
-                Err(e) => tracing::error!(path = %path_log, error = %e, "decode failed"),
+                Ok(parsed) => {
+                    if let Ok(mut held) = unreadable_sub.lock() {
+                        *held = None;
+                    }
+                    sig_clone.set_forwarded(parsed, event.source)
+                }
+                // The store holds something this field cannot read. Going on
+                // to report the value from before it would be a lie that looks
+                // exactly like a write that worked, so the field says what the
+                // next startup would say and records why - see
+                // `Field::unreadable`.
+                Err(e) => {
+                    tracing::error!(path = %path_log, error = %e, "decode failed");
+                    if let Ok(mut held) = unreadable_sub.lock() {
+                        *held = Some(Arc::from(e.to_string().as_str()));
+                    }
+                    sig_clone.set_forwarded(on_unreadable.clone(), event.source)
+                }
             },
             // The key is gone - from `delete`, or from an edit to the file
             // outside the process. Reporting the default is what the next
@@ -75,6 +95,7 @@ where
 
     Ok(Field {
         inner: Arc::new(crate::reactive::field::FieldInner {
+            unreadable,
             core: FieldCore::new_with_signal(signal),
             path,
             instance_id,
@@ -155,18 +176,59 @@ where
         .scan_prefix(path)
         .attach_with(|| format!("map: {path}"))?;
 
+    // Decoding is the larger half of reading a map back - a value with a few
+    // fields in it costs around two hundred nanoseconds where an integer costs
+    // eleven - and every entry is independent of every other.
+    if store.parallel_reads() && scanned.len() >= PARALLEL_MIN_LEN {
+        use rayon::prelude::*;
+
+        let decoded: Vec<(K, V)> = scanned
+            .par_iter()
+            .with_min_len(PARALLEL_MIN_LEN)
+            .filter_map(|(stored, bytes)| decode_entry(store, path, stored, bytes).transpose())
+            .collect::<StorageResult<Vec<_>>>()?;
+
+        return Ok(decoded.into_iter().collect());
+    }
+
     // Sized from the scan rather than grown into. At a million entries the
     // difference is not a constant factor: a table that grows from nothing
-    // rehashes everything it holds about twenty times on the way up, and that
-    // rehashing was most of what opening a large map cost.
+    // rehashes everything it holds about twenty times on the way up.
     let mut entries = HashMap::with_capacity(scanned.len());
+    for (stored, bytes) in &scanned {
+        if let Some((key, value)) = decode_entry(store, path, stored, bytes)? {
+            entries.insert(key, value);
+        }
+    }
+    Ok(entries)
+}
 
-    for (stored, bytes) in scanned {
+/// How few entries are left on one thread.
+///
+/// Measured rather than guessed: below roughly a thousand, parsing and
+/// decoding are quick enough that handing them out and collecting them back
+/// costs more than doing them in place. The crossover sits nearer three
+/// hundred for both, and this is the round number above it.
+const PARALLEL_MIN_LEN: usize = 1024;
+
+/// One scanned entry as a map key and its value, or `None` for the map's own
+/// path.
+fn decode_entry<K, V>(
+    store: &Store,
+    path: &StorePath,
+    stored: &StorePath,
+    bytes: &[u8],
+) -> StorageResult<Option<(K, V)>>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+{
+    {
         let below = stored.name_under(path);
 
         let name = match below.as_deref() {
             Some(name) => name,
-            None if &stored == path => continue,
+            None if stored == path => return Ok(None),
             None => {
                 return Err(Report::new(StorageError::Path)
                     .attach(format!("map: {path}"))
@@ -183,14 +245,12 @@ where
         })?;
 
         let value = store
-            .decode::<V>(&bytes)
+            .decode::<V>(bytes)
             .attach_with(|| format!("map: {path}"))
             .attach_with(|| format!("entry: {name}"))?;
 
-        entries.insert(key, value);
+        Ok(Some((key, value)))
     }
-
-    Ok(entries)
 }
 
 pub fn reactive_map_with_path_only<K, V, M>(

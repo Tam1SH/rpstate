@@ -323,6 +323,23 @@ impl StoreBuilder {
         self
     }
 
+    /// Lets reading a large collection back use more than one core.
+    ///
+    /// Parsing every stored key and decoding every value is around four
+    /// hundred milliseconds of a million-entry open, and dividing them takes
+    /// that to about eighty. Off by default: this is a thread pool inside a
+    /// state library, and an application that already has one should say
+    /// whether it wants a second. While it is off nothing is spawned - the
+    /// pool is built on first use.
+    ///
+    /// Small collections are unaffected either way: below roughly a thousand
+    /// entries the handing out costs more than the work, and the split does
+    /// not happen.
+    pub fn parallel_reads(mut self, yes: bool) -> Self {
+        self.config.parallel_reads = yes;
+        self
+    }
+
     /// Picks the engine explicitly. Without this the store uses
     /// [`default_backend`].
     ///

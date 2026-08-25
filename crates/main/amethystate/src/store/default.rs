@@ -278,6 +278,9 @@ impl StoreBackend for Store {
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.0.scan_keys(prefix)
     }
+    fn parallel_reads(&self) -> bool {
+        self.0.parallel_reads()
+    }
     fn save_now(&self) -> StorageResult<()> {
         self.0.save_now()
     }

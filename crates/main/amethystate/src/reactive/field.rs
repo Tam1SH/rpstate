@@ -49,7 +49,18 @@ pub(crate) struct FieldInner<TValue> {
     pub(crate) path: StorePath,
     pub(crate) instance_id: Uuid,
     pub(crate) store_sub: Option<Arc<StoreSubscription>>,
+    pub(crate) unreadable: Unreadable,
 }
+
+/// Why the store's value for a field could not be read, while that is the
+/// case.
+///
+/// Set when a change arrives that will not decode into the field's type -
+/// which is not a hypothetical: a value can be edited into a document by hand,
+/// left behind by a migration, or written by a codec that accepted something
+/// it cannot read back. Cleared by the next change that does decode, so a field
+/// says so exactly as long as it is true.
+pub(crate) type Unreadable = Arc<std::sync::Mutex<Option<Arc<str>>>>;
 
 pub struct Field<TValue, M: AccessMode = ReadOnlyMode> {
     pub(crate) inner: Arc<FieldInner<TValue>>,
@@ -142,6 +153,7 @@ where
                 path: self.inner.path.clone(),
                 instance_id: new_instance_id,
                 store_sub: self.inner.store_sub.clone(),
+                unreadable: self.inner.unreadable.clone(),
             }),
             _mode: std::marker::PhantomData,
         }
@@ -167,6 +179,39 @@ where
     /// ```
     pub fn get(&self) -> TValue {
         self.inner.core.get()
+    }
+
+    /// The value, or why it is not the store's.
+    ///
+    /// The fallible twin of [`Field::get`], which is the tolerant one: a read
+    /// keeps answering with something a render function can draw, and this is
+    /// where a caller that cares finds out whether what it drew is what the
+    /// store holds.
+    ///
+    /// `Err` when a change arrived that would not decode into this field's
+    /// type - from an edit to the file outside the process, a migration that
+    /// left something behind, or a codec that accepted a value it cannot read
+    /// back. The field takes its declared default rather than going on
+    /// reporting the value from before, which would be indistinguishable from
+    /// a write that worked, and this says so.
+    ///
+    /// `Ok` again as soon as a change decodes, so it holds for exactly as long
+    /// as it is true. Nothing here fails at the moment of asking: what failed
+    /// happened earlier, and this reports it.
+    pub fn try_get(&self) -> ReactiveFieldResult<TValue> {
+        let unreadable = self
+            .inner
+            .unreadable
+            .lock()
+            .ok()
+            .and_then(|held| held.clone());
+
+        match unreadable {
+            None => Ok(self.get()),
+            Some(reason) => Err(Report::new(FieldError::Storage)
+                .attach(format!("path: {}", self.inner.path))
+                .attach(format!("the stored value could not be read: {reason}"))),
+        }
     }
 
     /// The full path this field is stored under, prefix included.
@@ -562,6 +607,7 @@ where
                 path,
                 instance_id,
                 store_sub: None,
+                unreadable: Unreadable::default(),
             }),
             _mode: std::marker::PhantomData,
         }
@@ -840,6 +886,7 @@ mod tests {
                         id: sub_id,
                     })),
                     instance_id: Default::default(),
+                    unreadable: Unreadable::default(),
                 }),
                 _mode: Default::default(),
             };

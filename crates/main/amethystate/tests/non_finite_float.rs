@@ -1,17 +1,19 @@
 //! What a float that is not a number does to a store.
 //!
 //! `NaN` and the infinities are ordinary `f64` values a GUI produces by
-//! dividing badly, and four of the five engines carry them: msgpack writes the
-//! IEEE bits, and TOML and RON have `nan` and `inf` in their grammars. JSON
-//! does not, and `serde_json` does not refuse it either - it writes `null`,
-//! which reads back as nothing at all.
+//! dividing badly. Three of the five engines carry them: msgpack writes the
+//! IEEE bits, and TOML and RON have `nan` and `inf` in their grammars.
 //!
-//! So this is one engine's problem rather than the document engines' problem,
-//! and the tests below say which is which.
+//! JSON does not, and neither `serde_json` nor `sonic_rs` refuses it - both
+//! write `null`, which reads back as nothing at all. That costs two engines
+//! rather than one, because sqlite stores its values as JSON and nothing in
+//! its name says so.
+//!
+//! So it is a property of the format rather than of the file, and the tests
+//! below say which engines have it.
 
-use amethystate::store::StoreBackend;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::{StoreExt, amethystate};
+use amethystate::amethystate;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
@@ -73,17 +75,20 @@ fn a_format_that_can_hold_it_keeps_it() {
 /// Only a typed read of the same path fails. The same bytes mean two things
 /// depending on which read reaches them.
 ///
-/// The stale value is the part worth pinning, and the part easiest to mistake
-/// for something milder: nothing substitutes a default here, and a field whose
-/// last good value was `5.0` keeps saying `5.0` about a store that holds
-/// nothing.
+/// The handle no longer reports the value from before, which was the worst of
+/// it: a field last set to `5.0` went on saying `5.0` about a store holding
+/// `null`, and that is indistinguishable from a write that worked. It takes
+/// its declared default instead - what the next startup would read - and
+/// `Field::unreadable` says why.
 ///
-/// Pinned as it stands rather than as it should be. The repair belongs in the
-/// codec: a format that cannot represent a value should refuse it at the write,
-/// where the caller still holds the value and can decide what to do.
+/// What is still not right is the write: `set` returns `Ok` for a value the
+/// format cannot hold. A read tolerates and a write complains, so the repair
+/// belongs in the codec, where the caller still has the value.
 #[cfg(all(feature = "json", not(feature = "redb")))]
 #[test]
 fn json_takes_a_write_it_cannot_store() {
+    use amethystate::StoreExt;
+    use amethystate::store::StoreBackend;
     use amethystate::store::builder::Backend;
 
     let path = TempPath::new("nonfinite_json");
@@ -101,12 +106,17 @@ fn json_takes_a_write_it_cannot_store() {
     );
     assert_eq!(
         state.ratio().get(),
-        5.0,
-        "the handle still reports what it held before the write it accepted"
+        0.0,
+        "the handle takes its default rather than going on reporting 5.0"
+    );
+    assert!(
+        state.ratio().try_get().is_err(),
+        "and says so, where `get` tolerates, so the default is not mistaken \
+         for a written value"
     );
     assert!(
         StoreExt::get::<f64>(&store, ratio_path()).is_err(),
-        "a typed read of the same path fails, where the handle did not"
+        "a typed read of the same path fails, where the handle tolerates"
     );
 
     store.save_now().unwrap();
@@ -115,4 +125,47 @@ fn json_takes_a_write_it_cannot_store() {
         document.contains("null"),
         "the document holds nothing where the value was: {document}"
     );
+
+    // And the field says so for exactly as long as it is true.
+    state.ratio().set(1.5).unwrap();
+    assert_eq!(state.ratio().get(), 1.5);
+    assert_eq!(
+        state.ratio().try_get().unwrap(),
+        1.5,
+        "a change that decodes clears it"
+    );
+}
+
+/// sqlite loses it too, and nothing about the engine says why.
+///
+/// It encodes values as JSON - `sonic_rs` rather than `serde_json`, with the
+/// same answer for a float JSON cannot spell. So this is a property of the
+/// format and not of the file it ends up in: two of the five engines carry
+/// JSON, and one of them is not named for it.
+#[cfg(all(feature = "sqlite", not(feature = "redb")))]
+#[test]
+fn sqlite_loses_it_too_because_it_stores_json() {
+    use amethystate::StoreExt;
+    use amethystate::store::builder::Backend;
+
+    let path = TempPath::new("nonfinite_sqlite");
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Sqlite)
+        .build()
+        .unwrap();
+
+    let state = Readings::new_with(&store).unwrap();
+    state.ratio().set(5.0).unwrap();
+
+    assert!(state.ratio().set(f64::NAN).is_ok(), "the write is accepted");
+    assert_eq!(
+        state.ratio().get(),
+        0.0,
+        "the handle takes its default rather than going on reporting 5.0"
+    );
+    assert!(
+        state.ratio().try_get().is_err(),
+        "and says so, as it does on the json engine"
+    );
+    assert!(StoreExt::get::<f64>(&store, ratio_path()).is_err());
 }
