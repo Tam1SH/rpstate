@@ -1,5 +1,5 @@
 use crate::{DefaultArena, FieldHandle};
-use amethystate::{AccessMode, Pipeline, SignalSubscription};
+use amethystate::{Pipeline, SignalSubscription};
 use amethystate_core::Signal;
 use serde::{Serialize, de::DeserializeOwned};
 use std::cell::RefCell;
@@ -36,10 +36,9 @@ where
     }
 }
 
-impl<T, M> ArenaReactive<T> for FieldHandle<T, M>
+impl<T> ArenaReactive<T> for FieldHandle<T>
 where
     T: DeserializeOwned + Serialize + Clone + Send + Sync + PartialEq + 'static,
-    M: AccessMode,
 {
     fn get_with(&self, arena: &DefaultArena) -> T {
         arena.get_field(*self)

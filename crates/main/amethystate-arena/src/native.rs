@@ -1,8 +1,8 @@
 use crate::primitives::*;
 use amethystate::reactive::error::{ReactiveFieldResult, ReactiveMapResult};
 use amethystate::{
-    AccessMode, Field, MapChange, Pipeline, Reactive, ReactiveMap, ReactiveMapKey,
-    ReactiveMapValue, SignalSubscription, WritableMode,
+    Field, MapChange, Pipeline, Reactive, ReactiveMap, ReactiveMapKey, ReactiveMapValue,
+    SignalSubscription,
 };
 use parking_lot::RwLock;
 use serde::{Serialize, de::DeserializeOwned};
@@ -50,10 +50,9 @@ impl Arena {
         f(target)
     }
 
-    pub fn register_field<T, M>(&self, field: Field<T, M>) -> FieldHandle<T, M>
+    pub fn register_field<T>(&self, field: Field<T>) -> FieldHandle<T>
     where
         T: Send + Sync + 'static,
-        M: AccessMode,
     {
         let key = self.storage.write().insert(Box::new(field));
         FieldHandle {
@@ -62,61 +61,57 @@ impl Arena {
         }
     }
 
-    pub fn get_field<T, M>(&self, handle: FieldHandle<T, M>) -> T
+    pub fn get_field<T>(&self, handle: FieldHandle<T>) -> T
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
-        M: AccessMode,
     {
-        self.with_item::<Field<T, M>, _, _>(handle.key, "Field", |field| field.get())
+        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| field.get())
     }
 
-    pub fn set_field<T>(&self, handle: WritableHandle<T>, value: T) -> ReactiveFieldResult<()>
+    pub fn set_field<T>(&self, handle: FieldHandle<T>, value: T) -> ReactiveFieldResult<()>
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
     {
-        self.with_item::<Field<T, WritableMode>, _, _>(handle.key, "Field", |field| {
+        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| {
             field.set(value)
         })
     }
 
-    pub fn subscribe_external_field<T, M, F>(
+    pub fn subscribe_external_field<T, F>(
         &self,
-        handle: FieldHandle<T, M>,
+        handle: FieldHandle<T>,
         callback: F,
     ) -> SignalSubscription
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
-        M: AccessMode,
         F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
-        self.with_item::<Field<T, M>, _, _>(handle.key, "Field", |field| {
+        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| {
             field.subscription_with().external().register(callback)
         })
     }
 
-    pub fn subscribe_field<T, M, F>(
+    pub fn subscribe_field<T, F>(
         &self,
-        handle: FieldHandle<T, M>,
+        handle: FieldHandle<T>,
         callback: F,
     ) -> SignalSubscription
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
-        M: AccessMode,
         F: for<'a> Fn(&'a T) + Send + Sync + 'static,
     {
-        self.with_item::<Field<T, M>, _, _>(handle.key, "Field", |field| field.subscribe(callback))
+        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| field.subscribe(callback))
     }
-    pub fn subscribe_field_with_source<T, M, F>(
+    pub fn subscribe_field_with_source<T, F>(
         &self,
-        handle: FieldHandle<T, M>,
+        handle: FieldHandle<T>,
         callback: F,
     ) -> SignalSubscription
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
-        M: AccessMode,
         F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
     {
-        self.with_item::<Field<T, M>, _, _>(handle.key, "Field", |field| {
+        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| {
             field.subscribe_with_source(callback)
         })
     }
@@ -151,11 +146,10 @@ impl Arena {
         self.with_item::<Pipeline<T>, _, _>(handle.key, "Pipeline", |pipe| pipe.subscribe(callback))
     }
 
-    pub fn register_map<K, V, M>(&self, map: ReactiveMap<K, V, M>) -> MapHandle<K, V, M>
+    pub fn register_map<K, V>(&self, map: ReactiveMap<K, V>) -> MapHandle<K, V>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
     {
         let key = self.storage.write().insert(Box::new(map));
         MapHandle {
@@ -164,22 +158,21 @@ impl Arena {
         }
     }
 
-    pub fn get_map_entry<K, V, M>(
+    pub fn get_map_entry<K, V>(
         &self,
-        handle: MapHandle<K, V, M>,
+        handle: MapHandle<K, V>,
         key: &K,
     ) -> Option<V>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| map.get(key))
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| map.get(key))
     }
 
     pub fn set_map_entry<K, V>(
         &self,
-        handle: WritableMapHandle<K, V>,
+        handle: MapHandle<K, V>,
         key: K,
         value: V,
     ) -> ReactiveMapResult<()>
@@ -187,56 +180,53 @@ impl Arena {
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.insert(key, &value)
         })
     }
 
-    pub fn subscribe_map_any<K, V, M, F>(
+    pub fn subscribe_map_any<K, V, F>(
         &self,
-        handle: MapHandle<K, V, M>,
+        handle: MapHandle<K, V>,
         callback: F,
     ) -> SignalSubscription
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.subscribe_any(callback)
         })
     }
 
-    pub fn subscribe_map_any_external<K, V, M, F>(
+    pub fn subscribe_map_any_external<K, V, F>(
         &self,
-        handle: MapHandle<K, V, M>,
+        handle: MapHandle<K, V>,
         callback: F,
     ) -> SignalSubscription
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.subscription_with().external().register(callback)
         })
     }
 
-    pub fn subscribe_map_key_external<K, V, M, F>(
+    pub fn subscribe_map_key_external<K, V, F>(
         &self,
-        handle: MapHandle<K, V, M>,
+        handle: MapHandle<K, V>,
         key: K,
         callback: F,
     ) -> SignalSubscription
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.subscription_with()
                 .key(key)
                 .external()
@@ -244,19 +234,18 @@ impl Arena {
         })
     }
 
-    pub fn subscribe_map_key<K, V, M, F>(
+    pub fn subscribe_map_key<K, V, F>(
         &self,
-        handle: MapHandle<K, V, M>,
+        handle: MapHandle<K, V>,
         key: K,
         callback: F,
     ) -> SignalSubscription
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.subscribe_key(key, callback)
         })
     }
@@ -265,40 +254,39 @@ impl Arena {
         self.storage.write().remove(handle.key);
     }
 
-    pub fn get_map_entries<K, V, M>(
+    pub fn get_map_entries<K, V>(
         &self,
-        handle: MapHandle<K, V, M>,
+        handle: MapHandle<K, V>,
     ) -> Vec<(K, V)>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
-        M: AccessMode,
     {
-        self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.entries().collect()
         })
     }
 
     pub fn remove_map_entry<K, V>(
         &self,
-        handle: WritableMapHandle<K, V>,
+        handle: MapHandle<K, V>,
         key: &K,
     ) -> ReactiveMapResult<Option<V>>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.remove(key)
         })
     }
 
-    pub fn clear_map<K, V>(&self, handle: WritableMapHandle<K, V>) -> ReactiveMapResult<()>
+    pub fn clear_map<K, V>(&self, handle: MapHandle<K, V>) -> ReactiveMapResult<()>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V, WritableMode>, _, _>(handle.key, "ReactiveMap", |map| {
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
             map.clear()
         })
     }

@@ -8,7 +8,7 @@
 //! model the dispatch shape, nothing else.
 
 use amethystate::store::StorePath;
-use amethystate::{Field, WritableMode};
+use amethystate::Field;
 use amethystate_core::Signal;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -131,7 +131,7 @@ where
     // Real primitive, not a stand-in. `Field::get()` is `self.core.get()` ->
     // `signal.get()` and is identical for stored and volatile fields - the store
     // only participates in `set` - so this is the true cost of a field read.
-    let field: Field<T, WritableMode> =
+    let field: Field<T> =
         Field::new_volatile(StorePath::from_segments(["bench", "value"]), initial);
     group.bench_function("field_real", |b| {
         b.iter(|| black_box(black_box(&field).get()))

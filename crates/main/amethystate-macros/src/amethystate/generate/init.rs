@@ -1,4 +1,4 @@
-use crate::amethystate::generate::accessors::{field_mode, lookup_chain};
+use crate::amethystate::generate::accessors::lookup_chain;
 use crate::amethystate::generate::{parse_default, path_literal};
 use amethystate_macros_core::StoreFieldEntry;
 use proc_macro2::TokenStream as TokenStream2;
@@ -48,7 +48,6 @@ fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> 
             .map(parse_default)
             .unwrap_or_else(|| quote!(::std::default::Default::default()));
 
-        let mode = field_mode(crate_name, e);
         let write_check = if e.export_mut {
             quote_spanned! { target.span() =>
                 fn assert_writable<T>(_: #crate_name::Writable<T>) {}
@@ -69,7 +68,7 @@ fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> 
                     assert_field_type_matches_lookup::<#ty, _>(#chain);
                 };
                 let path = <#parent as #crate_name::StateScope>::PATH.join(&#target_path);
-                #crate_name::store::field_with_path::<#ty, #mode>(store, path, #def, instance_id)?
+                #crate_name::store::field_with_path::<#ty>(store, path, #def, instance_id)?
             }
         }
     } else if e.nested {
@@ -104,7 +103,7 @@ fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> 
         };
 
         quote! {
-            #fname: #crate_name::store::reactive_map_with_path_only::<#k, #v, _>(
+            #fname: #crate_name::store::reactive_map_with_path_only::<#k, #v>(
                 store,
                 #path_expr,
                 #def,

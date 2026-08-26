@@ -7,7 +7,7 @@ use crate::{
 };
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::{IntoStorePath, StorePath};
-use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
+use amethystate_core::{FieldCore, MapChange, ReactiveMapCore, Signal};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -21,7 +21,7 @@ pub fn field<TScope, TValue>(
     key: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue, WritableMode>>
+) -> StorageResult<Field<TValue>>
 where
     TScope: StateScope,
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
@@ -30,15 +30,14 @@ where
     field_with_path(store, path, default, instance_id)
 }
 
-pub fn field_with_path<TValue, M>(
+pub fn field_with_path<TValue>(
     store: &Store,
     path: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue, M>>
+) -> StorageResult<Field<TValue>>
 where
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
-    M: AccessMode,
 {
     let path = crate::store::to_path(path)?;
 
@@ -104,7 +103,6 @@ where
                 id,
             })),
         }),
-        _mode: std::marker::PhantomData,
     })
 }
 
@@ -114,27 +112,26 @@ pub fn reactive_map<TScope, K, V>(
     key: impl IntoStorePath,
     default: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, WritableMode>>
+) -> StorageResult<ReactiveMap<K, V>>
 where
     TScope: StateScope,
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
     let path = TScope::PATH.join(&crate::store::to_path(key)?);
-    reactive_map_with_path::<TScope, _, _, _>(store, path, default, instance_id)
+    reactive_map_with_path::<TScope, _, _>(store, path, default, instance_id)
 }
 
-pub fn reactive_map_with_path<TScope, K, V, M>(
+pub fn reactive_map_with_path<TScope, K, V>(
     store: &Store,
     path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, M>>
+) -> StorageResult<ReactiveMap<K, V>>
 where
     TScope: StateScope,
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    M: AccessMode,
 {
     reactive_map_with_path_only(store, path, defaults, instance_id)
 }
@@ -274,16 +271,15 @@ where
     }
 }
 
-pub fn reactive_map_with_path_only<K, V, M>(
+pub fn reactive_map_with_path_only<K, V>(
     store: &Store,
     path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, M>>
+) -> StorageResult<ReactiveMap<K, V>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    M: AccessMode,
 {
     let path = crate::store::to_path(path)?;
     let mut known_cache = load_map::<K, V>(store, &path)?;
@@ -441,6 +437,5 @@ where
                 id,
             }),
         }),
-        _mode: std::marker::PhantomData,
     })
 }

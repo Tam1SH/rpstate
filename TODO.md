@@ -1949,6 +1949,29 @@ declaration and its four implementations - so a subscription made the way the
 subscriptions chapter teaches records the call site rather than a line in this
 library.
 
+### Pages that go with the access modes and the lookups
+
+Not corrections - these document features that are being removed, so the pages
+come out rather than get fixed. Written down now because the code lands first
+and a book kept while the feature goes is a book that teaches something that is
+not there.
+
+| page | what comes out |
+| --- | --- |
+| `Concepts/defining-structs.md` | the whole *Cross-struct references* section, and four rows of the field-attribute table: `lookup`, `lookup_node`, `parent`, `export_mut` |
+| `Integrations/dioxus.md` | whatever `### use_read_only_field` says about needing a read-only handle |
+| `Integrations/leptos.md` | the same |
+| `Integrations/yew.md` | the same |
+| `Migrations/overview.md` | the *what migrates* row for `lookup` / `lookup_node`, and whatever the dependency ordering says once the graph is demand-driven |
+
+The `lookup` in `Concepts/fields-and-subscriptions.md` is the English word, in
+"use the map for lookup", and stays.
+
+`use_read_only_field` itself stays. It differs from `use_field` by what it
+returns - a signal, with no setter beside it - not by the handle it takes, so
+one handle type does not merge them. What changes is that it now accepts any
+handle, because there is no longer another kind.
+
 ## What tampering with a text document does, found by doing it
 
 `tests/tamper_*.rs` write a store, edit the file the way a person or another

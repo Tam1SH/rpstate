@@ -88,12 +88,12 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// Dropping the returned handle unsubscribes.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     /// # use std::sync::Mutex;
@@ -135,12 +135,12 @@ impl<W: Watchable> Watch<W, Immediate> {
     /// original's.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     /// # use std::sync::Mutex;
@@ -187,14 +187,14 @@ impl<W: Watchable> Watch<W, Local<'_>> {
     /// where each one means something on its own.
     ///
     /// ```
-    /// # use amethystate::{LocalScope, StoreBuilder, WritableMode};
+    /// # use amethystate::{LocalScope, StoreBuilder};
     /// # use amethystate::store::field_with_path;
     /// # use std::cell::RefCell;
     /// # use std::rc::Rc;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -360,14 +360,13 @@ impl<W, D> Watch<W, D> {
     }
 }
 
-impl<K, V, M, D> Watch<crate::ReactiveMap<K, V, M>, D>
+impl<K, V, D> Watch<crate::ReactiveMap<K, V>, D>
 where
     K: crate::ReactiveMapKey,
     V: crate::ReactiveMapValue,
-    M: crate::AccessMode,
 {
     /// Narrows to one key instead of every change in the map.
-    pub fn key(self, key: K) -> Watch<crate::reactive::map::KeyOf<K, V, M>, D> {
+    pub fn key(self, key: K) -> Watch<crate::reactive::map::KeyOf<K, V>, D> {
         Watch {
             source: crate::reactive::map::KeyOf::new(self.source, key),
             external: self.external,

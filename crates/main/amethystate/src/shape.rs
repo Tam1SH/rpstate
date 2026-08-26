@@ -34,7 +34,7 @@ pub trait AnyShape {
 
 impl<T: ?Sized> AnyShape for Probe<T> {}
 
-impl<K, V, M: crate::reactive::AccessMode> Probe<ReactiveMap<K, V, M>> {
+impl<K, V> Probe<ReactiveMap<K, V>> {
     pub const ROLE: Role = Role::Map;
     pub const OPTIONAL: bool = false;
 }

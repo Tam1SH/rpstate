@@ -6,7 +6,7 @@ use crate::store::Durable;
 use crate::store::{
     InitState, StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only,
 };
-use crate::{ReactiveCell, ReactiveMap, Store, WritableMode};
+use crate::{ReactiveCell, ReactiveMap, Store};
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::StorePath;
 use error_stack::{Report, ResultExt};
@@ -272,7 +272,7 @@ impl Kv {
         let path = self.resolve(name)?;
         self.guard(&path)?;
 
-        let field = field_with_path::<T, WritableMode>(
+        let field = field_with_path::<T>(
             &self.store,
             path.clone(),
             default,
@@ -303,7 +303,7 @@ impl Kv {
     /// let columns = kv.namespace("columns");
     /// assert_eq!(columns.get::<u64>("cpu").unwrap(), Some(120));
     /// ```
-    pub fn map<K, V>(&self, name: &str) -> WriteResult<ReactiveMap<K, V, WritableMode>>
+    pub fn map<K, V>(&self, name: &str) -> WriteResult<ReactiveMap<K, V>>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,

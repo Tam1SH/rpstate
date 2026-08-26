@@ -1,8 +1,7 @@
 use crate::MapSignal;
-use amethystate::{AccessMode, MapChange, Pipeline, ReactiveMapKey, ReactiveMapValue};
+use amethystate::{MapChange, Pipeline, ReactiveMapKey, ReactiveMapValue};
 use amethystate_arena::{
-    AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle, PIPELINE_ARENA, WritableHandle,
-    WritableMapHandle,
+    AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle, PIPELINE_ARENA,
 };
 use leptos::callback::Callback;
 use leptos::prelude::*;
@@ -63,7 +62,7 @@ where
     handle
 }
 
-pub fn use_field<T>(handle: WritableHandle<T>) -> (ReadSignal<T>, SignalSetter<T>)
+pub fn use_field<T>(handle: FieldHandle<T>) -> (ReadSignal<T>, SignalSetter<T>)
 where
     T: DeserializeOwned + Serialize + Clone + Send + Sync + PartialEq + 'static,
 {
@@ -101,10 +100,9 @@ where
     (signal, setter)
 }
 
-pub fn use_read_only_field<T, M>(handle: FieldHandle<T, M>) -> ReadSignal<T>
+pub fn use_read_only_field<T>(handle: FieldHandle<T>) -> ReadSignal<T>
 where
     T: DeserializeOwned + Serialize + Clone + Send + Sync + PartialEq + 'static,
-    M: AccessMode,
 {
     let arena = use_context::<DefaultArena>().expect("amethystate-leptos: Arena not found");
     let (signal, set_signal) = signal(arena.get_field(handle));
@@ -147,7 +145,7 @@ where
     signal
 }
 
-pub fn use_map<K, V>(handle: WritableMapHandle<K, V>) -> MapSignal<K, V>
+pub fn use_map<K, V>(handle: MapHandle<K, V>) -> MapSignal<K, V>
 where
     K: ReactiveMapKey + for<'de> Deserialize<'de>,
     V: ReactiveMapValue,
@@ -260,11 +258,10 @@ where
     MapSignal::new(signal, _set, _insert, _remove, _clear)
 }
 
-pub fn use_map_entry<K, V, M>(handle: MapHandle<K, V, M>, key: K) -> ReadSignal<Option<V>>
+pub fn use_map_entry<K, V>(handle: MapHandle<K, V>, key: K) -> ReadSignal<Option<V>>
 where
     K: ReactiveMapKey + for<'de> serde::Deserialize<'de>,
     V: ReactiveMapValue,
-    M: AccessMode,
 {
     let arena = use_context::<DefaultArena>().expect("amethystate-leptos: Arena not found");
     let (signal, set_signal) = signal(arena.get_map_entry(handle, &key));
@@ -291,11 +288,10 @@ where
     signal
 }
 
-pub fn use_map_subscribe_any<K, V, M, F>(handle: MapHandle<K, V, M>, callback: F)
+pub fn use_map_subscribe_any<K, V, F>(handle: MapHandle<K, V>, callback: F)
 where
     K: ReactiveMapKey + for<'de> Deserialize<'de>,
     V: ReactiveMapValue,
-    M: AccessMode,
     F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
 {
     let arena = use_context::<DefaultArena>().expect("amethystate-leptos: Arena not found");
@@ -303,11 +299,10 @@ where
     on_cleanup(move || drop(sub));
 }
 
-pub fn use_map_subscribe_key<K, V, M, F>(handle: MapHandle<K, V, M>, key: K, callback: F)
+pub fn use_map_subscribe_key<K, V, F>(handle: MapHandle<K, V>, key: K, callback: F)
 where
     K: ReactiveMapKey + for<'de> Deserialize<'de>,
     V: ReactiveMapValue,
-    M: AccessMode,
     F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
 {
     let arena = use_context::<DefaultArena>().expect("amethystate-leptos: Arena not found");

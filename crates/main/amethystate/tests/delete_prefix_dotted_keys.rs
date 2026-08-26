@@ -5,7 +5,6 @@
 
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
-use amethystate_core::access::WritableMode;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::collections::HashMap;
@@ -17,7 +16,7 @@ use uuid::Uuid;
 fn deleting_a_subtree_takes_the_dotted_names_with_it() {
     let path = TempPath::new("delete_prefix_dotted");
     let store = StoreBuilder::new(path.path()).build().unwrap();
-    let map = reactive_map_with_path_only::<String, u32, WritableMode>(
+    let map = reactive_map_with_path_only::<String, u32>(
         &store,
         ["dotted", "items"],
         HashMap::new(),
@@ -32,7 +31,7 @@ fn deleting_a_subtree_takes_the_dotted_names_with_it() {
     drop(map);
     store.delete_prefix(["dotted"]).unwrap();
 
-    let reopened = reactive_map_with_path_only::<String, u32, WritableMode>(
+    let reopened = reactive_map_with_path_only::<String, u32>(
         &store,
         ["dotted", "items"],
         HashMap::new(),

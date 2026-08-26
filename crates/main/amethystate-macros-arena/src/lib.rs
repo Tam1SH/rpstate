@@ -51,19 +51,13 @@ pub fn amethystate_framework_arena(_args: TokenStream, input: TokenStream) -> To
         let fvis = &e.vis;
         let ty = &e.ty;
 
-        let mode = if e.lookup.is_some() && !e.export_mut {
-            quote!(::amethystate::ReadOnlyMode)
-        } else {
-            quote!(::amethystate::WritableMode)
-        };
-
         if e.nested || e.lookup_node.is_some() {
             let nested_handle = format_ident!("{}Handle", get_type_ident_str(ty));
             quote! { #fvis #fname: #nested_handle }
         } else if let Some((k, v)) = e.get_map_types() {
-            quote! { #fvis #fname: #amethystate_arena::MapHandle<#k, #v, #mode> }
+            quote! { #fvis #fname: #amethystate_arena::MapHandle<#k, #v> }
         } else {
-            quote! { #fvis #fname: #amethystate_arena::FieldHandle<#ty, #mode> }
+            quote! { #fvis #fname: #amethystate_arena::FieldHandle<#ty> }
         }
     });
 

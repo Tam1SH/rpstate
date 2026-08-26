@@ -7,7 +7,6 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
 use amethystate::store::{StorageError, StoreBackend};
-use amethystate_core::access::WritableMode;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::collections::HashMap;
@@ -45,7 +44,7 @@ fn a_map_entry_of_the_wrong_type_does_not_read_back_as_a_default() {
     store.set(["cols", "cpu"], &"wide".to_string()).unwrap();
     store.save_now().unwrap();
 
-    let err = reactive_map_with_path_only::<String, u32, WritableMode>(
+    let err = reactive_map_with_path_only::<String, u32>(
         &store,
         ["cols"],
         HashMap::new(),
@@ -68,7 +67,7 @@ fn a_map_default_whose_key_is_empty_fails_rather_than_vanishing() {
     let store = StoreBuilder::new(path.path()).build().unwrap();
 
     let defaults = HashMap::from([(String::new(), 1u32)]);
-    let err = reactive_map_with_path_only::<String, u32, WritableMode>(
+    let err = reactive_map_with_path_only::<String, u32>(
         &store,
         ["sizes"],
         defaults,

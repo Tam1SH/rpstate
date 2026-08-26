@@ -32,11 +32,9 @@ pub(crate) fn field_type(crate_name: &TokenStream2, e: &StoreFieldEntry) -> Toke
     if e.nested || e.lookup_node.is_some() {
         quote! { ::std::sync::Arc<#ty> }
     } else if let Some((k, v)) = e.get_map_types() {
-        let mode = field_mode(crate_name, e);
-        quote! { #crate_name::ReactiveMap<#k, #v, #mode> }
+        quote! { #crate_name::ReactiveMap<#k, #v> }
     } else {
-        let mode = field_mode(crate_name, e);
-        quote! { #crate_name::Field<#ty, #mode> }
+        quote! { #crate_name::Field<#ty> }
     }
 }
 
@@ -64,16 +62,14 @@ pub(crate) fn methods<'a>(
         if e.nested || e.lookup_node.is_some() {
             quote! { pub fn #fname(&self) -> ::std::sync::Arc<#ty> { self.#fname.clone() } }
         } else if let Some((k, v)) = e.get_map_types() {
-            let mode = field_mode(crate_name, e);
             quote! {
-                pub fn #fname(&self) -> #crate_name::ReactiveMap<#k, #v, #mode> {
+                pub fn #fname(&self) -> #crate_name::ReactiveMap<#k, #v> {
                     self.#fname.clone()
                 }
             }
         } else {
-            let mode = field_mode(crate_name, e);
             quote! {
-                pub fn #fname(&self) -> #crate_name::Field<#ty, #mode> {
+                pub fn #fname(&self) -> #crate_name::Field<#ty> {
                     self.#fname.clone()
                 }
             }
@@ -229,16 +225,4 @@ pub(crate) fn lookup_chain(
         chain = quote! { #chain.#m() };
     }
     chain
-}
-
-pub(crate) fn field_mode(crate_name: &TokenStream2, e: &StoreFieldEntry) -> TokenStream2 {
-    if e.lookup.is_some() {
-        if e.export_mut {
-            quote!(#crate_name::WritableMode)
-        } else {
-            quote!(#crate_name::ReadOnlyMode)
-        }
-    } else {
-        quote!(#crate_name::WritableMode)
-    }
 }

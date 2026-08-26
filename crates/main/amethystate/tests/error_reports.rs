@@ -14,7 +14,6 @@ use amethystate::Field;
 use amethystate::store::StoreBackend;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
-use amethystate_core::access::WritableMode;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::collections::HashMap;
@@ -89,7 +88,7 @@ fn a_map_entry_that_will_not_read() {
     store.set(["cols", "cpu"], &"wide".to_string()).unwrap();
     store.save_now().unwrap();
 
-    let err = reactive_map_with_path_only::<String, u32, WritableMode>(
+    let err = reactive_map_with_path_only::<String, u32>(
         &store,
         ["cols"],
         HashMap::new(),
@@ -105,7 +104,7 @@ fn a_map_entry_that_will_not_read() {
 fn a_map_default_with_an_empty_key() {
     let (_dir, store) = store("report_empty_default");
 
-    let err = reactive_map_with_path_only::<String, u32, WritableMode>(
+    let err = reactive_map_with_path_only::<String, u32>(
         &store,
         ["sizes"],
         HashMap::from([(String::new(), 1u32)]),
@@ -205,7 +204,7 @@ fn a_field_write_an_interceptor_turned_down() {
 /// the whole of what happens, so the report is the only thing the caller gets.
 #[test]
 fn a_volatile_field_write_an_interceptor_turned_down() {
-    let session: Field<String, WritableMode> = Field::new_volatile(
+    let session: Field<String> = Field::new_volatile(
         StorePath::from_segments(["app", "session"]),
         "anonymous".to_string(),
     );

@@ -4,8 +4,7 @@ use amethystate::store::field_with_path;
 use amethystate::test_utils::unique_store;
 use amethystate::{MapChange, Store, amethystate, uuid};
 use amethystate_arena::{
-    DefaultArena, IntoArenaPipeline, PIPELINE_ARENA, PipelineHandle, WritableHandle,
-    WritableMapHandle,
+    DefaultArena, FieldHandle, IntoArenaPipeline, MapHandle, PIPELINE_ARENA, PipelineHandle,
 };
 use amethystate_dioxus::{
     AmeStateProvider, MapSignal, use_amethystate, use_field, use_map, use_map_subscribe_any,
@@ -56,7 +55,7 @@ impl amethystate::StateScope for DummyScope {
 #[derive(Clone, Props)]
 struct FieldTestProps {
     arena: DefaultArena,
-    handle: WritableHandle<i32>,
+    handle: FieldHandle<i32>,
     probe: Probe<i32>,
     setter_probe: Probe<Callback<i32>>,
 }
@@ -136,7 +135,7 @@ async fn test_use_field_requirements() {
 #[derive(Clone, Props)]
 struct MapTestProps {
     arena: DefaultArena,
-    handle: WritableMapHandle<String, String>,
+    handle: MapHandle<String, String>,
     probe: Probe<HashMap<String, String>>,
     methods_probe: Probe<MapSignal<String, String>>,
 }
@@ -161,7 +160,7 @@ async fn test_use_map_requirements() {
     let store = unique_store("map");
     let arena = DefaultArena::new();
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String>(
         &store,
         ["map_1"],
         HashMap::new(),
@@ -227,7 +226,7 @@ async fn test_use_map_requirements() {
 #[derive(Clone, Props)]
 struct PipelineProps {
     arena: DefaultArena,
-    dep_handle: WritableHandle<i32>,
+    dep_handle: FieldHandle<i32>,
     probe: Probe<i32>,
     handle_probe: Probe<PipelineHandle<i32>>,
 }
@@ -421,7 +420,7 @@ async fn test_use_amethystate_requirements() {
 #[derive(Clone, Props)]
 struct MapSubProps {
     arena: DefaultArena,
-    handle: WritableMapHandle<String, String>,
+    handle: MapHandle<String, String>,
     any_changes: Arc<Mutex<Vec<MapChange<String, String>>>>,
     key_changes: Arc<Mutex<Vec<MapChange<String, String>>>>,
 }
@@ -452,7 +451,7 @@ async fn test_map_sub_requirements() {
     let store = unique_store("sub");
     let arena = DefaultArena::new();
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String>(
         &store,
         ["map_2"],
         HashMap::new(),
@@ -503,8 +502,8 @@ async fn test_map_sub_requirements() {
 #[derive(Clone, Props)]
 struct AllPrimitivesProps {
     arena: DefaultArena,
-    field_handle: WritableHandle<i32>,
-    map_handle: WritableMapHandle<String, String>,
+    field_handle: FieldHandle<i32>,
+    map_handle: MapHandle<String, String>,
 
     field_probe: Probe<i32>,
     map_probe: Probe<HashMap<String, String>>,
@@ -563,8 +562,8 @@ fn AllPrimitivesComponent(props: AllPrimitivesProps) -> Element {
 #[derive(Clone, Props)]
 struct AllPrimitivesToggleProps {
     arena: DefaultArena,
-    field_handle: WritableHandle<i32>,
-    map_handle: WritableMapHandle<String, String>,
+    field_handle: FieldHandle<i32>,
+    map_handle: MapHandle<String, String>,
 
     field_probe: Probe<i32>,
     map_probe: Probe<HashMap<String, String>>,
@@ -622,7 +621,7 @@ async fn test_all_primitives_simultaneous_lifecycle() {
     .unwrap();
     let field_handle = arena.register_field(field);
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String>(
         &store,
         ["map_all"],
         HashMap::new(),
@@ -742,8 +741,8 @@ async fn test_all_primitives_simultaneous_lifecycle() {
 #[derive(Clone, Props)]
 struct PipelineLifecycleProps {
     arena: DefaultArena,
-    field_a: WritableHandle<i32>,
-    field_b: WritableHandle<i32>,
+    field_a: FieldHandle<i32>,
+    field_b: FieldHandle<i32>,
     probe: Probe<String>,
     signal_probe: Probe<Signal<bool>>,
 }
@@ -757,8 +756,8 @@ impl PartialEq for PipelineLifecycleProps {
 #[component]
 fn PipelineLifecycleInner(
     arena: DefaultArena,
-    field_a: WritableHandle<i32>,
-    field_b: WritableHandle<i32>,
+    field_a: FieldHandle<i32>,
+    field_b: FieldHandle<i32>,
     probe: Probe<String>,
 ) -> Element {
     let val = use_pipeline(move || (field_a, field_b).pipe().map(|(a, b)| format!("{a}:{b}")));

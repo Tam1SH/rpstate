@@ -17,6 +17,27 @@ deliberate: every one of them is.
 
 ### Breaking
 
+- **A handle no longer carries an access mode.** `Field<T, M>` is `Field<T>`,
+  `ReactiveMap<K, V, M>` is `ReactiveMap<K, V>`, and `AccessMode`,
+  `ReadOnlyMode`, `WritableMode`, `ReadOnlyField`, `WritableField`,
+  `ReadOnlyReactiveMap` and `WritableReactiveMap` are gone, along with the
+  arena's `ReadOnlyHandle`, `WritableHandle`, `ReadOnlyMapHandle` and
+  `WritableMapHandle` - a handle is a `FieldHandle<T>` or a `MapHandle<K, V>`.
+  Drop the mode argument; nothing else about a call site changes.
+
+  The mode had one producer - `#[amestate(lookup)]` without `export_mut` - and
+  the guarantee it bought did not survive leaving the process: the client side
+  behind tauri has no mode parameter at all, so a field that could not be
+  written here was freely writable there. A promise kept in one process and
+  dropped in another is worse than no promise, and the cost was a type parameter
+  in every signature a user writes.
+
+  Cross-struct `lookup` still checks at compile time that it names a field of
+  the right type; that runs through `ReadOnly<T>` / `Writable<T>` on the
+  generated schema probes, which is a separate mechanism. What it no longer does
+  is make the resulting handle unwritable. `use_read_only_field` in the dioxus,
+  leptos and yew adapters is unaffected - it differs from `use_field` by
+  returning a signal with no setter, and now takes any handle.
 - **`SchemaDiff` reports added and removed paths, and nothing about types.**
   `type_changed` and `FieldTypeChange` are gone, along with the per-field
   `type_hash` in the stored snapshot that fed them. Comparing the remaining

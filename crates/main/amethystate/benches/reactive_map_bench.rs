@@ -12,13 +12,13 @@
 #![allow(clippy::unit_arg)]
 
 use amethystate::store::StoreBackend;
-use amethystate::{ReactiveMap, Store, StoreBuilder, WritableMode};
+use amethystate::{ReactiveMap, Store, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
-type Map = ReactiveMap<String, u64, WritableMode>;
+type Map = ReactiveMap<String, u64>;
 
 /// A stored value with more than one field in it, which is what a declared
 /// struct actually is.

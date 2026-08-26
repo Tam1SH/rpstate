@@ -2,12 +2,12 @@ use crate::reactive::cell::CellCommit;
 use crate::reactive::cell::ReactiveCell;
 use crate::reactive::error::WriteError;
 use crate::store::StoreBackend;
-use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue, WritableMode};
+use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::{MapChange, Signal};
 use error_stack::{Report, ResultExt};
 use std::sync::Arc;
 
-impl<K, V> ReactiveMap<K, V, WritableMode>
+impl<K, V> ReactiveMap<K, V>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
@@ -106,10 +106,7 @@ where
                         .attach(format!("entry: {write_key}"))
                         .attach("writing through a cell whose map has been dropped")
                 })?;
-                let map = ReactiveMap::<K, V, WritableMode> {
-                    inner,
-                    _mode: std::marker::PhantomData,
-                };
+                let map = ReactiveMap::<K, V> { inner };
                 map.update(&write_key, &value)
             }),
             Some(Arc::new(move || alive.strong_count() > 0)),

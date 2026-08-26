@@ -3,13 +3,12 @@ pub use amethystate_core::primitives::pipeline::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WritableMode;
     use crate::reactive::Field;
     use amethystate_core::path::StorePath;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    fn field<T>(value: T) -> Field<T, WritableMode>
+    fn field<T>(value: T) -> Field<T>
     where
         T: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + Sync + 'static,
     {

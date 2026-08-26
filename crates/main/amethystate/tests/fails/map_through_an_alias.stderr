@@ -2,14 +2,14 @@ error[E0308]: `?` operator has incompatible types
  --> tests/fails/map_through_an_alias.rs:6:1
   |
 6 | #[amethystate(prefix = "aliased")]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Field<ReactiveMap<String, String>, ...>`, found `Field<HashMap<_, _, _>, _>`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Field<ReactiveMap<String, String>>`, found `Field<HashMap<_, _, _>>`
   |
-  = note: `?` operator cannot convert from `amethystate::Field<HashMap<_, _, _>, _>` to `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>, WritableMode>`
-  = note: expected struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>, WritableMode>`
-             found struct `amethystate::Field<HashMap<_, _, _>, _>`
+  = note: `?` operator cannot convert from `amethystate::Field<HashMap<_, _, _>>` to `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`
+  = note: expected struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`
+             found struct `amethystate::Field<HashMap<_, _, _>>`
   = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0599]: the method `fork_with_id` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>, WritableMode>`, but its trait bounds were not satisfied
+error[E0599]: the method `fork_with_id` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`, but its trait bounds were not satisfied
  --> tests/fails/map_through_an_alias.rs:6:1
   |
 6 | #[amethystate(prefix = "aliased")]
@@ -17,8 +17,8 @@ error[E0599]: the method `fork_with_id` exists for struct `amethystate::Field<am
   |
  ::: src/reactive/map.rs
   |
-  | pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
-  | ---------------------------------------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
+  | pub struct ReactiveMap<K, V> {
+  | ---------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
   |
   = note: the following trait bounds were not satisfied:
           `amethystate::ReactiveMap<std::string::String, std::string::String>: Serialize`
@@ -27,7 +27,7 @@ error[E0599]: the method `fork_with_id` exists for struct `amethystate::Field<am
           which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
   = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0599]: the method `subscribe` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>, WritableMode>`, but its trait bounds were not satisfied
+error[E0599]: the method `subscribe` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`, but its trait bounds were not satisfied
  --> tests/fails/map_through_an_alias.rs:6:1
   |
 6 | #[amethystate(prefix = "aliased")]
@@ -35,8 +35,8 @@ error[E0599]: the method `subscribe` exists for struct `amethystate::Field<ameth
   |
  ::: src/reactive/map.rs
   |
-  | pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
-  | ---------------------------------------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
+  | pub struct ReactiveMap<K, V> {
+  | ---------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
   |
   = note: the following trait bounds were not satisfied:
           `amethystate::ReactiveMap<std::string::String, std::string::String>: Serialize`
@@ -45,7 +45,7 @@ error[E0599]: the method `subscribe` exists for struct `amethystate::Field<ameth
           which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
   = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0599]: the method `subscription_with` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>, WritableMode>`, but its trait bounds were not satisfied
+error[E0599]: the method `subscription_with` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`, but its trait bounds were not satisfied
  --> tests/fails/map_through_an_alias.rs:6:1
   |
 6 | #[amethystate(prefix = "aliased")]
@@ -53,8 +53,8 @@ error[E0599]: the method `subscription_with` exists for struct `amethystate::Fie
   |
  ::: src/reactive/map.rs
   |
-  | pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
-  | ---------------------------------------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
+  | pub struct ReactiveMap<K, V> {
+  | ---------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
   |
   = note: the following trait bounds were not satisfied:
           `amethystate::ReactiveMap<std::string::String, std::string::String>: Serialize`

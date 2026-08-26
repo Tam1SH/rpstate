@@ -91,7 +91,7 @@ async fn test_use_map_requirements() {
     let store = unique_store("map");
     let arena = DefaultArena::new();
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String>(
         &store,
         ["map_1"],
         HashMap::new(),
@@ -201,7 +201,7 @@ async fn test_map_sub_requirements() {
     let store = unique_store("sub");
     let arena = DefaultArena::new();
 
-    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
+    let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String>(
         &store,
         ["map_2"],
         HashMap::new(),

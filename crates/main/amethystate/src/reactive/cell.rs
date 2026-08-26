@@ -377,7 +377,7 @@ mod tests {
         const KEY: &'static str = "ui";
     }
 
-    fn stored_field(store: &Store, name: &'static str, default: u64) -> crate::WritableField<u64> {
+    fn stored_field(store: &Store, name: &'static str, default: u64) -> crate::Field<u64> {
         crate::store::field::<UiScope, u64>(store, [name], default, Uuid::new_v4()).expect("field")
     }
 

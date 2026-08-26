@@ -3,7 +3,6 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::reactive_map_with_path_only;
 use amethystate::{AmeData, migrate};
-use amethystate_core::access::WritableMode;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use std::collections::HashMap;
@@ -46,8 +45,8 @@ fn defaults() -> HashMap<String, u32> {
     d
 }
 
-fn open_map(store: &amethystate::Store) -> amethystate::ReactiveMap<String, u32, WritableMode> {
-    reactive_map_with_path_only::<String, u32, WritableMode>(
+fn open_map(store: &amethystate::Store) -> amethystate::ReactiveMap<String, u32> {
+    reactive_map_with_path_only::<String, u32>(
         store,
         ["items"],
         defaults(),

@@ -5,7 +5,7 @@ use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::Durable;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{StoreBackend, SubscriptionId};
-use crate::{AccessMode, ReadOnlyMode, Store, WritableMode};
+use crate::Store;
 use amethystate_core::path::StorePath;
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use error_stack::{Report, ResultExt};
@@ -28,12 +28,12 @@ impl Drop for StoreSubscription {
 /// A single persisted value with a live signal behind it.
 ///
 /// ```
-/// # use amethystate::{StoreBuilder, WritableMode};
+/// # use amethystate::StoreBuilder;
 /// # use amethystate::store::field_with_path;
 /// # use std::sync::Arc;
 /// # let path = amethystate_core::test_utils::TempPath::new("doc");
 /// # let store = StoreBuilder::new(&*path).build().unwrap();
-/// let port = field_with_path::<u16, WritableMode>(
+/// let port = field_with_path::<u16>(
 ///     &store,
 ///     ["net", "port"],
 ///     8080,
@@ -62,18 +62,13 @@ pub(crate) struct FieldInner<TValue> {
 /// says so exactly as long as it is true.
 pub(crate) type Unreadable = Arc<std::sync::Mutex<Option<Arc<str>>>>;
 
-pub struct Field<TValue, M: AccessMode = ReadOnlyMode> {
+pub struct Field<TValue> {
     pub(crate) inner: Arc<FieldInner<TValue>>,
-    pub(crate) _mode: std::marker::PhantomData<M>,
 }
 
-pub type ReadOnlyField<TValue> = Field<TValue, ReadOnlyMode>;
-pub type WritableField<TValue> = Field<TValue, WritableMode>;
-
-impl<TValue, M> std::fmt::Debug for Field<TValue, M>
+impl<TValue> std::fmt::Debug for Field<TValue>
 where
     TValue: FieldValue + std::fmt::Debug,
-    M: AccessMode,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Field")
@@ -88,19 +83,17 @@ where
 ///
 /// [`Field::fork`] is the one that gives a new id, which is what a
 /// subscription uses to tell whose write it is looking at - see [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
-impl<TValue, M: AccessMode> Clone for Field<TValue, M> {
+impl<TValue> Clone for Field<TValue> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            _mode: std::marker::PhantomData,
         }
     }
 }
 
-impl<TValue, M> Field<TValue, M>
+impl<TValue> Field<TValue>
 where
     TValue: FieldValue,
-    M: AccessMode,
 {
     /// The same value under a new instance id.
     ///
@@ -113,12 +106,12 @@ where
     /// changes the watching handle made itself:
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::{Arc, Mutex};
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -155,7 +148,6 @@ where
                 store_sub: self.inner.store_sub.clone(),
                 unreadable: self.inner.unreadable.clone(),
             }),
-            _mode: std::marker::PhantomData,
         }
     }
 
@@ -166,12 +158,12 @@ where
     /// the process edits the store.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -221,12 +213,12 @@ where
     /// macro's business - see [`macro@crate::amethystate`].
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     /// assert_eq!(port.path().segments().collect::<Vec<_>>(), ["net", "port"]);
@@ -262,12 +254,12 @@ where
     /// Reach it through [`Field::subscription_with`] and [`Watch::local`].
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// # let host = field_with_path::<String, WritableMode>(
+    /// # let host = field_with_path::<String>(
     /// #     &store, ["net", "host"], "localhost".to_string(),
     /// #     amethystate::uuid::Uuid::new_v4(),
     /// # ).unwrap();
@@ -298,10 +290,9 @@ where
     }
 }
 
-impl<TValue, M> Watchable for Field<TValue, M>
+impl<TValue> Watchable for Field<TValue>
 where
     TValue: FieldValue,
-    M: AccessMode,
 {
     type Item = TValue;
 
@@ -318,7 +309,7 @@ where
     }
 }
 
-impl<TValue> Field<TValue, WritableMode>
+impl<TValue> Field<TValue>
 where
     TValue: FieldValue,
 {
@@ -332,13 +323,13 @@ where
     /// for as long as it is held - and keeps the store open for that long too.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// let width = {
-    ///     let field = field_with_path::<u64, WritableMode>(
+    ///     let field = field_with_path::<u64>(
     ///         &store,
     ///         ["ui", "width"],
     ///         800,
@@ -410,10 +401,7 @@ where
             cache,
             Arc::new(move |value| {
                 let inner = weak.upgrade().ok_or(FieldError::SourceGone)?;
-                let field = Field::<TValue, WritableMode> {
-                    inner,
-                    _mode: std::marker::PhantomData,
-                };
+                let field = Field::<TValue> { inner };
                 field.set(value)
             }),
             Some(Arc::new(move || alive.strong_count() > 0)),
@@ -430,12 +418,12 @@ where
     /// cheaper to adjust in place than to rebuild.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let hits = field_with_path::<u32, WritableMode>(
+    /// let hits = field_with_path::<u32>(
     ///     &store, ["stats", "hits"], 0, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -529,12 +517,12 @@ where
     /// not end merely because nobody kept the receipt.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let volume = field_with_path::<u8, WritableMode>(
+    /// let volume = field_with_path::<u8>(
     ///     &store, ["audio", "volume"], 50, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -577,12 +565,12 @@ where
     /// nothing is ever stored under it:
     ///
     /// ```
-    /// # use amethystate::{Field, StoreBuilder, WritableMode};
+    /// # use amethystate::{Field, StoreBuilder};
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
     /// # use amethystate::store::StorePath;
-    /// let session: Field<String, WritableMode> = Field::new_volatile(
+    /// let session: Field<String> = Field::new_volatile(
     ///     StorePath::from_segments(["app", "session"]),
     ///     "anonymous".to_string(),
     /// );
@@ -609,12 +597,11 @@ where
                 store_sub: None,
                 unreadable: Unreadable::default(),
             }),
-            _mode: std::marker::PhantomData,
         }
     }
 }
 
-impl<TValue, M: AccessMode> PartialEq for Field<TValue, M> {
+impl<TValue> PartialEq for Field<TValue> {
     fn eq(&self, other: &Self) -> bool {
         self.inner.path == other.inner.path
             && self.inner.instance_id == other.inner.instance_id
@@ -625,12 +612,11 @@ impl<TValue, M: AccessMode> PartialEq for Field<TValue, M> {
     }
 }
 
-impl<TValue, M: AccessMode> Eq for Field<TValue, M> {}
+impl<TValue> Eq for Field<TValue> {}
 
-impl<TValue, M> amethystate_core::pipeline::Reactive<TValue> for Field<TValue, M>
+impl<TValue> amethystate_core::pipeline::Reactive<TValue> for Field<TValue>
 where
     TValue: FieldValue,
-    M: AccessMode,
 {
     fn get(&self) -> TValue {
         self.get()
@@ -651,7 +637,7 @@ where
     }
 }
 
-impl<TValue> Durable<'_, Field<TValue, WritableMode>>
+impl<TValue> Durable<'_, Field<TValue>>
 where
     TValue: FieldValue,
 {
@@ -695,7 +681,7 @@ where
     /// durable write present and the plain one gone.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
@@ -704,7 +690,7 @@ where
     /// #     .debounce(std::time::Duration::from_secs(60))
     /// #     .build()
     /// #     .unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -729,12 +715,12 @@ where
     /// all, and the field keeps its old value.
     ///
     /// ```
-    /// # use amethystate::{StoreBuilder, WritableMode};
+    /// # use amethystate::StoreBuilder;
     /// # use amethystate::store::field_with_path;
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// let port = field_with_path::<u16, WritableMode>(
+    /// let port = field_with_path::<u16>(
     ///     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
     /// ).unwrap();
     ///
@@ -877,7 +863,7 @@ mod tests {
                 }),
             );
 
-            let field: Field<String, WritableMode> = Field {
+            let field: Field<String> = Field {
                 inner: Arc::new(FieldInner {
                     core,
                     path: StorePath::from_segments(["test", "field"]),
@@ -888,7 +874,6 @@ mod tests {
                     instance_id: Default::default(),
                     unreadable: Unreadable::default(),
                 }),
-                _mode: Default::default(),
             };
 
             field.set("hello".to_string()).unwrap();
@@ -925,7 +910,7 @@ mod tests {
 
         let field_path = StorePath::from_segments(["ui", "temp_spinner"]);
 
-        let field = Field::<bool, WritableMode>::new_volatile(field_path.clone(), false);
+        let field = Field::<bool>::new_volatile(field_path.clone(), false);
 
         let call_count = Arc::new(Mutex::new(0));
         let last_val = Arc::new(Mutex::new(false));
@@ -955,7 +940,7 @@ mod tests {
     #[test]
     fn test_field_additional_coverage() {
         let field =
-            Field::<i32, WritableMode>::new_volatile(StorePath::from_segments(["test"]), 42);
+            Field::<i32>::new_volatile(StorePath::from_segments(["test"]), 42);
 
         let disp = field.intercept(|mut change| {
             change.new_value *= 2;
@@ -986,7 +971,7 @@ mod tests {
 
     #[test]
     fn test_field_depth_guard() {
-        let field = Field::<i32, WritableMode>::new_volatile(StorePath::from_segments(["test"]), 1);
+        let field = Field::<i32>::new_volatile(StorePath::from_segments(["test"]), 1);
 
         field
             .inner
@@ -1012,7 +997,7 @@ mod tests {
     #[test]
     #[traced_test]
     fn test_field_recursion_warning() {
-        let field = Field::<i32, WritableMode>::new_volatile(
+        let field = Field::<i32>::new_volatile(
             StorePath::from_segments(["test", "recursive_field"]),
             0,
         );
@@ -1033,7 +1018,7 @@ mod tests {
     #[test]
     fn test_field_subscribe_external() {
         let field =
-            Field::<i32, WritableMode>::new_volatile(StorePath::from_segments(["test", "ext"]), 0);
+            Field::<i32>::new_volatile(StorePath::from_segments(["test", "ext"]), 0);
         let fork = field.fork();
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1100,7 +1085,7 @@ mod tests {
     }
     #[test]
     fn test_field_update_and_modify() {
-        let field = Field::<i32, WritableMode>::new_volatile(
+        let field = Field::<i32>::new_volatile(
             StorePath::from_segments(["test", "update_modify"]),
             10,
         );

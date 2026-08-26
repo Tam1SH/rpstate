@@ -19,7 +19,7 @@ fn label<K, V>(change: &MapChange<K, V>) -> &'static str {
 }
 
 fn watch<K, V>(
-    map: &ReactiveMap<K, V, amethystate::WritableMode>,
+    map: &ReactiveMap<K, V>,
 ) -> (
     Arc<Mutex<Vec<&'static str>>>,
     amethystate::SignalSubscription,

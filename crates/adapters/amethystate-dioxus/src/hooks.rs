@@ -1,9 +1,8 @@
 use crate::MapSignal;
-use amethystate::{AccessMode, MapChange, Pipeline, ReactiveMapKey, ReactiveMapValue};
+use amethystate::{MapChange, Pipeline, ReactiveMapKey, ReactiveMapValue};
 use amethystate_arena::PIPELINE_ARENA;
 use amethystate_arena::{
-    AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle, PipelineHandle, WritableHandle,
-    WritableMapHandle,
+    AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle, PipelineHandle,
 };
 use dioxus::core::{Callback, spawn, use_hook};
 use dioxus::hooks::{try_use_context, use_callback, use_context};
@@ -70,7 +69,7 @@ where
     handle
 }
 
-pub fn use_field<T>(handle: WritableHandle<T>) -> (ReadSignal<T>, Callback<T>)
+pub fn use_field<T>(handle: FieldHandle<T>) -> (ReadSignal<T>, Callback<T>)
 where
     T: DeserializeOwned + Serialize + Clone + Send + Sync + PartialEq + 'static,
 {
@@ -105,10 +104,9 @@ where
     (signal.into(), setter)
 }
 
-pub fn use_read_only_field<T, M>(handle: FieldHandle<T, M>) -> ReadSignal<T>
+pub fn use_read_only_field<T>(handle: FieldHandle<T>) -> ReadSignal<T>
 where
     T: DeserializeOwned + Serialize + Clone + Send + Sync + PartialEq + 'static,
-    M: AccessMode,
 {
     let arena = use_context::<DefaultArena>();
     let mut signal = use_signal(|| arena.get_field(handle));
@@ -189,7 +187,7 @@ where
     signal.into()
 }
 
-pub fn use_map<K, V>(handle: WritableMapHandle<K, V>) -> MapSignal<K, V>
+pub fn use_map<K, V>(handle: MapHandle<K, V>) -> MapSignal<K, V>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
@@ -248,11 +246,10 @@ where
     MapSignal::new(signal.into(), _set, _insert, _remove, _clear)
 }
 
-pub fn use_map_entry<K, V, M>(handle: MapHandle<K, V, M>, key: K) -> ReadSignal<Option<V>>
+pub fn use_map_entry<K, V>(handle: MapHandle<K, V>, key: K) -> ReadSignal<Option<V>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    M: AccessMode,
 {
     let arena = use_context::<DefaultArena>();
     let mut signal = use_signal(|| arena.get_map_entry(handle, &key));
@@ -288,11 +285,10 @@ where
     signal.into()
 }
 
-pub fn use_map_subscribe_any<K, V, M, F>(handle: MapHandle<K, V, M>, callback: F)
+pub fn use_map_subscribe_any<K, V, F>(handle: MapHandle<K, V>, callback: F)
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    M: AccessMode,
     F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
 {
     let arena = use_context::<DefaultArena>();
@@ -302,11 +298,10 @@ where
     });
 }
 
-pub fn use_map_subscribe_key<K, V, M, F>(handle: MapHandle<K, V, M>, key: K, callback: F)
+pub fn use_map_subscribe_key<K, V, F>(handle: MapHandle<K, V>, key: K, callback: F)
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
-    M: AccessMode,
     F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
 {
     let arena = use_context::<DefaultArena>();

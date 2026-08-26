@@ -1,13 +1,3 @@
-pub trait AccessMode: Send + Sync + 'static {}
-
-pub struct ReadOnlyMode;
-
-impl AccessMode for ReadOnlyMode {}
-
-pub struct WritableMode;
-
-impl AccessMode for WritableMode {}
-
 pub struct ReadOnly<T>(std::marker::PhantomData<T>);
 
 pub struct Writable<T>(std::marker::PhantomData<T>);
