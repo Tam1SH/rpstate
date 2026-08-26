@@ -360,7 +360,7 @@ impl<'a> MigrationContext<'a> {
                 .strip_prefix(&full_prefix)
                 .as_ref()
                 .and_then(StorePath::name)
-                .map(str::to_string)
+                .map(|name| name.into_owned())
                 .ok_or_else(|| {
                     Report::new(StorageError::Path)
                         .attach(format!("map: {full_prefix}"))

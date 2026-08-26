@@ -1,4 +1,5 @@
 use crate::migration::AppliedStep;
+use std::borrow::Cow;
 use crate::store::CodecFormat;
 use crate::store::StorageError;
 use crate::store::StorageResult;
@@ -27,7 +28,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
 
     fn get(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
         let path = migration_path(key)?;
-        let parts: Vec<&str> = path.segments().collect();
+        let levels: Vec<Cow<'_, str>> = path.segments().collect();
+        let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
         if let Some(node) = self.data_doc.get(&parts) {
             Ok(Some(
                 D::node_to_bytes(node)
@@ -42,7 +44,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
 
     fn set(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
         let path = migration_path(key)?;
-        let parts: Vec<&str> = path.segments().collect();
+        let levels: Vec<Cow<'_, str>> = path.segments().collect();
+        let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
         let node = D::bytes_to_node(value)
             .change_context(StorageError::Migrate)
             .attach_with(|| format!("node: {key}"))
@@ -57,7 +60,8 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
 
     fn delete(&mut self, key: &str) -> StorageResult<()> {
         let path = migration_path(key)?;
-        let parts: Vec<&str> = path.segments().collect();
+        let levels: Vec<Cow<'_, str>> = path.segments().collect();
+        let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
         self.data_doc
             .delete(&parts)
             .change_context(StorageError::Migrate)

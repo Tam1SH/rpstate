@@ -120,6 +120,32 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// Lists what [`StoreBackend::scan_keys`] lists.
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>>;
 
+    /// Hands every entry under `prefix` to `visit`, in the order a scan lists.
+    ///
+    /// What it saves over [`StoreBackend::scan_prefix`] is everything that has
+    /// to be built to hand an entry over as owned: a `StorePath` per key,
+    /// which is a string and a walk, and a `Vec` per value, which is a copy
+    /// out of the engine's page. A caller that decodes each entry on the spot
+    /// - which is what loading a map is - drops both immediately.
+    ///
+    /// The key arrives as it is stored, joined and escaped, and has not been
+    /// checked: [`name_under_key`](amethystate_core::path::name_under_key)
+    /// reads a level out of one and refuses a key this library did not write.
+    ///
+    /// Defaulted through `scan_prefix`, so a backend implemented outside this
+    /// crate stays correct without knowing this exists - it simply pays what it
+    /// paid before.
+    fn visit_prefix(
+        &self,
+        prefix: &StorePath,
+        visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        for (path, bytes) in self.scan_prefix(prefix)? {
+            visit(path.as_str(), &bytes)?;
+        }
+        Ok(())
+    }
+
     /// The keys under `prefix`, sorted, without reading their values.
     ///
     /// `scan_prefix` copies every value out of the backend, which is wasted

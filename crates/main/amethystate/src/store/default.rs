@@ -275,6 +275,13 @@ impl StoreBackend for Store {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.0.scan_prefix(prefix)
     }
+    fn visit_prefix(
+        &self,
+        prefix: &StorePath,
+        visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        self.0.visit_prefix(prefix, visit)
+    }
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.0.scan_keys(prefix)
     }

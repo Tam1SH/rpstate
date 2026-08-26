@@ -644,6 +644,90 @@ impl StoreBackend for RedbStore {
         Ok(utils::merge_buffered(committed, buffered))
     }
 
+    /// The same answer `scan_prefix` gives, built nowhere.
+    ///
+    /// The engine's side is ranged over with a cursor and handed straight to
+    /// the visitor - no path, no copy - while the buffer's side is collected
+    /// and sorted first, because it is what is pending rather than what is
+    /// stored and is small next to it. Merging the two is then one pass, and
+    /// the order is the engine's, which is the order a scan promises.
+    fn visit_prefix(
+        &self,
+        prefix: &StorePath,
+        visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
+    ) -> StorageResult<()> {
+        let bound = utils::subtree_bound(prefix);
+        let prefix = prefix.as_str();
+
+        let mut buffered: Vec<(Arc<str>, Option<Vec<u8>>)> = {
+            let lock = self.inner.pending.lock();
+            lock.iter()
+                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix, &bound))
+                .map(|(k, op)| (k.clone(), op.value().map(Vec::from)))
+                .collect()
+        };
+        buffered.sort_unstable_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
+
+        let read_txn = self
+            .inner
+            .db()?
+            .begin_read()
+            .doing(StorageError::Scan, &self.inner.path)
+            .attach_with(|| format!("prefix: {prefix}"))?;
+        let table = read_txn
+            .open_table(TABLE_DATA)
+            .doing(StorageError::Scan, &self.inner.path)
+            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        let entries = table
+            .range(prefix..)
+            .doing(StorageError::Scan, &self.inner.path)
+            .attach_with(|| format!("prefix: {prefix}"))?;
+
+        let mut pending = buffered.into_iter().peekable();
+
+        for result in entries {
+            let (k, v) = result
+                .doing(StorageError::Scan, &self.inner.path)
+                .attach_with(|| format!("prefix: {prefix}"))?;
+            let key = k.value();
+
+            if !utils::is_under(key, prefix, &bound) {
+                if !key.starts_with(prefix) {
+                    break;
+                }
+                continue;
+            }
+
+            // Everything the buffer holds ahead of this key belongs before it.
+            while pending.peek().is_some_and(|(p, _)| p.as_ref() < key) {
+                let (p, value) = pending.next().expect("peeked");
+                if let Some(value) = value {
+                    visit(&p, &value)?;
+                }
+            }
+
+            match pending.peek() {
+                // A buffered write replaces this one, a buffered delete removes
+                // it, and either way the buffer's turn is now.
+                Some((p, _)) if p.as_ref() == key => {
+                    let (p, value) = pending.next().expect("peeked");
+                    if let Some(value) = value {
+                        visit(&p, &value)?;
+                    }
+                }
+                _ => visit(key, v.value())?,
+            }
+        }
+
+        for (p, value) in pending {
+            if let Some(value) = value {
+                visit(&p, &value)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();

@@ -1,5 +1,6 @@
 use super::document::TextDocument;
 use super::error::TextStoreError;
+use std::borrow::Cow;
 use crate::MigrationReport;
 use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
@@ -464,7 +465,8 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
 impl<D: TextDocument> TextStoreInner<D> {
     fn get_node_bytes(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         let guard = self.files.data.doc.read();
-        let parts: Vec<&str> = path.segments().collect();
+        let levels: Vec<Cow<'_, str>> = path.segments().collect();
+        let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
         match guard.get(&parts) {
             Some(node) => Ok(Some(
                 D::node_to_bytes(node)
@@ -523,7 +525,8 @@ impl<D: TextDocument> TextStoreInner<D> {
 
         self.pull_external_changes();
 
-        let parts: Vec<&str> = path.segments().collect();
+        let levels: Vec<Cow<'_, str>> = path.segments().collect();
+        let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
 
         let old_bytes = {
             let mut guard = self.files.data.doc.write();
@@ -567,7 +570,8 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.pull_external_changes();
 
         {
-            let parts: Vec<&str> = prefix.segments().collect();
+            let levels: Vec<Cow<'_, str>> = prefix.segments().collect();
+            let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
             self.files
                 .data
                 .doc
@@ -654,7 +658,8 @@ impl<D: TextDocument> TextStoreInner<D> {
     ) -> StorageResult<()> {
         self.pull_external_changes();
 
-        let parts: Vec<&str> = path_str.segments().collect();
+        let levels: Vec<Cow<'_, str>> = path_str.segments().collect();
+        let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
         let (old_bytes, new_bytes) = {
             let mut guard = self.files.data.doc.write();
             let old = guard
@@ -846,7 +851,8 @@ pub(super) fn scan_prefix_impl<D: TextDocument>(
     doc: &D,
     prefix: &StorePath,
 ) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
-    let parts: Vec<&str> = prefix.segments().collect();
+    let levels: Vec<Cow<'_, str>> = prefix.segments().collect();
+    let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
     let target_depth = parts.len() + 1;
     let mut raw_nodes = Vec::new();
     scan_prefix_recursive(
@@ -905,7 +911,8 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
                 .change_context(StorageError::Scan)
                 .attach_with(|| format!("stored key: {full_key}"))
                 .attach("the document holds a key this library could not have written")?;
-            let child_parts: Vec<&str> = child_path.segments().collect();
+            let child_levels: Vec<Cow<'_, str>> = child_path.segments().collect();
+            let child_parts: Vec<&str> = child_levels.iter().map(Cow::as_ref).collect();
             let grand_children = doc.scan(&child_parts)?;
 
             let should_stop = grand_children.is_empty()
@@ -1037,7 +1044,8 @@ pub(super) fn scan_keys_impl<D: TextDocument>(
     doc: &D,
     prefix: &StorePath,
 ) -> StorageResult<Vec<StorePath>> {
-    let parts: Vec<&str> = prefix.segments().collect();
+    let levels: Vec<Cow<'_, str>> = prefix.segments().collect();
+    let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
     let target_depth = parts.len() + 1;
     let mut keys = Vec::new();
     scan_keys_recursive(doc, &parts, prefix.as_str(), &mut keys, Some(target_depth))?;
@@ -1077,7 +1085,8 @@ fn scan_keys_recursive<D: TextDocument>(
                 .change_context(StorageError::Scan)
                 .attach_with(|| format!("stored key: {full_key}"))
                 .attach("the document holds a key this library could not have written")?;
-            let child_parts: Vec<&str> = child_path.segments().collect();
+            let child_levels: Vec<Cow<'_, str>> = child_path.segments().collect();
+            let child_parts: Vec<&str> = child_levels.iter().map(Cow::as_ref).collect();
             let grand_children = doc.scan(&child_parts)?;
 
             let should_stop = grand_children.is_empty()

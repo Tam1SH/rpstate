@@ -731,7 +731,7 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
             .unwrap()
             .iter()
             .filter_map(|k| k.strip_prefix(&at))
-            .filter_map(|rest| rest.name().map(str::to_string))
+            .filter_map(|rest| rest.name().map(|name| name.into_owned()))
             .collect();
 
         let mut membership = from_scan.clone();

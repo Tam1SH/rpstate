@@ -172,34 +172,52 @@ where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let scanned = store
-        .scan_prefix(path)
-        .attach_with(|| format!("map: {path}"))?;
-
     // Decoding is the larger half of reading a map back - a value with a few
     // fields in it costs around two hundred nanoseconds where an integer costs
-    // eleven - and every entry is independent of every other.
-    if store.parallel_reads() && scanned.len() >= PARALLEL_MIN_LEN {
+    // eleven - and every entry is independent of every other. Dividing it wants
+    // the entries in hand, so that path takes the owning scan.
+    if store.parallel_reads() {
         use rayon::prelude::*;
 
-        let decoded: Vec<(K, V)> = scanned
-            .par_iter()
-            .with_min_len(PARALLEL_MIN_LEN)
-            .filter_map(|(stored, bytes)| decode_entry(store, path, stored, bytes).transpose())
-            .collect::<StorageResult<Vec<_>>>()?;
+        let scanned = store
+            .scan_prefix(path)
+            .attach_with(|| format!("map: {path}"))?;
 
-        return Ok(decoded.into_iter().collect());
-    }
+        if scanned.len() >= PARALLEL_MIN_LEN {
+            let decoded: Vec<(K, V)> = scanned
+                .par_iter()
+                .with_min_len(PARALLEL_MIN_LEN)
+                .filter_map(|(stored, bytes)| {
+                    decode_entry(store, path, stored.as_str(), bytes).transpose()
+                })
+                .collect::<StorageResult<Vec<_>>>()?;
 
-    // Sized from the scan rather than grown into. At a million entries the
-    // difference is not a constant factor: a table that grows from nothing
-    // rehashes everything it holds about twenty times on the way up.
-    let mut entries = HashMap::with_capacity(scanned.len());
-    for (stored, bytes) in &scanned {
-        if let Some((key, value)) = decode_entry(store, path, stored, bytes)? {
-            entries.insert(key, value);
+            return Ok(decoded.into_iter().collect());
         }
+
+        let mut entries = HashMap::with_capacity(scanned.len());
+        for (stored, bytes) in &scanned {
+            if let Some((key, value)) = decode_entry(store, path, stored.as_str(), bytes)? {
+                entries.insert(key, value);
+            }
+        }
+        return Ok(entries);
     }
+
+    // On one thread nothing has to be handed over as owned, so nothing is
+    // built: the visiting scan gives the key as it is stored and the value as
+    // the engine holds it, and each entry is decoded where it is seen.
+    // No `attach` here: what fails inside is one entry, and `decode_entry`
+    // names the map and the entry itself. Saying "map" twice is what the outer
+    // one did.
+    let mut entries = HashMap::new();
+    store.visit_prefix(path, &mut |key, bytes| {
+        if let Some((k, v)) = decode_entry(store, path, key, bytes)? {
+            entries.insert(k, v);
+        }
+        Ok(())
+    })?;
+
     Ok(entries)
 }
 
@@ -216,7 +234,7 @@ const PARALLEL_MIN_LEN: usize = 1024;
 fn decode_entry<K, V>(
     store: &Store,
     path: &StorePath,
-    stored: &StorePath,
+    stored: &str,
     bytes: &[u8],
 ) -> StorageResult<Option<(K, V)>>
 where
@@ -224,11 +242,14 @@ where
     V: ReactiveMapValue,
 {
     {
-        let below = stored.name_under(path);
+        let below = amethystate_core::path::name_under_key(stored, path)
+            .change_context(StorageError::Path)
+            .attach_with(|| format!("map: {path}"))
+            .attach_with(|| format!("stored key: {stored}"))?;
 
         let name = match below.as_deref() {
             Some(name) => name,
-            None if stored == path => return Ok(None),
+            None if stored == path.as_str() => return Ok(None),
             None => {
                 return Err(Report::new(StorageError::Path)
                     .attach(format!("map: {path}"))
