@@ -2,7 +2,7 @@ use crate::migration::fields::FieldDescriptor;
 use crate::migration::meta::{PrefixMeta, SchemaSnapshot, StoredFieldEntry};
 use crate::migration::set::MigrationSet;
 use crate::migration::{
-    AppliedStep, ComponentOutcome, ComponentResult, FieldTypeChange, NaggingRecord, SchemaDiff,
+    AppliedStep, ComponentOutcome, ComponentResult, NaggingRecord, SchemaDiff,
 };
 use crate::observability::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
@@ -79,11 +79,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                                 fields: entry
                                     .fields
                                     .iter()
-                                    .map(|f| StoredFieldEntry {
-                                        name: f.name.to_string(),
-                                        type_name: f.type_name.to_string(),
-                                        type_hash: f.type_hash,
-                                    })
+                                    .map(StoredFieldEntry::from)
                                     .collect(),
                             },
                         )
@@ -198,7 +194,6 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         let mut diff = SchemaDiff {
             added: vec![],
             removed: vec![],
-            type_changed: vec![],
         };
 
         let mut old_fields: HashMap<String, StoredFieldEntry> = old
@@ -208,26 +203,14 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             .collect();
 
         for f in current_fields {
-            if let Some(old_f) = old_fields.remove(f.name) {
-                if old_f.type_hash != f.type_hash {
-                    diff.type_changed.push(FieldTypeChange {
-                        name: f.name.to_string(),
-                        old_type: old_f.type_name,
-                        new_type: f.type_name.to_string(),
-                    });
-                }
-            } else {
-                diff.added.push(StoredFieldEntry {
-                    name: f.name.to_string(),
-                    type_name: f.type_name.to_string(),
-                    type_hash: f.type_hash,
-                });
+            if old_fields.remove(f.name).is_none() {
+                diff.added.push(StoredFieldEntry::from(f));
             }
         }
 
         diff.removed = old_fields.into_values().collect();
 
-        if diff.added.is_empty() && diff.removed.is_empty() && diff.type_changed.is_empty() {
+        if diff.added.is_empty() && diff.removed.is_empty() {
             Ok(None)
         } else {
             Ok(Some(diff))
@@ -325,14 +308,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                 version: target_v,
                 schema_hash: meta.hash,
                 struct_name,
-                fields: target_fields
-                    .iter()
-                    .map(|f| StoredFieldEntry {
-                        name: f.name.to_string(),
-                        type_name: f.type_name.to_string(),
-                        type_hash: f.type_hash,
-                    })
-                    .collect(),
+                fields: target_fields.iter().map(StoredFieldEntry::from).collect(),
             };
 
             storage.set_schema_snapshot(&prefix_path, &new_snapshot)?;
@@ -407,6 +383,7 @@ mod tests {
 
     use crate::migration::context::{decode, encode};
     use crate::migration::fields::FieldDescriptor;
+    use crate::migration::meta::StoredShape;
     use crate::store::{CodecFormat, IntoStorageReport, StorageError};
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -860,7 +837,7 @@ mod tests {
                     fields: vec![StoredFieldEntry {
                         name: "name".to_string(),
                         type_name: "String".to_string(),
-                        type_hash: 1,
+                        shape: StoredShape::field(),
                     }],
                     schema_hash: 0,
                     struct_name: None,
@@ -891,8 +868,15 @@ mod tests {
         assert_eq!(nag.diff.as_ref().unwrap().added[0].name, "age");
     }
 
+    /// A field whose type changed under the same name is drift the store
+    /// notices and the diff cannot describe. The hashes disagree, so the run
+    /// nags; the diff compares names, and the name did not move.
+    ///
+    /// Pinned because it is the limit of this comparison rather than a gap in
+    /// it: what a path is now lives in the snapshot per field, and reading it
+    /// is a diff of two schema documents.
     #[test]
-    fn test_drift_detection_type_changed() {
+    fn a_type_that_changed_under_one_name_nags_without_a_diff() {
         let storage = RefCell::new(InMemoryStorage::default());
         let prefix = &p("settings");
 
@@ -915,7 +899,7 @@ mod tests {
                     fields: vec![StoredFieldEntry {
                         name: "port".to_string(),
                         type_name: "u16".to_string(),
-                        type_hash: 100,
+                        shape: StoredShape::field(),
                     }],
                     schema_hash: 0,
                     struct_name: None,
@@ -937,10 +921,13 @@ mod tests {
         let engine = MigrationEngine::new(&storage);
         let report = engine.run(mset).unwrap();
 
-        let diff = report.components[0].nagging[0].diff.as_ref().unwrap();
-        assert_eq!(diff.type_changed.len(), 1);
-        assert_eq!(diff.type_changed[0].old_type, "u16");
-        assert_eq!(diff.type_changed[0].new_type, "u32");
+        let nag = &report.components[0].nagging[0];
+        assert_eq!(nag.old_hash, 10);
+        assert_eq!(nag.new_hash, 20);
+        assert!(
+            nag.diff.is_none(),
+            "no path was added or removed, so there is nothing this comparison can say"
+        );
     }
 
     #[test]
@@ -1052,7 +1039,7 @@ mod tests {
                     fields: vec![StoredFieldEntry {
                         name: "old_f".into(),
                         type_name: "u8".into(),
-                        type_hash: 1,
+                        shape: StoredShape::field(),
                     }],
                     schema_hash: 0,
                     struct_name: None,

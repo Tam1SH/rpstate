@@ -8,6 +8,7 @@ mod macros;
 pub mod migration;
 pub mod observability;
 pub mod reactive;
+pub mod shape;
 pub mod store;
 
 pub type AmeData<T> = <T as AmeState>::Data;

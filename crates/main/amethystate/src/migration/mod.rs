@@ -16,18 +16,16 @@ use crate::store::{StorageError, StorageResult, meta, one_line};
 pub use context::MigrationContext;
 pub use error::MigrationError;
 
+/// Which declared paths a store holds that the code does not, and the other way
+/// round.
+///
+/// By name only. What a path *is* - its role, whether it may hold nothing, what
+/// lives under it - is recorded per field in the snapshot and is not compared
+/// here; that comparison is a diff of two schema documents, which this is not.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaDiff {
     pub added: Vec<meta::StoredFieldEntry>,
     pub removed: Vec<meta::StoredFieldEntry>,
-    pub type_changed: Vec<FieldTypeChange>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FieldTypeChange {
-    pub name: String,
-    pub old_type: String,
-    pub new_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -98,9 +96,6 @@ impl MigrationReport {
                     }
                     for f in &diff.removed {
                         warn!("  - field '{}' (exists in DB, missing in code)", f.name);
-                    }
-                    for c in &diff.type_changed {
-                        warn!("  ~ field '{}': {} -> {}", c.name, c.old_type, c.new_type);
                     }
                 }
                 warn!(

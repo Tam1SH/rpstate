@@ -6,7 +6,7 @@ use crate::store::StorageResult;
 /// Not what the value is - that is the value's business and the disk's. This
 /// says whether the path holds one value, or is the level a map's entries sit
 /// under, or is only a level on the way to other declared paths.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     /// One value lives here. Anything under it in a document is the inside of
     /// that value, not a path.
@@ -20,6 +20,14 @@ pub enum Role {
     Node,
 }
 
+impl Role {
+    /// `==` where a `const` needs it, which the derived `PartialEq` cannot
+    /// answer.
+    pub const fn same(self, other: Self) -> bool {
+        self as u8 == other as u8
+    }
+}
+
 #[derive(Clone)]
 pub struct FieldDescriptor {
     pub name: &'static str,
@@ -27,6 +35,13 @@ pub struct FieldDescriptor {
     pub type_name: &'static str,
 
     pub role: Role,
+
+    /// Whether the path may hold nothing and still be a path - which is not the
+    /// same as the path being absent, and is written differently by every
+    /// engine that can write it at all.
+    ///
+    /// Read from the type by [`Probe`](crate::shape::Probe).
+    pub optional: bool,
 
     /// For a [`Role::Node`], the fields that live under it; empty otherwise.
     ///
@@ -47,6 +62,7 @@ impl FieldDescriptor {
             type_hash,
             type_name,
             role: Role::Field,
+            optional: false,
             children: &[],
         }
     }

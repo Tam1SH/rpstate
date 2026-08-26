@@ -68,6 +68,7 @@ pub(crate) fn data_impl(
                     type_hash: 0xDEADBEEF ^ < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
                     role: #crate_name::migration::fields::Role::Node,
+                    optional: false,
                     children: < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::FIELDS,
                 }
             }
@@ -77,7 +78,8 @@ pub(crate) fn data_impl(
                     name: #fname_str,
                     type_hash: <::std::collections::HashMap<#k, #v> as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
-                    role: #crate_name::migration::fields::Role::Map,
+                    role: <#crate_name::shape::Probe<#ty>>::ROLE,
+                    optional: <#crate_name::shape::Probe<#ty>>::OPTIONAL,
                     children: &[],
                 }
             }
@@ -87,10 +89,42 @@ pub(crate) fn data_impl(
                     name: #fname_str,
                     type_hash: <#ty as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
-                    role: #crate_name::migration::fields::Role::Field,
+                    role: <#crate_name::shape::Probe<#ty>>::ROLE,
+                    optional: <#crate_name::shape::Probe<#ty>>::OPTIONAL,
                     children: &[],
                 }
             }
+        }
+    });
+
+    let shape_checks = p_fields.iter().filter(|e| !e.nested).map(|e| {
+        let fname_str = e.ident.as_ref().unwrap().to_string();
+        let ty = &e.ty;
+
+        let (expected, message) = if e.get_map_types().is_some() {
+            (
+                quote! { #crate_name::migration::fields::Role::Map },
+                format!(
+                    "field `{fname_str}` is spelled as a ReactiveMap but is not one - \
+                     the name belongs to another type here"
+                ),
+            )
+        } else {
+            (
+                quote! { #crate_name::migration::fields::Role::Field },
+                format!(
+                    "field `{fname_str}` is a ReactiveMap, and was taken for a plain value \
+                     because the type is not written as one - spell it `ReactiveMap<K, V>` \
+                     at the field rather than through an alias"
+                ),
+            )
+        };
+
+        quote! {
+            const _: () = assert!(
+                <#crate_name::shape::Probe<#ty>>::ROLE.same(#expected),
+                #message
+            );
         }
     });
 
@@ -401,9 +435,16 @@ pub(crate) fn data_impl(
         }
 
        impl #crate_name::migration::fields::AmeStateFields for #data_struct_name {
-            const FIELDS: &'static [#crate_name::migration::fields::FieldDescriptor] = &[
-                #(#field_descriptors),*
-            ];
+            const FIELDS: &'static [#crate_name::migration::fields::FieldDescriptor] = {
+                #[allow(unused_imports)]
+                use #crate_name::shape::AnyShape as _;
+
+                #(#shape_checks)*
+
+                &[
+                    #(#field_descriptors),*
+                ]
+            };
             const VERSION: u32 = #version_val;
             const SCHEMA_HASH: u32 = #crate_name::migration::types::schema_hash(Self::FIELDS);
             const PARENT_PREFIX: &'static str = #prefix_expr;

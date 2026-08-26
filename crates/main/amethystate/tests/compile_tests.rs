@@ -37,6 +37,8 @@ fn test_macro_expansion_compilation() {
     t.compile_fail("tests/fails/prefix_holds_the_escape.rs");
     t.compile_fail("tests/fails/key_empty_level.rs");
     t.compile_fail("tests/fails/construction_cycle.rs");
+    t.compile_fail("tests/fails/map_through_an_alias.rs");
+    t.compile_fail("tests/fails/a_map_by_name_only.rs");
     t.compile_fail("tests/fails/static_path_empty_segment.rs");
     t.compile_fail("tests/fails/static_path_halves_disagree.rs");
 }
