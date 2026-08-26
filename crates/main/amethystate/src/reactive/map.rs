@@ -2,7 +2,7 @@ use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::Durable;
 use crate::store::StoreBackend;
 use crate::store::sync_backend::SyncBridge;
-use crate::{AccessMode, Field, ReadOnlyMode, Store, StoreSubscription, WritableMode};
+use crate::{AccessMode, ReadOnlyMode, Store, StoreSubscription, WritableMode};
 use amethystate_core::path::{StorePath, cmp_names};
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::{Report, ResultExt};
@@ -58,8 +58,15 @@ pub struct ReactiveMap<K, V, M: AccessMode = ReadOnlyMode> {
 use crate::reactive::error::{ReactiveMapError, ReactiveMapResult};
 pub use amethystate_core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 
-pub type ReadOnlyReactiveMap<TValue> = Field<TValue, ReadOnlyMode>;
-pub type WritableReactiveMap<TValue> = Field<TValue, WritableMode>;
+/// A map that can be read and not written, the twin of [`ReadOnlyField`].
+///
+/// [`ReadOnlyField`]: crate::reactive::field::ReadOnlyField
+pub type ReadOnlyReactiveMap<K, V> = ReactiveMap<K, V, ReadOnlyMode>;
+
+/// A map that can be written, the twin of [`WritableField`].
+///
+/// [`WritableField`]: crate::reactive::field::WritableField
+pub type WritableReactiveMap<K, V> = ReactiveMap<K, V, WritableMode>;
 
 /// Another handle on the same map **and the same instance id**, so writes
 /// through it are indistinguishable from writes through the original.
