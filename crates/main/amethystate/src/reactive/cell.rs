@@ -259,6 +259,12 @@ where
         self.cache.subscribe_with_source(callback)
     }
 
+    /// What has to outlive this cell for its value to keep arriving, beyond
+    /// the cell itself.
+    ///
+    /// Not `_owner`, which a cell made by `into_cell` or `Kv::cell` holds to
+    /// own what it views: whoever asks this is keeping the cell, and `_owner`
+    /// is kept by being a field of it.
     fn keepalive(&self) -> Option<Arc<dyn Send + Sync>> {
         self._keepalive.clone()
     }
