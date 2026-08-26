@@ -17,6 +17,17 @@ deliberate: every one of them is.
 
 ### Breaking
 
+- **`SchemaDiff` reports added and removed paths, and nothing about types.**
+  `type_changed` and `FieldTypeChange` are gone, along with the per-field
+  `type_hash` in the stored snapshot that fed them. Comparing the remaining
+  `type_name` instead would answer wrong on a rename or an alias, which is the
+  mistake the shape record exists to avoid, so nothing compares it and it stays
+  as what a person or the inspector reads. Drift under one name still nags,
+  because the whole-struct hashes still disagree; the diff simply has nothing to
+  add: what the macro records about a leaf is the name of its type, so that a
+  leaf may be a foreign type nobody can add a derive to. What a path *is* lives
+  per field in the snapshot instead, and reading that is a comparison of two
+  schema documents.
 - **Only `insert` takes the key by value.** `update`, `update_with`, `modify`
   and `remove` all require the key to be there already, so the owned key is in
   the map's projection and the caller need not spell one: they take
@@ -360,8 +371,46 @@ deliberate: every one of them is.
   `ci.ps1` is the authoritative check set, and which goldens are regenerated
   rather than hand-edited.
 
+### Added
+
+- **`shape::Probe` asks the compiler what a declared field is.** A field's role
+  and whether it may hold nothing are facts about its type, and both now reach
+  `FieldDescriptor` from the type rather than from how it was written - so an
+  alias resolves, a renamed import resolves, and `Option<Foreign>` is optional
+  while `Foreign` implements nothing. Nothing is required of a leaf, which is
+  what lets one come from a crate where no derive could be added. Beside every
+  field the macro also asserts that the branch it picked from the spelling
+  agrees with what the type answers, so a foreign type called `ReactiveMap`
+  fails with one sentence naming the field instead of compiling into the wrong
+  code, and a map reached through an alias says so.
+- **The schema snapshot records the shape.** Every field in `SchemaSnapshot`
+  carries a `StoredShape` - its role, whether it may hold nothing, and, for a
+  level, the fields under it, which the snapshot did not record at any depth
+  before. A store now says what its paths are without the program that wrote
+  them. A snapshot written before this reads its `shape` back as `None`, which
+  means unknown rather than any particular claim, so an older file is not read
+  as having changed.
+
 ### Fixed
 
+- Writing `None` to a toml store no longer panics. A value that holds nothing
+  serialises to no toml at all, so the document has no key to read back, and the
+  write path unwrapped the read that follows a write - `field.set(None)` on any
+  `Option` field took the process down. The write now reports what the document
+  did: toml answers `None` with an absent key, which is how a toml config has
+  always expressed an optional setting, and subscribers hear a removal rather
+  than a set carrying bytes nothing can decode. What toml cannot express is the
+  difference between a key holding nothing and no key, so a field whose default
+  is not `None` reads its default back after being set to `None`; json writes
+  `null` and ron writes `None`, and both keep the distinction.
+- A pipeline built from one source keeps following it. Subscribing does not
+  hold what you subscribed to, and `pipe` kept only the subscription, so
+  `port.pipe().map(..)` went quiet the moment the struct the field came from
+  was dropped - showing the value it started with and never another, with
+  nothing said. That is the README's own pattern: a component takes one field,
+  pipes it, and lets the state go. Piping several sources never had the bug,
+  because the closure that re-reads them all captures a clone of each, so the
+  two forms of one method disagreed about ownership.
 - An extension this crate chose follows the engine that is named.
   `StoreBuilder::for_app` and `new` fill in an extension when the path has none,
   and it came from the default engine; naming another with `backend` changed the

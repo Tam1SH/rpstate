@@ -170,6 +170,34 @@ default three steps later.
 Related: `decode` falling back to `Default` while `get` returns an error is a
 split worth settling on its own. One of them is wrong.
 
+## Toml answers "holds nothing" and "is not there" with the same document
+
+Measured in `tests/absent_or_null.rs`, writing `None` into an `Option<String>`
+field and then reading the file:
+
+| engine | the document | `get::<Option<String>>` |
+| --- | --- | --- |
+| json | `"note": null` | `Some(None)` |
+| ron | `"note": None` | `Some(None)` |
+| toml | no such key | `None` |
+
+Toml has no null, so `toml_edit::ser` writes an empty document for a `None`
+field, `serialize_node` gets no `val` back and returns `Item::None`, and a table
+that is handed `Item::None` reports no such key. The write path read the node
+back with an unconditional `unwrap` and so **panicked** on `field.set(None)`,
+which is how this was found; it now reports the removal the document performed.
+
+What is left is not a bug in the code. An absent key is how every toml config
+expresses an optional setting, and it is the only thing the format offers, so
+`set(None)` and `delete` produce the same file. A field whose declared default
+is `None` round-trips exactly; one whose default is `Some(..)` reads its default
+back, because on the next open there is nothing to say the key was emptied on
+purpose.
+
+This is the case for a schema saying which properties may be null: on toml the
+document alone cannot answer it, and the declaration is the only place the
+answer exists. See *The schema belongs in the store, as JSON Schema*.
+
 ## Metadata carries no format version - deliberately, for now
 
 `PrefixMeta` and `SchemaSnapshot` both use `version` for the user's schema
@@ -1315,24 +1343,38 @@ back as strings over the bridge - `invoke_result` deserialises them - so a
 `String` is what crosses, and `commanded` is the single place it becomes an
 error a report can carry, with the command and the path attached.
 
-## The macro guesses what a field is, and could ask instead
+## The macro picks the branch, the compiler judges the pick
 
-A field's storage kind is decided three different ways today. A scalar is the
-default. A nested struct is declared by attribute, `#[amestate(nested)]`. A map
-is not declared at all - `get_map_types` compares the last segment of the
-type's path against the string `"ReactiveMap"`. So the map is the one category
-the macro guesses, and it guesses from spelling.
+Which code the macro writes for a field is decided from the syntax: a nested
+struct by `#[amestate(nested)]`, a map by `get_map_types` comparing the last
+path segment against `"ReactiveMap"`, everything else a scalar. It has to be
+decided there. A macro chooses tokens before there is a type to ask, so no
+amount of trait machinery can move the *branch* into the type system.
 
-The compiler is already consulted for part of this: the nested branch emits
-`<#ty as AmeState>::Data` and does not care what the type is. But the decision
-to emit that came from the attribute, so what the compiler resolves is the
-associated type, not the question. Asking the question needs uniform emission -
-always `<#ty as AmeField>::Stored`, with the impl deciding - and then neither
-the attribute nor the string comparison has anything left to do, and a new
-collection arrives as an impl rather than as a fourth branch.
+**What the type answers is the description.** `shape::Probe<T>` reports `ROLE`
+and `OPTIONAL` for every type there is: an inherent impl for each shape this
+crate knows, and a trait const for the rest, which an inherent associated const
+shadows. `FieldDescriptor` takes both from it, so the record of the shape is
+read off the type and not off the branch - and it sees what a spelling cannot.
+An alias resolves (`type Sessions = ReactiveMap<..>` answers `Map`,
+`type Port = u16` answers not-optional), a renamed import resolves, and
+`Option<Foreign>` answers optional while `Foreign` implements nothing at all.
+That last one is why the probe is a probe and not a trait: nothing is required
+of a leaf, so a leaf may come from a crate where no derive can be added.
 
-**What stands in the way is coherence, not effort.** Leaves need a blanket
-impl:
+**And the branch is checked against the answer.** Beside each non-nested field
+the macro emits `assert!(Probe::<T>::ROLE.same(what the branch assumed))`, so a
+wrong branch fails by name. `tests/fails/a_map_by_name_only.rs` - a foreign type
+called `ReactiveMap` - fails with one sentence where it used to compile into the
+wrong code. `tests/fails/map_through_an_alias.rs` still fails with a wall of
+`Serialize` errors, because const evaluation runs after type checking, but ours
+is among them and names the field and the fix.
+
+**What is left is the emission.** Making an aliased map *work* rather than
+diagnose needs `K` and `V` without reading them off the written type, which
+means associated types on a trait the macro can name - and reaching that trait
+needs a uniform `<#ty as AmeField>::Stored` in every branch. Leaves would need a
+blanket impl:
 
 ```rust
 impl<T: Serialize + DeserializeOwned + Default + Clone> AmeField for T { .. }
@@ -1340,23 +1382,15 @@ impl<K, V> AmeField for ReactiveMap<K, V> { .. }
 ```
 
 and the compiler refuses the pair as overlapping - not because they overlap
-now, since `ReactiveMap` implements neither trait, but because it may not
-assume they never will. Specialization is not stable. The way through is
-autoref specialization, the trick `anyhow` uses for its error conversions: emit
-a call whose impl is chosen by method resolution, where an inherent method
-beats a trait method. It works and it is used in earnest, at the price of
-generated code that reads badly and diagnostics that read worse when it fails
-to apply.
+now, since `ReactiveMap` implements neither trait, but because it may not assume
+they never will. Specialization is not stable; autoref specialization is the way
+through on stable, at the price of generated code that reads badly and
+diagnostics that read worse when it fails to apply.
 
-**Two steps, and the first does not wait for the second.** The guess can be
-made loud where it stands: the macro knows which branch it took, so a
-compile-time check beside the scalar branch can fail with a sentence naming the
-field and the reason. That removes the whole hazard for the cost of one place
-rather than four.
-
-Making the guess unnecessary belongs with the fork below on whether the file is
-a store or a picture of a type. That fork moves what is generated, and writing
-the uniform emission before it is answered means writing it twice.
+That is worth doing when the schema says what a description must contain, not
+before: what such a trait hands back is whatever ends up in the file. `role` and
+`optional` already come from the type, which was the part that blocked the
+schema.
 
 ## The debouncer has two states and needs four
 
@@ -1413,10 +1447,26 @@ does not include `_owner`. The README's own pattern is affected: a component
 that pipes one field and lets go of the state struct shows the right first value
 and never updates again, with nothing to warn it.
 
-`pipe` should push `Arc::new(self)` into `keepalive`, which is the move the
-tuple impl already makes, and `ReactiveCell::keepalive` should carry `_owner`.
-That a bare `SignalSubscription` does not keep its source alive is a real choice
-and should be written down rather than left to be discovered.
+**Done with the first half, which made the second unnecessary.** `pipe` pushes
+`Arc::new(self)` into `keepalive`, so a pipeline holds the source and not only
+whatever the source was holding. The prescription here also called for
+`ReactiveCell::keepalive` to carry `_owner` - it does not need to. Once the
+pipeline keeps the cell itself, the cell's own `_owner` lives with it, and the
+test written for that case passes with the cell untouched. Written down because
+the second change looked necessary until the first one landed.
+
+The tuple form never had the bug, and now the two agree for the same reason
+rather than by accident: it kept its sources through the closure that re-reads
+them all.
+
+`tests/pipe_keeps_its_source.rs` writes through the store rather than through a
+field handle, because a `Field` clone shares one inner - holding one to write
+with would keep the subscription alive by itself and the test would pass either
+way. Checked by reverting the fix: the one-source case goes back to reporting
+the value it started with.
+
+That a bare `SignalSubscription` does not keep its source alive is still a real
+choice and still undocumented.
 
 ## `SignalSubscription` is `Clone`, and dropping any clone cancels the original
 
@@ -1515,12 +1565,21 @@ theirs. The way out is written up under the schema hash below: make the trait
 optional, with the shape falling back to the type's written name when no impl
 exists.
 
-## Dead weight around the sync backend trait
+## Four sync map ops with no callers
 
-`AmeBackendSync` has one implementor in the workspace - `SyncBridge`, which
-forwards every method to `Store` and immediately re-erases what the generics
-bought. Its `Raw: Borrow<Borrowed>` pair exists to serve one `decode` signature.
-And `map_get`, `map_contains_key`, `map_entries` and `map_len`
+**The trait itself is not the dead weight, and counting implementors was the
+wrong question.** `AmeBackendSync` exists so that `map_ops` and `field_ops` are
+written once against a backend and instantiated twice - for the sync world and
+for the async one, whose `AmeBackendAsync` twin `TauriBackend` implements. One
+implementor on the sync side is what a symmetric pair looks like from one side,
+not an abstraction nobody uses. Removing it would mean either duplicating the
+ops or fastening them to `Store`, and the async half would have nothing to
+share with.
+
+What is left of this entry is the four functions below, which really do have
+nobody to call them.
+
+`map_get`, `map_contains_key`, `map_entries` and `map_len`
 (`core/primitives/map_ops.rs`) have **zero callers** anywhere now that the map
 reads from its projection - confirmed by grep - while remaining `pub` and
 re-exported, and still doing the buffered scan the `flush_prefix` entry measures
@@ -1528,18 +1587,25 @@ at 364 ms. The async twins are live; the sync four are not.
 
 ## Smaller, and cheap
 
-- `ReadOnlyReactiveMap` and `WritableReactiveMap` alias `Field`, not
-  `ReactiveMap` (`reactive/map.rs:41`), and take one type parameter where a map
-  needs two. Publicly reachable.
+- ~~`ReadOnlyReactiveMap` and `WritableReactiveMap` alias `Field`, not
+  `ReactiveMap`, and take one type parameter where a map needs two.~~ **Done.**
+  They alias `ReactiveMap<K, V, _>` now. A copy of the field aliases whose
+  right-hand side was never changed, public, and used by nothing - the workspace
+  had no callers, which is how it survived. The field aliases are live, so the
+  pair earns its place once it means what it says.
 - `reactive_map_with_path<TScope, ..>` binds `TScope: StateScope` and never uses
   it; callers turbofish four parameters for nothing.
 - `Kv::keys` returns absolute paths, where `ReactiveMap::keys` returns
   `Vec<K>`. It should return the names below the namespace. (It returns
   `Vec<StorePath>` rather than `Vec<String>` now, which is the type being
   honest, not the answer being right.)
-- `StorePath::from_static` is public and unchecked, with a doc saying `joined`
-  must match `segments` and nothing enforcing it. It exists for the macro;
-  `#[doc(hidden)]` it.
+- ~~`StorePath::from_static` is public and unchecked, with a doc saying
+  `joined` must match `segments` and nothing enforcing it. It exists for the
+  macro; `#[doc(hidden)]` it.~~ **Stale, and so is the advice.** `check_static`
+  enforces both at const-eval time, so a `const` whose halves disagree does not
+  compile. And hiding it would now be wrong: its doc contemplates a
+  hand-written `StateScope`, and an author writing one needs to be able to find
+  the constructor.
 - A leaf field with no `default` panics the proc macro
   (`generate/init.rs:115`), pointing at the attribute rather than the field, so
   a struct with ten fields does not say which one. The map and nested branches
@@ -2232,6 +2298,234 @@ field and saying that nothing was going to be stored either way. Both are pinned
 by snapshot in `tests/error_reports.rs`, so a refusal that collapses back to one
 sentence fails a test.
 
+## The schema belongs in the store, as JSON Schema
+
+Its own track, and the answer several entries here have been waiting for.
+
+**Everything migrations, in one place.** The entries are spread through this
+file because they were found at different times; what they have in common is
+that the code is the only thing that knows a shape. Ordered by what has to be
+decided first.
+
+| entry | where it stands |
+| --- | --- |
+| this one - the schema in the store | decides the rest |
+| The fork under all of it: is the file a store, or a picture of a type | the same question, asked wider |
+| Metadata carries no format version - deliberately, for now | where a format version would live, once there is a schema |
+| Two type hashes, both weak, and the weaker one feeds the gate | stops being the gate; kept as the record |
+| Reordering struct fields silently corrupts data on redb | the fold was written and reverted for this reason |
+| `build()` runs no generated migrations, and nothing at the call site says so | becomes a comparison the store makes, not a question of who collected what |
+| Migration cleanup addresses a field by its Rust name, not by where it is stored | six ignored tests waiting on it |
+| Migration cleanup deletes one key, so a composite field survives being dropped | same repair as the row above |
+| `#[migrate]` can only be found through the linker | **done** - `#[migrate(explicit)]` and `add_steps` |
+| The sqlite migration adapter still scans by `GLOB` | independent, and small |
+| A failed migration is invisible through `StoreBuilder::build` | inside *Errors that reach nobody*; independent of all of this |
+
+The last two are the only ones worth touching before the track is decided.
+Everything above them is either waiting on it or is the record of why something
+was stopped.
+
+The code is the only thing that knows a shape today. A snapshot records what
+was seen last time, `inventory` gathers what is declared this time, and a pair
+of weak hashes stands in for comparing them - which is why a hash collision is
+a data-loss bug rather than a diagnostic one, and why the entry above on
+reordering fields had to reason about fold algorithms at all. A schema the
+store carries in a form that is not this crate's own would replace the hashes
+with a comparison, and the comparison would be able to say *what* differs
+rather than *that* something does.
+
+JSON Schema rather than a private format because the point is that the file
+answers for itself. A store that carries one can be read by something that is
+not this library, migrated by a tool that is not this binary, and diffed by a
+person - none of which is possible while the shape lives only in a Rust type
+and a `u32`.
+
+JSON Schema is the **model**, not the storage: each engine encodes the document
+the way it encodes everything else, msgpack under redb included. Writing it as
+literal text inside a binary store so that `strings` finds it buys nothing - a
+binary engine needs a viewer either way, and sqlite's existing viewers already
+render its json, so nothing about them changes.
+
+**Decided, and it is two halves.** Plain JSON Schema for what a value looks
+like - nothing of this crate's invention in it, so anything that reads JSON
+Schema reads ours. And this store's own semantics as a role per declared path,
+from a closed set: `field`, `map`, `nested`, `table`. What the schema cannot
+say is which paths are levels and which hold values, and that is exactly what a
+store needs to know; the roles say it and nothing else has to.
+
+Three of the four are already in the code - `Role::Field`, `Role::Map`,
+`Role::Node`, which is `nested` under another name - and carried per field in
+`FieldDescriptor`. `table` arrives with the primitive; see the reactive-table
+RFC. So the vocabulary is not being invented here, it is being written down and
+made persistent.
+
+### How the shape is learned: ask the compiler, not the spelling
+
+A field contributes four scalars to the document - its name, its role, whether
+it is optional, and the name of its type. Three of those are answers about a
+type, and the compiler is the one that has them.
+
+`AmeType` is required of nested `_Data` structs, which the macro generates, and
+of nothing else. A leaf may be any type at all, including a foreign one from a
+crate where no derive can be added, and what the macro writes about it is its
+name. Describing it further at compile time would mean requiring a derive on
+user types, which costs more than the description is worth - but at run time
+serde will describe it for nothing, which is *A leaf is opaque at compile time,
+and serde can open it at run time* below.
+
+The questions are asked through a probe, which is inherent impls for the shapes
+this crate knows and a trait fallback for every other type:
+
+```rust
+pub struct Probe<T: ?Sized>(PhantomData<T>);
+
+pub trait AnyShape { const OPTIONAL: bool = false; const ROLE: Role = Role::Field; }
+impl<T: ?Sized> AnyShape for Probe<T> {}
+
+impl<T> Probe<Option<T>>            { pub const OPTIONAL: bool = true; }
+impl<K, V> Probe<ReactiveMap<K, V>> { pub const ROLE: Role = Role::Map; }
+```
+
+An inherent associated const shadows the trait's, so the compiler picks. The
+macro emits `<Probe<#ty>>::ROLE` and never looks at how the type was written.
+Measured on stable 1.95, including in `const` context.
+
+Two properties follow, and both are why this rather than matching on the
+spelled name:
+
+- **`Option<Foreign>` answers `true` while `Foreign` implements nothing.** The
+  modifier is visible without the inner type being bound by anything.
+- **Aliases and renamed imports resolve.** `type Maybe = Option<Foreign>` is
+  optional, `use Option as Perhaps` is optional, `type Port = u16` is not. A
+  name match would answer all three wrong and report drift for a rename.
+
+`OPTIONAL` decides whether `null` joins the property's type and whether the
+property is in `required`. It says nothing about what is underneath, which is
+why the probe needs no way to hand back an inner type - it answers predicates
+only, so it needs no associated types and depends on no unstable feature.
+
+**Built, in `shape.rs`, and it reaches the file.** `Role` and `optional` come to
+`FieldDescriptor` from the probe, the branch the macro picked from the spelling
+is asserted against what the type answers, and `SchemaSnapshot` carries the
+whole thing down - `StoredShape` per field, recursively through a `Node`'s
+children, which the snapshot did not record at all before. So the shape is in
+the store rather than only in the binary that opened it, which is the half this
+track exists for. See *The macro picks the branch, the compiler judges the pick*
+for what is left on the macro end.
+
+A snapshot written before this holds no `shape`, and it reads back as `None`
+rather than as a default. Absent has to mean unknown: a comparison that read the
+default as a claim would report every store written before today as having
+changed shape, when all that changed is what gets written down.
+
+**What a field records is its name, its shape, and its spelling.** No
+`type_hash`: the only thing that read it was the per-field type comparison, and
+the alternative - comparing `type_name` - is the mistake the probe exists to
+avoid, since a spelling moves when a rename or an alias does and the type has
+not. So `type_name` stays as what a person or the inspector reads, and nothing
+compares it.
+
+**Which leaves the comparison saying less, on purpose.** `SchemaDiff` is
+`added` and `removed`, by name. A field whose type changed under one name nags -
+the whole-struct hashes still disagree - and the diff has nothing to say about
+it, which `a_type_that_changed_under_one_name_nags_without_a_diff` pins. What
+replaces it is a comparison of two schema documents, and that is this track.
+
+### A leaf is opaque at compile time, and serde can open it at run time
+
+What the macro writes down about a leaf is the name of its type, because that is
+all a macro can know without requiring a derive on user types. So these three
+write the same record - `"Mode"`, role `Field`, not optional:
+
+| before | after |
+| --- | --- |
+| `enum Mode { A, B }` | `enum Mode { A, B, C }` |
+| `enum Mode { A, B }` | `enum Mode { X, Y }` |
+| `struct P { x: u8 }` | `struct P { x: u8, y: u8 }` |
+
+**But serde already knows, and it will say.** A derived `Deserialize` tells the
+`Deserializer` what it expects before any data is read, and the arguments carry
+the answer:
+
+```rust
+fn deserialize_struct(self, name, fields: &'static [&'static str], v)
+fn deserialize_enum(self, name, variants: &'static [&'static str], v)
+```
+
+A `Deserializer` written to record which method was called and stop reports
+`Struct { name: "Point", fields: ["x", "y"] }` and
+`Enum { name: "Mode", variants: ["Idle", "Busy", "Off"] }` - the whole variant
+list, from a type that implements nothing of this crate's. No instance is
+needed: this is `T::deserialize`, not `Serialize`, which would need a value and
+would then show one variant out of three. Measured, not assumed.
+
+The only bound is `Deserialize`, which every leaf already satisfies - a leaf
+that could not be deserialized could not be stored.
+
+Driving that to the end is what
+[`serde-reflection`](https://crates.io/crates/serde-reflection) does, and what
+it yields is the whole recursive shape:
+
+```
+Leaf:  Struct([mode: TypeName("Mode"), where_: TypeName("Point"),
+               tags: Seq(Str), note: Option(Str)])
+Mode:  Enum({0: Idle → Unit, 1: Busy → Struct([since: U64]),
+             2: Off → NewType(Bool)})
+Point: Struct([x: U8, y: U8])
+```
+
+Including the variant *indices*, which is what a non-self-describing codec
+writes - msgpack under redb - so an old registry is enough to reread old bytes
+rather than only to notice they changed.
+
+**Where tracing gives up**, from the crate's own error type and measured:
+
+| cause | error | recourse |
+| --- | --- | --- |
+| `flatten`, `tag`, `tag` + `content`, `untagged` | `NotSupported` | none - the type is not ours |
+| a hand-written `Deserialize` that validates | `Custom` | trace a value instead |
+| an enum met only inside a container | `MissingVariants` | trace that enum by name, which we cannot reach |
+| an empty `Option`, `Vec` or map in a traced value | `UnknownFormatInContainer` | a fuller value |
+| `Serialize` and `Deserialize` disagreeing | `Incompatible` | none |
+
+The first row is the uncomfortable one: those attributes exist for
+self-describing formats, which is what json, toml and ron are, so a config
+struct using `#[serde(flatten)]` is not exotic and will not be described.
+
+`trace_type` re-drives passes only for `T` itself, so an enum reached through a
+struct stays incomplete - and `registry_unchecked` must not be used to paper
+over it, because an enum recorded with one variant of three reads later as two
+variants removed. A partially seen enum is not written down.
+
+**So the rule is quiet:** `trace_type`, failing that `trace_value` from the
+declared default, failing that no entry in the document at all - and a leaf with
+no entry is described by the name of its type, which is exactly where this
+already stands. Tracing cannot make the record worse, only longer, and its
+failure costs nothing. Opening a store must not fail because someone's type
+would not describe itself.
+
+Two things to hold on to when this is built. The registry is *forward*-looking:
+comparing needs the older document to have been written at the time, same as the
+shape record. And `serde_reflection`'s own `ContainerFormat` must not be
+persisted as-is - that would adopt another crate's data model as this store's
+file format; it maps into the document described above.
+
+What it settles, and why it is a track rather than a task:
+
+- **The two weak hashes** stop being the gate, so neither has to be made
+  strong. The entry above stays as the record of what they could not see.
+- **Metadata carrying no format version** is the same question asked smaller: a
+  schema in the store is where a format version would live.
+- **`build` running no generated migrations** turns from a silent skip into a
+  comparison the store can make: the schema says what shape is expected, and a
+  store that does not match it can say so without depending on who collected
+  which steps.
+- **Reading the schema from the store instead of `inventory`** - which the fork
+  below already names - is this, done.
+
+Nothing here should be patched around while this is undecided, which is why
+the hash work above was stopped rather than finished.
+
 ## The fork under all of it: is the file a store, or a picture of a type
 
 Two models, and the library is currently both.
@@ -2329,6 +2623,32 @@ drift, which is the migration half.
 file needs the schema and the schema lives in the metadata - a file that can
 only be read once you have read it is not a design. And a prefix with no
 snapshot is read flat: nothing was declared, so nothing was nested.
+
+**Decided: a migration has no layout at all.** Two schemas are live while one
+runs - the file was laid out by the old one and the code declares the new - and
+they disagree about the same string. If `app.panel` was a `field` holding a
+serialized struct and becomes a `node` with `width` under it, the bytes are the
+same and only the schema says which reading is right.
+
+Reading by the file's schema and writing by the code's does not survive the
+ordinary case: step 2 reads what step 1 wrote, so the write went down in the new
+layout and the read looks for it in the old. That is the mainline, not an edge.
+
+So the prefix is flattened for the duration - joined key to value, no levels -
+the steps run against that, and the document is laid out once at the end from
+the new schema. There is nothing to invent: `MigrationContext` already addresses
+by joined key, `ctx.get(key)` and `ctx.set(key)` with `key: &str`, so the flat
+view *is* what a step already works with. The whole class of "which schema
+applies right now" then does not arise, rather than being answered by a rule.
+
+The alternative was one live schema mutated path by path as the migration
+rewrote each. More precise - it leaves paths the migration never touched alone -
+but that precision is only worth something while a layout changes in part, and
+after this it never does: the document is written out whole.
+
+The cost is the prefix in memory and rewritten entire, which is not a cost on
+the engines this applies to. A text engine holds its whole document anyway, and
+nobody puts a hundred thousand records in one.
 
 Migration of files already written nested is not a concern - there are no users.
 
