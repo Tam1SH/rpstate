@@ -419,6 +419,17 @@ deliberate: every one of them is.
 
 ### Performance
 
+- `StoreBackend::visit_prefix` hands a scan's entries to a closure as
+  `(&str, &[u8])` instead of building each one to give away. Loading a map on
+  one thread takes it and builds nothing per entry: no `StorePath` for the key,
+  no `Vec` copied out of the engine's page - `name_under_key` reads the level
+  below a prefix straight out of a stored key, checking it on the way, so a
+  malformed key is still refused where it is read. redb streams it, merging the
+  sorted write buffer into the cursor as it goes. Opening a million five-field
+  rows went 2.0 s to 1.87 s on one thread and 1.55 s to 1.27 s across cores.
+
+  Defaulted through `scan_prefix`, so a backend implemented outside this crate
+  is correct without knowing it exists.
 - A scan lays the write buffer over what the engine holds by merging two sorted
   lists rather than folding one into a tree. Both sides already arrive in
   order - the engine ranges by key, and the buffer is sorted once - so the tree

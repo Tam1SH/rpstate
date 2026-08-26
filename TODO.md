@@ -1242,16 +1242,53 @@ run rather than its numbers when the machine is busy: a run that reported 10^4
 taking as long as 3·10^4 was contaminated, and the arithmetic said so before
 any intuition did.
 
-**What is left, and it is measured rather than suspected.** The deferred split
-is cached in an `Arc<OnceLock<..>>`, and that `Arc` is an allocation on every
-parsed key - 10% of all allocations, for a cache the scan path never reads.
-Removing it means `Segments::Deferred` carries nothing and
-`segments()`/`segment_at` return `Cow<'_, str>`, since a level with an escaped
-separator is not a run of the joined string and has nowhere to be borrowed
-from. Fourteen call sites, all in the text engines, all mechanical. The cell
-cannot simply be held inline: the macro builds paths as `static`, and a
-`OnceLock` in the type makes every `StorePath` non-`Freeze`, which the borrow
-checker refuses there.
+**The cache the deferral came with is gone too.** An `Arc<OnceLock<..>>` held
+the split once it happened, and that `Arc` was an allocation on every parsed
+key - 200 000 blocks of 2.7 million in a twenty-thousand-entry run, for a cache
+the scan path never read. `Segments::Deferred` carries nothing now, and a level
+comes back as a `Cow`: one holding an escaped separator is not a run of the
+joined string and has to be assembled, one without is borrowed from it. Total
+allocations fell to 2.44 million.
+
+Holding the cell inline was never an option - the macro builds paths as
+`static`, and a `OnceLock` anywhere in the type makes every `StorePath`
+non-`Freeze`, which the borrow checker refuses there. That is what the `Arc`
+was for.
+
+`TextDocument` still takes `&[&str]`, so the eleven call sites in the document
+engines borrow from the `Cow`s in a second vector. Left as it is deliberately:
+those engines walk short paths on small stores, which is what they are for.
+
+**And then the scan stopped building anything at all.** Pricing the value copy
+on its own said four percent and not worth a trait change, which was the wrong
+unit: a caller that decodes each entry where it sees it needs neither the copy
+*nor* the path built for the key, and the key's `Arc<str>` was twice the copy.
+Counted together it is the copy, the string, and the walk that parses it.
+
+`StoreBackend::visit_prefix` hands each entry to a closure as `(&str, &[u8])`,
+defaulted through `scan_prefix` so a backend outside this crate stays correct
+without knowing it exists. redb overrides it and streams: the buffer is
+collected and sorted first, because it is what is pending rather than what is
+stored and is small beside it, and the engine's side is ranged over with a
+cursor and merged into the visitor as it goes. `name_under_key` reads the level
+below a prefix straight out of a stored key, validating it on the way, so a
+malformed key is still refused where it is read.
+
+Loading a map on one thread takes that path. Dividing the decode wants the
+entries in hand, so `parallel_reads` keeps the owning scan - the two ways to
+open cost differently and both are worth having.
+
+Allocations in a twenty-thousand-entry run went 2.44 million to 2.32, and the
+value copy left the profile entirely. Opening a million five-field rows: 2.0 s
+to 1.87 s on one thread, and 1.55 s to 1.27 s across cores.
+
+**What is left cannot be taken.** A path built in code holds its own string,
+and a value costs what its type costs to decode - two thirds of the difference
+between a `u64` map and a five-field one is `deserialize` building two
+`String`s per row, which no scan work touches. What the profile still shows
+above those is the *write* path: `path::join`, `try_push`, `get_erased` and
+`committed_or_buffered` are around a fifth of the blocks in a run that fills a
+store, and nothing here has looked at them.
 
 ## `amethystate-tauri` does not compile
 
@@ -1265,8 +1302,18 @@ anything that builds the workspace by default - `cargo flamegraph` did, which
 is how it turned up: a profiling run died on an adapter it had no interest in.
 Every workspace-wide command now needs `-p amethystate` to step around it.
 
-The repair is mechanical - the error type becomes something that implements
-`StdError`, and the nine signatures follow.
+**Done, and the type it needed was already there.** `error::Error` in the same
+crate is a `thiserror` enum with `Command` and `Serde` variants, implements
+`StdError`, and is `Send + Sync` - it just was not what the impl declared.
+`type Error = Error` and the nine signatures return `Report<Self::Error>`.
+
+Two things the compiler found on the way. `scan_prefix` returned
+`Vec<(String, _)>` where the trait wants `Vec<(StorePath, _)>`, so it never
+carried the path change from this release; it parses the key now and reports
+which one it was when a key will not parse. And the plugin's own errors come
+back as strings over the bridge - `invoke_result` deserialises them - so a
+`String` is what crosses, and `commanded` is the single place it becomes an
+error a report can carry, with the command and the path attached.
 
 ## The macro guesses what a field is, and could ask instead
 
