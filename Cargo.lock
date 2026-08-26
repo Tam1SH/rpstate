@@ -377,6 +377,7 @@ name = "amethystate-tauri"
 version = "0.20.0"
 dependencies = [
  "amethystate-core",
+ "error-stack",
  "futures",
  "js-sys",
  "serde",
