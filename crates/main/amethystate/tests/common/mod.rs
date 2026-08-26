@@ -12,6 +12,8 @@
 //! backtrace, which error-stack captures whenever `RUST_BACKTRACE` is set - as
 //! it usually is on CI and usually is not locally.
 
+#![allow(dead_code)]
+
 use std::sync::Once;
 
 static COLOR: Once = Once::new();
@@ -36,7 +38,6 @@ pub fn shape<C>(report: &error_stack::Report<C>) -> String {
 
 /// A snapshot name carrying the engine, for a report the engine has a hand in
 /// writing - anything the codec or the file layout speaks through.
-#[allow(dead_code)]
 pub fn per_engine(name: &str) -> String {
     format!(
         "{name}_{}",
@@ -53,7 +54,6 @@ pub fn per_engine(name: &str) -> String {
 /// saying so reads a redb database beside it, and what it asserts is about
 /// redb.
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
-#[allow(dead_code)]
 pub fn text_backend() -> amethystate::store::builder::Backend {
     use amethystate::store::builder::Backend;
 

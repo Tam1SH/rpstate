@@ -650,6 +650,9 @@ impl<D: TextDocument> TextStoreInner<D> {
         Ok(())
     }
 
+    /// Writes `node` at `path_str`, reporting a removal if the document does
+    /// not keep it - a format with no way to write nothing answers a `None`
+    /// with an absent key.
     pub(crate) fn set_node(
         &self,
         path_str: StorePath,
@@ -673,25 +676,41 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .set(&parts, node)
                 .doing(StorageError::Write, &self.files.data.path)
                 .attach_with(|| format!("node: {path_str}"))?;
-            let new_node = guard.get(&parts).unwrap();
-            let new_bytes = D::node_to_bytes(new_node)
+            let new = guard
+                .get(&parts)
+                .map(|n| D::node_to_bytes(n))
+                .transpose()
                 .doing(StorageError::Write, &self.files.data.path)
                 .attach_with(|| format!("node: {path_str}"))?;
-            (old, new_bytes)
+            (old, new)
         };
 
         self.writes.fetch_add(1, Ordering::Release);
 
-        utils::emit_events(
-            &self.subscriptions,
-            StoreEvent {
+        let event = match new_bytes {
+            Some(new) => StoreEvent {
                 path: Arc::from(path_str.as_str()),
                 op: StoreOp::Set,
                 old: old_bytes,
-                new: Some(new_bytes),
+                new: Some(new),
                 source,
             },
-        );
+            None => {
+                let Some(old) = old_bytes else {
+                    self.debouncer.schedule();
+                    return Ok(());
+                };
+                StoreEvent {
+                    path: Arc::from(path_str.as_str()),
+                    op: StoreOp::Delete,
+                    old: Some(old),
+                    new: None,
+                    source,
+                }
+            }
+        };
+
+        utils::emit_events(&self.subscriptions, event);
 
         self.debouncer.schedule();
         Ok(())
