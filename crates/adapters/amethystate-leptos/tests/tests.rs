@@ -38,7 +38,9 @@ impl<T> PartialEq for Probe<T> {
 
 struct DummyScope;
 impl amethystate::StateScope for DummyScope {
-    const PREFIX: &'static str = "test";
+    const PATH: amethystate::store::StorePath =
+        amethystate::store::StorePath::from_static(&["test"], "test");
+    const KEY: &'static str = "test";
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -50,7 +52,7 @@ async fn test_use_field_requirements() {
     let arena = DefaultArena::new();
 
     let field =
-        amethystate::store::field_with_path(&store, Arc::from("field_1"), 10, uuid::Uuid::new_v4())
+        amethystate::store::field_with_path(&store, ["field_1"], 10, uuid::Uuid::new_v4())
             .unwrap();
     let handle = arena.register_field(field);
 
@@ -91,7 +93,7 @@ async fn test_use_map_requirements() {
 
     let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
-        std::sync::Arc::from("map_1"),
+        ["map_1"],
         HashMap::new(),
         uuid::Uuid::new_v4(),
     )
@@ -148,7 +150,7 @@ async fn test_use_pipeline_requirements() {
 
     let field = amethystate::store::field_with_path(
         &store,
-        std::sync::Arc::from("field_2"),
+        ["field_2"],
         5,
         uuid::Uuid::new_v4(),
     )
@@ -201,7 +203,7 @@ async fn test_map_sub_requirements() {
 
     let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
-        std::sync::Arc::from("map_2"),
+        ["map_2"],
         HashMap::new(),
         uuid::Uuid::new_v4(),
     )
@@ -250,7 +252,7 @@ async fn test_real_component_lifecycle() {
     let arena = DefaultArena::new();
     let field = amethystate::store::field_with_path(
         &store,
-        std::sync::Arc::from("field_1"),
+        ["field_1"],
         10,
         uuid::Uuid::new_v4(),
     )

@@ -73,7 +73,7 @@ where
             .strip_prefix(path)
             .as_ref()
             .and_then(StorePath::name)
-            .map(str::to_string)
+            .map(|name| name.into_owned())
         else {
             continue;
         };

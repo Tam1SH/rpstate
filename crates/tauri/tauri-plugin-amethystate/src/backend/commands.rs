@@ -41,7 +41,7 @@ pub async fn amethystate_get_prefix(
     let mut map = HashMap::new();
     for (path, bytes) in raw {
         if let Ok(val) = store.store.decode::<serde_json::Value>(&bytes) {
-            map.insert(path, val);
+            map.insert(path.as_str().to_string(), val);
         }
     }
     Ok(map)

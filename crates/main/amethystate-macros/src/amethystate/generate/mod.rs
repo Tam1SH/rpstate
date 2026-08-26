@@ -410,6 +410,10 @@ fn generate_schema_export(
         }
         None => quote! { None },
     };
+    let exported_prefix_tokens = match prefix {
+        Some(p) => quote! { Some(#p) },
+        None => quote! { None },
+    };
 
     let field_metas = entries.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
@@ -479,7 +483,7 @@ fn generate_schema_export(
         quote! {
             #crate_name::inventory::submit! {
                 #crate_name::tauri::SchemaExportEntry {
-                    prefix: #prefix_tokens,
+                    prefix: #exported_prefix_tokens,
                     struct_name: #struct_name_str,
                     fields: &[
                         #(#field_metas),*

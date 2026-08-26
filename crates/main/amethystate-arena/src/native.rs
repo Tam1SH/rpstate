@@ -168,7 +168,7 @@ impl Arena {
         &self,
         handle: MapHandle<K, V, M>,
         key: &K,
-    ) -> ReactiveMapResult<Option<V>>
+    ) -> Option<V>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
@@ -268,21 +268,21 @@ impl Arena {
     pub fn get_map_entries<K, V, M>(
         &self,
         handle: MapHandle<K, V, M>,
-    ) -> ReactiveMapResult<Vec<(K, V)>>
+    ) -> Vec<(K, V)>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
         M: AccessMode,
     {
         self.with_item::<ReactiveMap<K, V, M>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.entries().map(|vec| vec.into_iter().collect())
+            map.entries().collect()
         })
     }
 
     pub fn remove_map_entry<K, V>(
         &self,
         handle: WritableMapHandle<K, V>,
-        key: K,
+        key: &K,
     ) -> ReactiveMapResult<Option<V>>
     where
         K: ReactiveMapKey,

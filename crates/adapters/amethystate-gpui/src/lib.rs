@@ -8,7 +8,7 @@ use std::ops::Deref;
 #[derive(Clone)]
 pub struct RpView<T, S> {
     inner: T,
-    _scope: ReactiveScope,
+    _scope: std::sync::Arc<ReactiveScope>,
     _phantom: PhantomData<S>,
 }
 
@@ -29,7 +29,7 @@ impl<S: StoreBackend, T: AmeStateSlice> RpView<T, S> {
 
         Self {
             inner,
-            _scope,
+            _scope: std::sync::Arc::new(_scope),
             _phantom: PhantomData,
         }
     }

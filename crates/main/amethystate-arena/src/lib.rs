@@ -67,7 +67,7 @@ mod tests {
         let store = StoreBuilder::new(&temp_dir).build().unwrap();
         let field: Field<i32, WritableMode> = amethystate::store::field_with_path(
             &store,
-            std::sync::Arc::from("test.int_field"),
+            ["test", "int_field"],
             42,
             uuid::Uuid::new_v4(),
         )

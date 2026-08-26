@@ -70,8 +70,8 @@ fn losing_the_metadata_file_does_not_resurrect_removed_defaults() {
         .build()
         .unwrap();
         let map = open_map(&store);
-        assert_eq!(map.get(&"shipped".to_string()).unwrap(), Some(1));
-        map.remove("shipped".to_string()).unwrap();
+        assert_eq!(map.get("shipped"), Some(1));
+        map.remove("shipped").unwrap();
         drop(map);
         store.save_now().unwrap();
     }
@@ -85,7 +85,7 @@ fn losing_the_metadata_file_does_not_resurrect_removed_defaults() {
         .unwrap();
     let map = open_map(&store);
     assert_eq!(
-        map.get(&"shipped".to_string()).unwrap(),
+        map.get("shipped"),
         None,
         "the entry the user removed came back when the metadata file went missing"
     );
@@ -130,7 +130,7 @@ fn a_forged_marker_does_not_suppress_the_defaults() {
         .unwrap();
     let map = open_map(&store);
     assert_eq!(
-        map.get(&"shipped".to_string()).unwrap(),
+        map.get("shipped"),
         Some(1),
         "a forged marker in the metadata file suppressed the map's defaults"
     );

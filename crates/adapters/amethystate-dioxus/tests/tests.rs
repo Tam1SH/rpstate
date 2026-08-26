@@ -48,7 +48,9 @@ impl<T> PartialEq for Probe<T> {
 
 struct DummyScope;
 impl amethystate::StateScope for DummyScope {
-    const PREFIX: &'static str = "test";
+    const PATH: amethystate::store::StorePath =
+        amethystate::store::StorePath::from_static(&["test"], "test");
+    const KEY: &'static str = "test";
 }
 
 #[derive(Clone, Props)]
@@ -85,7 +87,7 @@ async fn test_use_field_requirements() {
 
     let field = amethystate::store::field_with_path(
         &store,
-        std::sync::Arc::from("field_1"),
+        ["field_1"],
         10,
         uuid::Uuid::new_v4(),
     )
@@ -161,7 +163,7 @@ async fn test_use_map_requirements() {
 
     let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
-        std::sync::Arc::from("map_1"),
+        ["map_1"],
         HashMap::new(),
         uuid::Uuid::new_v4(),
     )
@@ -278,7 +280,7 @@ async fn test_use_pipeline_requirements() {
 
     let field = amethystate::store::field_with_path(
         &store,
-        std::sync::Arc::from("field_2"),
+        ["field_2"],
         5,
         uuid::Uuid::new_v4(),
     )
@@ -452,7 +454,7 @@ async fn test_map_sub_requirements() {
 
     let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
-        std::sync::Arc::from("map_2"),
+        ["map_2"],
         HashMap::new(),
         uuid::Uuid::new_v4(),
     )
@@ -613,7 +615,7 @@ async fn test_all_primitives_simultaneous_lifecycle() {
 
     let field = amethystate::store::field_with_path(
         &store,
-        std::sync::Arc::from("field_all"),
+        ["field_all"],
         10,
         uuid::Uuid::new_v4(),
     )
@@ -622,7 +624,7 @@ async fn test_all_primitives_simultaneous_lifecycle() {
 
     let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String, _>(
         &store,
-        std::sync::Arc::from("map_all"),
+        ["map_all"],
         HashMap::new(),
         uuid::Uuid::new_v4(),
     )
@@ -790,9 +792,9 @@ async fn test_pipeline_lifecycle_and_tuple_pipe() {
     let arena = DefaultArena::new();
 
     let fa = arena
-        .register_field(field_with_path(&store, Arc::from("fa"), 1, uuid::Uuid::new_v4()).unwrap());
+        .register_field(field_with_path(&store, ["fa"], 1, uuid::Uuid::new_v4()).unwrap());
     let fb = arena
-        .register_field(field_with_path(&store, Arc::from("fb"), 2, uuid::Uuid::new_v4()).unwrap());
+        .register_field(field_with_path(&store, ["fb"], 2, uuid::Uuid::new_v4()).unwrap());
 
     let probe = Probe::new();
     let signal_probe = Probe::new();

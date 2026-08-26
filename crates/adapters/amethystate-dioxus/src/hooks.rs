@@ -198,7 +198,6 @@ where
     let mut signal = use_signal(|| {
         arena
             .get_map_entries(handle)
-            .unwrap_or_default()
             .into_iter()
             .collect::<HashMap<K, V>>()
     });
@@ -219,7 +218,6 @@ where
         let sub = arena_sub.subscribe_map_any(handle, move |_| {
             let entries = arena_sub_sub
                 .get_map_entries(handle)
-                .unwrap_or_default()
                 .into_iter()
                 .collect();
             let _ = tx.send(entries);
@@ -238,8 +236,8 @@ where
     });
 
     let arena_remove = arena.clone();
-    let _remove = use_callback(move |key| {
-        let _ = arena_remove.remove_map_entry(handle, key);
+    let _remove = use_callback(move |key: K| {
+        let _ = arena_remove.remove_map_entry(handle, &key);
     });
 
     let arena_clear = arena.clone();
@@ -257,7 +255,7 @@ where
     M: AccessMode,
 {
     let arena = use_context::<DefaultArena>();
-    let mut signal = use_signal(|| arena.get_map_entry(handle, &key).ok().flatten());
+    let mut signal = use_signal(|| arena.get_map_entry(handle, &key));
 
     let tx = use_hook(|| {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<V>>();

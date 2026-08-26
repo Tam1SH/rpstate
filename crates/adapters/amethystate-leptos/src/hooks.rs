@@ -156,7 +156,6 @@ where
     let (signal, set_signal) = signal(
         arena
             .get_map_entries(handle)
-            .unwrap_or_default()
             .into_iter()
             .collect::<HashMap<K, V>>(),
     );
@@ -165,7 +164,6 @@ where
     let sub = arena.subscribe_map_any(handle, move |_| {
         let entries = arena_sub
             .get_map_entries(handle)
-            .unwrap_or_default()
             .into_iter()
             .collect();
         set_signal.set(entries);
@@ -235,7 +233,7 @@ where
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = arena_remove.remove_map_entry(handle, key);
+            let _ = arena_remove.remove_map_entry(handle, &key);
         }
     });
 
@@ -269,7 +267,7 @@ where
     M: AccessMode,
 {
     let arena = use_context::<DefaultArena>().expect("amethystate-leptos: Arena not found");
-    let (signal, set_signal) = signal(arena.get_map_entry(handle, &key).ok().flatten());
+    let (signal, set_signal) = signal(arena.get_map_entry(handle, &key));
 
     let key_clone = key.clone();
     let sub =
