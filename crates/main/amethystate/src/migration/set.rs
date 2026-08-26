@@ -73,8 +73,29 @@ impl MigrationSet {
         self
     }
 
+    /// The version, hash and fields the code declares for `prefix`.
+    ///
+    /// A set that was given steps for the prefix knows this from them. One
+    /// that was not - a store opened with
+    /// [`build`](crate::StoreBuilder::build), which runs only what was
+    /// declared by hand - reads it from the schema instead, because the schema
+    /// is what the code says its shape is whether or not anyone collected the
+    /// steps to get there.
+    ///
+    /// Answering zero there was how opening with `build` came to report drift
+    /// for a reason that had nothing to do with the data: the store held a
+    /// version and the code appeared to declare none. A prefix that really is
+    /// undeclared still answers zero, because nothing declared it.
     pub(crate) fn get_target(&self, prefix: &str) -> (u32, u32, &'static [FieldDescriptor]) {
-        self.targets.get(prefix).cloned().unwrap_or((0, 0, &[]))
+        if let Some(target) = self.targets.get(prefix) {
+            return target.clone();
+        }
+
+        inventory::iter::<crate::observability::SchemaEntry>
+            .into_iter()
+            .find(|entry| entry.prefix.as_ref().is_some_and(|p| p.as_str() == prefix))
+            .map(|entry| (entry.version, entry.schema_hash, entry.fields))
+            .unwrap_or((0, 0, &[]))
     }
 
     pub(crate) fn find_components(&self) -> Vec<Vec<String>> {
