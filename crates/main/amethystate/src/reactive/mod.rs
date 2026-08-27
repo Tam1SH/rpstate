@@ -29,7 +29,6 @@ pub mod pipeline;
 pub mod watch;
 
 pub use crate::migration::node::*;
-pub use amethystate_core::access::*;
 pub use amethystate_core::change::*;
 pub use amethystate_core::primitives::intercept::*;
 pub use amethystate_core::primitives::map_core::{

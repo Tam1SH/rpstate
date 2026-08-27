@@ -1,7 +1,7 @@
 use darling::FromField;
 use darling::util::SpannedValue;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree};
-use syn::{Expr, GenericArgument, Ident, PathArguments, Type, TypePath, Visibility};
+use syn::{GenericArgument, Ident, PathArguments, Type, TypePath, Visibility};
 
 #[derive(Debug, darling::FromMeta, Clone)]
 pub struct MacroArgs {
@@ -25,10 +25,6 @@ pub struct StoreFieldEntry {
     pub key: Option<SpannedValue<String>>,
     pub default: Option<TokenStream2>,
     pub nested: bool,
-    pub lookup: Option<SpannedValue<String>>,
-    pub lookup_node: Option<SpannedValue<String>>,
-    pub parent: Option<Expr>,
-    pub export_mut: bool,
     pub volatile: bool,
 }
 
@@ -55,10 +51,6 @@ impl FromField for StoreFieldEntry {
         let mut key = None;
         let mut default = None;
         let mut nested = false;
-        let mut lookup = None;
-        let mut lookup_node = None;
-        let mut parent = None;
-        let mut export_mut = false;
         let mut volatile = false;
 
         for attr in &field.attrs {
@@ -69,10 +61,6 @@ impl FromField for StoreFieldEntry {
                     &mut key,
                     &mut default,
                     &mut nested,
-                    &mut lookup,
-                    &mut lookup_node,
-                    &mut parent,
-                    &mut export_mut,
                     &mut volatile,
                 )?;
             }
@@ -85,10 +73,6 @@ impl FromField for StoreFieldEntry {
             key,
             default,
             nested,
-            lookup,
-            lookup_node,
-            parent,
-            export_mut,
             volatile,
         })
     }
@@ -116,10 +100,6 @@ fn parse_state_tokens(
     key: &mut Option<SpannedValue<String>>,
     default: &mut Option<TokenStream2>,
     nested: &mut bool,
-    lookup: &mut Option<SpannedValue<String>>,
-    lookup_node: &mut Option<SpannedValue<String>>,
-    parent: &mut Option<Expr>,
-    export_mut: &mut bool,
     volatile: &mut bool,
 ) -> darling::Result<()> {
     for item in split_top_level_commas(tokens) {
@@ -148,22 +128,10 @@ fn parse_state_tokens(
                     let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
                     *key = Some(SpannedValue::new(lit.value(), lit.span()));
                 }
-                "lookup" => {
-                    let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
-                    *lookup = Some(SpannedValue::new(lit.value(), lit.span()));
-                }
-                "lookup_node" => {
-                    let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
-                    *lookup_node = Some(SpannedValue::new(lit.value(), lit.span()));
-                }
-                "parent" => {
-                    let expr: Expr = syn::parse2(value).map_err(darling::Error::from)?;
-                    *parent = Some(expr);
-                }
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
-                        &["default", "key", "lookup", "lookup_node", "parent"],
+                        &["default", "key"],
                     ));
                 }
             }
@@ -171,11 +139,10 @@ fn parse_state_tokens(
             match name.as_str() {
                 "volatile" => *volatile = true,
                 "nested" => *nested = true,
-                "export_mut" => *export_mut = true,
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
-                        &["volatile", "nested", "export_mut"],
+                        &["volatile", "nested"],
                     ));
                 }
             }

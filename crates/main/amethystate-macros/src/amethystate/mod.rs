@@ -80,13 +80,11 @@ pub fn amethystate_impl(
                 .into();
         }
 
-        if (entry.nested || entry.lookup_node.is_some())
-            && generate::names_type(&entry.ty, struct_name)
-        {
+        if entry.nested && generate::names_type(&entry.ty, struct_name) {
             return syn::Error::new(
                 entry.ty.span(),
                 format!(
-                    "`{struct_name}` would build another `{struct_name}` to build itself, and never stop. A node that holds one of its own kind has to be able to stop - `Option<Box<_>>` at `None`, a collection at empty - and neither is built the way a `nested` or `lookup_node` field is"
+                    "`{struct_name}` would build another `{struct_name}` to build itself, and never stop. A node that holds one of its own kind has to be able to stop - `Option<Box<_>>` at `None`, a collection at empty - and neither is built the way a `nested` field is"
                 ),
             )
             .to_compile_error()

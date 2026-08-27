@@ -8,7 +8,7 @@ use syn::Ident;
 pub(crate) fn persistent_fields(entries: &[StoreFieldEntry]) -> Vec<&StoreFieldEntry> {
     entries
         .iter()
-        .filter(|e| e.lookup.is_none() && e.lookup_node.is_none() && !e.volatile)
+        .filter(|e| !e.volatile)
         .collect()
 }
 
@@ -251,7 +251,6 @@ pub(crate) fn data_impl(
 
     let prefix_expr = prefix.clone().unwrap_or_default();
     let prefix_path = path_literal(crate_name, &prefix_expr);
-    let deps = migration_deps(crate_name, entries);
     let is_root = prefix.is_some();
 
     let persistent_wrapper_tokens = match rp_mode {
@@ -448,7 +447,7 @@ pub(crate) fn data_impl(
             const VERSION: u32 = #version_val;
             const SCHEMA_HASH: u32 = #crate_name::migration::types::schema_hash(Self::FIELDS);
             const PARENT_PREFIX: &'static str = #prefix_expr;
-            const MIGRATION_DEPS: &'static [&'static str] = &[ #(#deps),* ];
+            const MIGRATION_DEPS: &'static [&'static str] = &[];
 
             fn load_struct(ctx: &mut #crate_name::MigrationContext) -> #crate_name::StorageResult<Self> {
                 Ok(Self {
@@ -466,14 +465,6 @@ pub(crate) fn data_impl(
             type Data = #data_struct_name;
         }
     }
-}
-
-fn migration_deps(crate_name: &TokenStream2, entries: &[StoreFieldEntry]) -> Vec<TokenStream2> {
-    entries
-        .iter()
-        .filter_map(|e| e.parent.as_ref())
-        .map(|p| quote! { <#p as #crate_name::StateScope>::KEY })
-        .collect::<Vec<_>>()
 }
 
 fn get_data_type(ty: &syn::Type) -> proc_macro2::TokenStream {

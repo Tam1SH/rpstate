@@ -1,4 +1,5 @@
 use amethystate_macros::amethystate;
+
 #[amethystate]
 pub struct ConnectionPool {
     #[amestate(default = 10)]
@@ -12,12 +13,6 @@ pub struct ConnectionPool {
 pub struct DatabaseState {
     #[amestate(nested)]
     pub pool: ConnectionPool,
-}
-
-#[amethystate(prefix = "ui.inspector")]
-pub struct InspectorState {
-    #[amestate(lookup_node = "pool", parent = DatabaseState)]
-    pub db_pool_view: ConnectionPool,
 }
 
 fn main() {}

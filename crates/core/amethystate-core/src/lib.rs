@@ -1,5 +1,4 @@
 #![allow(clippy::complexity)]
-pub mod access;
 pub mod backend;
 pub mod change;
 
@@ -22,7 +21,6 @@ pub use primitives::field_ops_async::*;
 #[cfg(feature = "async")]
 pub use primitives::map_ops_async::*;
 
-pub use access::*;
 pub use backend::*;
 pub use primitives::*;
 pub use scheme::*;

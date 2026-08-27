@@ -17,6 +17,24 @@ deliberate: every one of them is.
 
 ### Breaking
 
+- **Cross-struct references are gone.** `#[amestate(lookup = "...")]`,
+  `lookup_node`, `parent` and `export_mut` are no longer attributes, and the
+  `Lookup` and `LookupNode` kinds are out of the TypeScript export. A field that
+  pointed at another struct's path expanded to exactly a `Field` at that path
+  plus a compile-time check that the name and type matched, so what it bought
+  was a check you get anyway by holding the other struct and reading from it.
+
+  What it cost was larger: `ReadOnly<T>` / `Writable<T>`, a hidden
+  `__schema_field_*` method per field on every struct, a `TypeCheck` trait
+  emitted per lookup, `unsafe { &*null::<Parent>() }` in generated code, and
+  five of the seventeen compile-fail cases. It did not decouple anything either:
+  `parent = NetworkState` names the type, so the two structs were bound at
+  compile time regardless.
+
+  A component that wants fields from two prefixes now holds two structs.
+  `MIGRATION_DEPS` is consequently always empty - `parent` was its only source -
+  and the migration ordering it fed is being replaced by one that discovers
+  dependencies from what a step actually reads.
 - **A handle no longer carries an access mode.** `Field<T, M>` is `Field<T>`,
   `ReactiveMap<K, V, M>` is `ReactiveMap<K, V>`, and `AccessMode`,
   `ReadOnlyMode`, `WritableMode`, `ReadOnlyField`, `WritableField`,

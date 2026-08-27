@@ -18,14 +18,9 @@ fn test_macro_expansion_compilation() {
     let t = trybuild::TestCases::new();
     t.pass("tests/expand/basic.rs");
     t.pass("tests/expand/nested.rs");
-    t.pass("tests/expand/composition.rs");
-    t.pass("tests/expand/external_linked_nested.rs");
+    t.pass("tests/expand/nested_under_a_dotted_prefix.rs");
     t.pass("tests/expand/map_syntax.rs");
 
-    t.compile_fail("tests/fails/lookup_wrong_name.rs");
-    t.compile_fail("tests/fails/lookup_type_mismatch.rs");
-    t.compile_fail("tests/fails/lookup_deep_error.rs");
-    t.compile_fail("tests/fails/lookup_node_not_struct.rs");
     t.compile_fail("tests/fails/local_scope_not_send.rs");
     t.compile_fail("tests/fails/subscription_not_clone.rs");
 

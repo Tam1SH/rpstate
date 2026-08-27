@@ -20,12 +20,6 @@ mod v1 {
 
     #[amethystate(prefix = "ui")]
     pub struct Dashboard {
-        #[amestate(lookup = "net.port", parent = SystemConfig)]
-        pub sys_port: u16,
-
-        #[amestate(lookup_node = "net", parent = SystemConfig)]
-        pub net_node: NetworkSettings,
-
         #[amestate(default = false, volatile)]
         pub is_loading: bool,
     }
@@ -45,12 +39,6 @@ pub struct SystemConfig {
 
 #[amethystate(prefix = "ui")]
 pub struct Dashboard {
-    #[amestate(lookup = "net.listen_port", parent = SystemConfig)]
-    pub sys_port: u16,
-
-    #[amestate(lookup_node = "net", parent = SystemConfig)]
-    pub net_node: NetworkSettings,
-
     #[amestate(default = false, volatile)]
     pub is_loading: bool,
 }
@@ -88,8 +76,7 @@ fn test_nested_and_ephemeral_integration() {
         sys.net().port().set(9999).unwrap();
         ui.is_loading().set(true).unwrap();
 
-        assert_eq!(ui.sys_port().get(), 9999);
-        assert_eq!(ui.net_node().port().get(), 9999);
+        assert_eq!(sys.net().port().get(), 9999);
         assert!(ui.is_loading().get());
 
         store.save_now().unwrap();
@@ -103,11 +90,10 @@ fn test_nested_and_ephemeral_integration() {
 
         assert_eq!(sys.net().listen_port().get(), 9999);
 
-        assert_eq!(ui.sys_port().get(), 9999);
-
-        assert_eq!(ui.net_node().listen_port().get(), 9999);
-
-        assert!(!ui.is_loading().get());
+        assert!(
+            !ui.is_loading().get(),
+            "a volatile field is never stored, so it comes back at its default"
+        );
 
         let old_raw: Option<u16> = store.get(["system", "net", "port"]).unwrap();
         assert!(old_raw.is_none(), "Old nested key should be gone");

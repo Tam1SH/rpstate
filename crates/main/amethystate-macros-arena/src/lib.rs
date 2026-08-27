@@ -51,7 +51,7 @@ pub fn amethystate_framework_arena(_args: TokenStream, input: TokenStream) -> To
         let fvis = &e.vis;
         let ty = &e.ty;
 
-        if e.nested || e.lookup_node.is_some() {
+        if e.nested {
             let nested_handle = format_ident!("{}Handle", get_type_ident_str(ty));
             quote! { #fvis #fname: #nested_handle }
         } else if let Some((k, v)) = e.get_map_types() {
@@ -63,7 +63,7 @@ pub fn amethystate_framework_arena(_args: TokenStream, input: TokenStream) -> To
 
     let register_fields = entries.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        if e.nested || e.lookup_node.is_some() {
+        if e.nested {
             quote! { #fname: self.#fname().register(arena) }
         } else if e.get_map_types().is_some() {
             quote! { #fname: arena.register_map(self.#fname()) }

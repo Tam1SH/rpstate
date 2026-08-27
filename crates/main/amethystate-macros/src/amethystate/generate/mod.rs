@@ -133,7 +133,6 @@ pub fn generate_code(
     }
 
     let is_root = prefix.is_some();
-    let schema_methods = accessors::schema_methods(&crate_name, entries);
     let fields_impl = data::data_impl(
         &crate_name,
         vis,
@@ -158,7 +157,7 @@ pub fn generate_code(
     let inherent_subs = if matches!(rp_mode, RpMode::Reactive | RpMode::Both) {
         let sub_all_fields = entries.iter().map(|e| {
             let fname = e.ident.as_ref().unwrap();
-            if e.nested || e.lookup_node.is_some() {
+            if e.nested {
                 quote! {
                     {
                         let cb_clone = cb.clone();
@@ -184,7 +183,7 @@ pub fn generate_code(
 
         let sub_all_fields_ext = entries.iter().map(|e| {
             let fname = e.ident.as_ref().unwrap();
-            if e.nested || e.lookup_node.is_some() {
+            if e.nested {
                 quote! {
                     {
                         let cb_clone = cb.clone();
@@ -298,7 +297,7 @@ pub fn generate_code(
 
     let fork_fields = entries.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
-        if e.nested || e.lookup_node.is_some() {
+        if e.nested {
             quote! { #fname: ::std::sync::Arc::new(self.#fname.fork_with_id(new_id)) }
         } else {
             quote! { #fname: self.#fname.fork_with_id(new_id) }
@@ -373,7 +372,7 @@ pub fn generate_code(
                 }
                 #scope
                 impl #name {
-                    #constructor #(#schema_methods)* #(#methods)*
+                    #constructor #(#methods)*
                     #fork_impl
                     #inherent_subs
                 }
@@ -428,14 +427,6 @@ fn generate_schema_export(
         } else if e.nested {
             let sname = get_type_ident_str(&e.ty);
             quote! { #crate_name::tauri::FieldKind::Nested { struct_name: #sname } }
-        } else if let Some(target) = &e.lookup {
-            let target_str = target.to_string();
-            let mutable = e.export_mut;
-            quote! { #crate_name::tauri::FieldKind::Lookup { target_key: #target_str, mutable: #mutable } }
-        } else if let Some(target) = &e.lookup_node {
-            let target_str = target.to_string();
-            let sname = get_type_ident_str(&e.ty);
-            quote! { #crate_name::tauri::FieldKind::LookupNode { target_prefix: #target_str, struct_name: #sname } }
         } else if let Some((k, v)) = e.get_map_types() {
             let k_ts = map_type_to_ts(k.clone()).1;
             let v_ts = map_type_to_ts(v.clone()).1;
