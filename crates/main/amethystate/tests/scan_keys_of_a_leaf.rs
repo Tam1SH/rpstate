@@ -1,76 +1,106 @@
 //! What a scan of a path with nothing under it answers.
 //!
-//! `scan_keys` names the children of a level. A leaf has none, so the answer is
-//! the empty list - the same answer as for a path that is not there at all,
-//! which is right: neither has children.
+//! It answers with that path. A scan names the subtree rooted at the prefix,
+//! the root included, so a leaf is its own only member - and every engine
+//! agrees, which is what conformance property 7 is for: `is_under` admits
+//! `key == prefix` on the flat engines, and the text engines' recursion does
+//! the same.
 //!
-//! This lives in the shared text store rather than in any one engine, so it is
-//! the same question on json, toml and ron.
+//! Worth a file of its own because it reads like a defect and is not, and
+//! because it is a genuine trap: a walk that recurses into whatever a scan
+//! returned never gets closer to the bottom - the leaf hands back the path it
+//! was given. Anything walking the key space has to stop when a scan answers
+//! with the prefix it was asked about.
 
-#![cfg(any(feature = "json", feature = "toml", feature = "ron"))]
+#![cfg(any(
+    feature = "redb",
+    feature = "sqlite",
+    feature = "json",
+    feature = "toml",
+    feature = "ron"
+))]
 
-use amethystate::store::builder::StoreBuilder;
-use amethystate::store::field_with_path;
-use amethystate::uuid::Uuid;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
-mod common;
-use common::text_backend;
-
-/// A leaf is not its own child.
-///
-/// `scan_keys_recursive` pushes the prefix it was given when the node under it
-/// has no children, so a leaf comes back naming itself. Anything walking the
-/// key space by scanning what a scan returned therefore never gets closer to
-/// the bottom - it recurses on the same path until the stack ends, and a stack
-/// overflow is not something a caller can catch.
-#[test]
-#[ignore = "known: scan_keys of a leaf returns the leaf itself, so a recursive \
-            walk of the key space does not terminate"]
-fn a_leaf_is_not_listed_as_a_child_of_itself() {
-    let path = TempPath::new("scan_leaf");
-
+fn a_leaf_answers_with_itself(backend: Backend, label: &str) {
+    let path = TempPath::new(label);
     let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
+        .backend(backend)
         .build()
         .unwrap();
 
-    let leaf = field_with_path::<u32>(&store, ["leafy", "value"], 1, Uuid::new_v4()).unwrap();
-    leaf.set(7).unwrap();
-    store.save_now().unwrap();
+    store.set(["leafy", "value"], &7u32).unwrap();
 
-    let under_the_level = store
-        .scan_keys(&StorePath::from_segments(["leafy"]))
-        .unwrap();
     assert_eq!(
-        under_the_level,
+        store.scan_keys(["leafy"]).unwrap(),
         vec![StorePath::from_segments(["leafy", "value"])],
         "the level above the leaf names it, which is the control for the case below"
     );
 
-    let under_the_leaf = store
-        .scan_keys(&StorePath::from_segments(["leafy", "value"]))
-        .unwrap();
-    assert!(
-        under_the_leaf.is_empty(),
-        "a scan of a leaf answered {under_the_leaf:?} - it named the leaf as its \
-         own child, so a walk that recurses into what a scan returns never ends"
+    assert_eq!(
+        store.scan_keys(["leafy", "value"]).unwrap(),
+        vec![StorePath::from_segments(["leafy", "value"])],
+        "a scan is the subtree including its root, so a leaf is its own only member"
+    );
+
+    // The half that makes it a contract rather than an accident: the two scans
+    // must say the same thing, which is what conformance property 7 asserts
+    // across generated inputs.
+    let entries: Vec<StorePath> = store
+        .scan_prefix(["leafy", "value"])
+        .unwrap()
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(
+        entries,
+        store.scan_keys(["leafy", "value"]).unwrap(),
+        "`scan_keys` and `scan_prefix` disagreed about a leaf"
     );
 }
 
-/// The control: a path that was never written answers the same way, and does.
-#[test]
-fn a_path_that_is_not_there_has_no_children() {
-    let path = TempPath::new("scan_absent");
-
+fn a_path_that_is_not_there_has_no_members(backend: Backend, label: &str) {
+    let path = TempPath::new(label);
     let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
+        .backend(backend)
         .build()
         .unwrap();
 
-    let absent = store
-        .scan_keys(&StorePath::from_segments(["nothing", "here"]))
-        .unwrap();
-    assert!(absent.is_empty());
+    assert!(
+        store.scan_keys(["nothing", "here"]).unwrap().is_empty(),
+        "a path nobody wrote has no subtree, not even itself"
+    );
 }
+
+macro_rules! per_engine {
+    ($feature:literal, $backend:expr, $mod_name:ident) => {
+        #[cfg(feature = $feature)]
+        mod $mod_name {
+            use super::*;
+
+            #[test]
+            fn a_leaf_answers_with_itself() {
+                super::a_leaf_answers_with_itself(
+                    $backend,
+                    concat!("leaf_", stringify!($mod_name)),
+                );
+            }
+
+            #[test]
+            fn a_path_that_is_not_there_has_no_members() {
+                super::a_path_that_is_not_there_has_no_members(
+                    $backend,
+                    concat!("absent_", stringify!($mod_name)),
+                );
+            }
+        }
+    };
+}
+
+per_engine!("redb", Backend::Redb, redb);
+per_engine!("sqlite", Backend::Sqlite, sqlite);
+per_engine!("json", Backend::Json, json);
+per_engine!("toml", Backend::Toml, toml);
+per_engine!("ron", Backend::Ron, ron);

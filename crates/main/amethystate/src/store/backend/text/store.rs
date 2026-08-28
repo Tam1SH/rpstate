@@ -1118,6 +1118,15 @@ fn scan_keys_recursive<D: TextDocument>(
 
     let children = doc.scan(parts)?;
     if children.is_empty() {
+        // A scan names the subtree rooted at the prefix, the root included, so
+        // a leaf answers with itself. Every engine agrees on this - `is_under`
+        // admits `key == prefix` on the flat ones - and `scan_prefix` says the
+        // same, which conformance property 7 pins.
+        //
+        // It is a trap for a caller who walks the key space by recursing into
+        // whatever a scan returned: the leaf hands back the path it was given,
+        // and the walk never gets closer to the bottom. That is the caller's to
+        // notice, and `StoreBackend::scan_keys` says so.
         if !prefix_str.is_empty() && doc.get(parts).is_some() {
             keys.push(prefix_str.to_string());
         }

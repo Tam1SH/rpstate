@@ -1,6 +1,8 @@
 use crate::SubscriptionKind;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::{StoreEvent, SubscriptionEntry};
+#[cfg(feature = "sqlite")]
+use amethystate_core::path::SEPARATOR;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use parking_lot::RwLock;
@@ -100,6 +102,18 @@ pub fn subtree_bound(prefix: &StorePath) -> Option<String> {
 /// A pattern would have to escape whatever the pattern language treats as
 /// special, and a name is allowed to hold any of it - `panel[0]` is a name.
 /// Comparison has no such vocabulary, and an index can serve it.
+///
+/// The upper bound is the separator's byte successor rather than a high
+/// character after it. `prefix.\u{10FFFF}` reads as "surely nothing sorts
+/// above that", and a child named `\u{10FFFF}z` does: it was written fine,
+/// read fine by its own path, and was invisible to every scan of the level
+/// above it - so it also survived a delete of its own subtree. `prefix/`
+/// admits every `prefix.` and nothing else, whatever the name after it.
+///
+/// Neither bound is exact on its own. The low end is the prefix itself, so a
+/// sibling whose next character sorts below the separator falls inside the
+/// range; [`is_under`] is what settles that, and every caller has to apply it
+/// to the rows as well as to the buffer.
 #[cfg(feature = "sqlite")]
 pub fn key_range(prefix: &StorePath) -> (String, String) {
     if prefix.is_root() {
@@ -108,8 +122,7 @@ pub fn key_range(prefix: &StorePath) -> (String, String) {
 
     let low = prefix.as_str().to_string();
     let mut high = low.clone();
-    high.push('.');
-    high.push('\u{10FFFF}');
+    high.push((SEPARATOR as u8 + 1) as char);
     (low, high)
 }
 

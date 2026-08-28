@@ -1772,7 +1772,6 @@ fn a_prefix_that_spells_another_prefixs_init_flag() {
 /// migration of `routes` impossible, and nothing at the write said so.
 #[test]
 fn a_migration_scans_past_the_level_boundary_and_then_refuses_what_it_found() {
-    use amethystate::migration::ComponentOutcome;
     use migration_probe::{Routing, v1};
 
     let file = TempPath::new("probe_mig_boundary");
@@ -1798,37 +1797,29 @@ fn a_migration_scans_past_the_level_boundary_and_then_refuses_what_it_found() {
         .build_with_report()
         .expect("the file still opens");
 
+    // This probe recorded a defect and now records its absence. The adapter
+    // filtered its scan with `key.starts_with(prefix)`, so loading the map
+    // named `routes` picked up `routes_v2`'s entries and then refused them for
+    // not being under the map they were scanned from - a migration that failed
+    // for good, leaving the component stuck at v1 while the new struct ran on
+    // unmigrated data. It uses `utils::is_under` now, as the store's own scans
+    // always did.
     assert!(
-        report.has_failures(),
-        "the migration is expected to fail today: {report:?}"
-    );
-    let failure = report
-        .components
-        .iter()
-        .find_map(|c| match &c.outcome {
-            ComponentOutcome::Failed { error } => Some(format!("{error:?}")),
-            _ => None,
-        })
-        .expect("a failed component");
-    assert!(
-        failure.contains("routes_v2"),
-        "the failure is about the sibling map: {failure}"
-    );
-    assert!(
-        failure.contains("not under the map it was scanned from"),
-        "the failure is the adapter's own scan disagreeing with the path: {failure}"
+        !report.has_failures(),
+        "a map whose name begins another map's name still breaks the migration: {report:?}"
     );
 
-    // And the application is handed a store it can use, on data at the old
-    // version, with the new struct's default where the migration would have
-    // written a value.
     let cfg = Routing::new_with(&store).unwrap();
     assert_eq!(
         cfg.generation().get(),
-        0,
-        "the migration would have written 1"
+        1,
+        "the migration did not run, or ran without writing"
     );
     assert_eq!(cfg.routes().keys(), vec!["a".to_string()]);
-    assert_eq!(cfg.routes_v2().keys(), vec!["b".to_string()]);
+    assert_eq!(
+        cfg.routes_v2().keys(),
+        vec!["b".to_string()],
+        "the sibling map was taken along by the scan"
+    );
     drop(store);
 }

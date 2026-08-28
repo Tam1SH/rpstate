@@ -48,6 +48,30 @@ checkable. This is what has been done about them.
 - **`atomic_write.rs:66`** is replaced by
   `a_write_that_landed_leaves_no_temporary_behind`, in a directory of its own,
   which catches a deliberately leaked temporary - confirmed by leaking one.
+- **The sqlite scan boundary is fixed**, and the tests that were waiting for it
+  are no longer `#[ignore]`d. `scan_prefix` and `scan_keys` run their committed
+  rows through `is_under`, as redb always did, and `key_range`'s upper bound is
+  the separator's byte successor rather than `prefix.\u{10FFFF}` - which a child
+  named `\u{10FFFF}z` sorted above, so it was invisible to every scan of the
+  level above it and survived a delete of its own subtree.
+- **Both migration adapters** filter with `is_under` rather than
+  `key.starts_with` / `GLOB '{prefix}*'`. A map named `routes` was picking up
+  `routes_v2`'s entries and then refusing them, failing the migration for good.
+  The redb probe that recorded that now records its absence.
+- **An empty path is refused.** `StorePathError::EmptyPath`, from
+  `try_from_segments`, which is what `IntoStorePath` and so every write from a
+  caller's strings goes through. `from_segments` still answers with the root,
+  because a written-out empty list is a statement - an `as_root` struct's path
+  is exactly that - while a computed one that filtered down to nothing is not.
+- **`scan_keys` of a leaf: the finding was wrong, and the test with it.** A scan
+  names the subtree *including its root*, so a leaf answering with itself is the
+  contract, agreed by all five engines - `is_under` admits `key == prefix`, and
+  conformance property 7 pins `scan_keys` and `scan_prefix` saying the same
+  thing. Changing it broke that agreement on the three text engines, and
+  property 7 caught it. Reverted; the test now asserts the real contract on
+  every engine, and the non-termination it warned about is a caller's trap
+  rather than a defect, named in the code where the answer is produced.
+
 - **`two_stores_reactivity.rs:70`** is renamed to what it proves, its doc
   corrected, and a second test added that writes to the store whose binding is
   gone. On one point the audit overstated: a change on any source re-runs

@@ -10,36 +10,38 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::field_with_path;
 use amethystate::uuid::Uuid;
-use amethystate_core::path::StorePath;
+use amethystate_core::path::{StorePath, StorePathError};
 use amethystate_core::test_utils::TempPath;
 
 mod common;
 use common::text_backend;
 
-/// One empty segment is refused by name and by position. No segments at all is
-/// the whole store.
+/// One empty segment is refused, and so is a list of none.
 ///
-/// `StorePathError` has an `EmptySegment` and nothing for an empty path, so
-/// `try_from_segments` walks a list of no segments, finds nothing to object to,
-/// and returns the root.
+/// `try_from_segments` used to walk a list of no segments, find nothing to
+/// object to, and return the root - so a path computed at run time that
+/// filtered down to nothing addressed the whole store, and there was no error
+/// for it to return because `StorePathError` had none.
 #[test]
-#[ignore = "known: an empty segment is an error and an empty list of segments \
-            is the root, so a path that filters down to nothing addresses \
-            everything"]
-fn an_empty_segment_is_refused_and_an_empty_list_is_not() {
-    assert!(
-        StorePath::try_from_segments(["ui", ""]).is_err(),
-        "an empty segment is refused, which is the behaviour this contrasts with"
+fn an_empty_segment_is_refused_and_so_is_an_empty_list() {
+    assert_eq!(
+        StorePath::try_from_segments(["ui", ""]).unwrap_err(),
+        StorePathError::EmptySegment { at: 1 },
+        "an empty segment is refused by name and by position, which is the \
+         behaviour this contrasts with"
     );
 
     let nothing: Vec<String> = Vec::new();
-    let path = StorePath::try_from_segments(&nothing)
-        .expect("a list of no segments is accepted rather than refused");
+    assert_eq!(
+        StorePath::try_from_segments(&nothing).unwrap_err(),
+        StorePathError::EmptyPath,
+        "a list of no segments was accepted, and what it names is everything"
+    );
 
     assert!(
-        !path.is_root(),
-        "a list of no segments became the root, so a path computed at run time \
-         that filters down to nothing addresses the entire store"
+        StorePath::root().is_root(),
+        "the root is still reachable, by name, which is the point of refusing \
+         the other way in"
     );
 }
 
@@ -48,12 +50,11 @@ fn an_empty_segment_is_refused_and_an_empty_list_is_not() {
 /// Nothing here names the root. The segments are computed, the filter happens
 /// to remove all of them, and the write that follows returns success.
 ///
-/// A scalar at the root is refused by the guard that stops a scalar landing on
-/// a branch, so the shape that gets through is the ordinary one: a struct or a
-/// map, written at a path that came out empty.
+/// A scalar at the root was refused by the guard that stops a scalar landing on
+/// a branch, which is why the shape that got through was the ordinary one: a
+/// struct or a map, written at a path that came out empty. That guard was never
+/// meant for this and covered it by accident.
 #[test]
-#[ignore = "known: a struct written at a path that computed to nothing replaces \
-            the whole document and returns Ok"]
 fn a_path_that_filtered_down_to_nothing_does_not_replace_the_store() {
     let path = TempPath::new("empty_path_write");
 

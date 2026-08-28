@@ -105,19 +105,17 @@ fn a_child_above_the_bound_is_still_a_child(backend: Backend, label: &str) {
 }
 
 macro_rules! boundary_tests {
-    ($feature:literal, $backend:expr, $mod_name:ident $(, $ignore:literal)?) => {
+    ($feature:literal, $backend:expr, $mod_name:ident) => {
         #[cfg(feature = $feature)]
         mod $mod_name {
             use super::*;
 
             #[test]
-            $(#[ignore = $ignore])?
             fn a_scan_lists_only_what_is_under_the_prefix() {
                 scan_lists_only_the_subtree($backend, concat!("scan_", stringify!($mod_name)));
             }
 
             #[test]
-            $(#[ignore = $ignore])?
             fn deleting_a_prefix_takes_only_its_subtree() {
                 delete_prefix_takes_only_the_subtree(
                     $backend,
@@ -126,7 +124,6 @@ macro_rules! boundary_tests {
             }
 
             #[test]
-            $(#[ignore = $ignore])?
             fn a_child_above_the_range_bound_is_still_scanned() {
                 a_child_above_the_bound_is_still_a_child(
                     $backend,
@@ -141,13 +138,4 @@ boundary_tests!("redb", Backend::Redb, redb);
 boundary_tests!("json", Backend::Json, json);
 boundary_tests!("toml", Backend::Toml, toml);
 boundary_tests!("ron", Backend::Ron, ron);
-
-boundary_tests!(
-    "sqlite",
-    Backend::Sqlite,
-    sqlite,
-    "known: `scan_prefix` and `scan_keys` pass `key_range` straight to SQL and \
-     never run the rows through `is_under`, which redb does - so a sibling \
-     whose third character sorts below `.` is listed as a member of the \
-     subtree, and `delete_prefix` destroys it"
-);
+boundary_tests!("sqlite", Backend::Sqlite, sqlite);

@@ -343,7 +343,19 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("rows read: {}", storage_results.len()))?;
-                storage_results.push((utils::stored_path(&k)?, v));
+
+                // The range is not exact and was never meant to be: it opens at
+                // the prefix itself and closes above `prefix.`, so a sibling
+                // whose next character sorts below the separator - a space,
+                // `!`, `%`, `-`, any of U+0000 to U+002D, all legal in a name -
+                // falls inside it. The buffer below has always been filtered
+                // this way; the committed rows were not, so a scan of `ui`
+                // claimed `ui!x` was under it and `delete_prefix`, which is
+                // built on this scan, destroyed it. redb has done this since it
+                // was written.
+                if utils::is_under(&k, prefix.as_str(), &bound) {
+                    storage_results.push((utils::stored_path(&k)?, v));
+                }
             }
         }
 
@@ -388,7 +400,13 @@ impl SqliteStoreInner {
                     .attach_with(|| format!("prefix: {prefix}"))
                     .attach_with(|| range.clone())
                     .attach_with(|| format!("keys read: {}", keys.len()))?;
-                keys.push((utils::stored_path(&key)?, Vec::new()));
+
+                // Same as `scan_prefix`: the range admits a sibling whose next
+                // character sorts below the separator, and the buffer below is
+                // filtered while these rows were not.
+                if utils::is_under(&key, prefix.as_str(), &bound) {
+                    keys.push((utils::stored_path(&key)?, Vec::new()));
+                }
             }
         }
 

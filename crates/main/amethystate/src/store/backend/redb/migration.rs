@@ -98,6 +98,7 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
+        let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
         let table = self.data_table()?;
         let mut result = Vec::new();
@@ -113,7 +114,12 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("entries read so far: {}", result.len()))?;
             let key = k.value();
-            if key.starts_with(prefix) {
+            // `starts_with` is not "under": two map fields named `routes` and
+            // `routes_v2` share a beginning, so loading the first picked up the
+            // second's entries and then refused them for not being under the
+            // map they were scanned from - a migration that failed for good.
+            // The store's own scans have used `is_under` all along.
+            if utils::is_under(key, prefix, &bound) {
                 result.push((utils::stored_path(key)?, v.value().to_vec()));
             }
         }

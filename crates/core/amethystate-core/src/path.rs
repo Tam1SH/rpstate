@@ -4,7 +4,14 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-const SEPARATOR: char = '.';
+/// What divides one level from the next in a stored key.
+///
+/// Public because a backend that queries by comparison has to reason about it:
+/// the upper bound of a subtree's range is this character's successor, and
+/// spelling that out is better than a backend picking a high character and
+/// hoping nothing sorts above it.
+pub const SEPARATOR: char = '.';
+
 const ESCAPE: char = '\\';
 
 /// Where a value lives in the store, as the levels it is under rather than as
@@ -187,16 +194,29 @@ impl StorePath {
     /// [`StorePath::try_from_segments`] instead, and every call that builds a
     /// path out of a caller's strings - [`IntoStorePath`], and so `Store::get`,
     /// `Kv::set`, `ReactiveMap::insert` - already does.
+    /// No levels at all is the root, and here that is a statement rather than
+    /// an accident: an `as_root` struct's path is written out as no levels.
+    /// [`StorePath::try_from_segments`] refuses it, because a list that came
+    /// from data and turned out empty is not something anyone said.
     #[track_caller]
     pub fn from_segments<I, S>(segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        Self::try_from_segments(segments).expect("a path segment cannot be empty")
+        match Self::try_from_segments(segments) {
+            Ok(path) => path,
+            Err(StorePathError::EmptyPath) => Self::root(),
+            Err(other) => panic!("{other}"),
+        }
     }
 
     /// [`StorePath::from_segments`] for levels that can turn out to be empty.
+    ///
+    /// Which is where the two differ: a written-out empty list means the root,
+    /// and a computed one that filtered down to nothing means nobody decided.
+    /// The second is refused with [`StorePathError::EmptyPath`], because it
+    /// used to name the whole store and a write through it replaced everything.
     pub fn try_from_segments<I, S>(segments: I) -> Result<Self, StorePathError>
     where
         I: IntoIterator<Item = S>,
@@ -210,6 +230,10 @@ impl StorePath {
                 return Err(StorePathError::EmptySegment { at });
             }
             collected.push(Arc::from(segment));
+        }
+
+        if collected.is_empty() {
+            return Err(StorePathError::EmptyPath);
         }
 
         Ok(Self::from_checked(collected))
@@ -491,6 +515,16 @@ pub enum StorePathError {
     /// An escape that escapes nothing. No key this type wrote holds one, and
     /// reading it leniently would let two different keys name one path.
     DanglingEscape,
+
+    /// No levels at all.
+    ///
+    /// A path is built from a list, and a list computed at run time can come
+    /// out empty - a filter that removed everything, a split of an empty
+    /// string. That named the root, so a write through it replaced the whole
+    /// store and returned `Ok`, in code that never mentions the root.
+    ///
+    /// [`StorePath::root`] is how to say it on purpose.
+    EmptyPath,
 }
 
 impl fmt::Display for StorePathError {
@@ -502,6 +536,9 @@ impl fmt::Display for StorePathError {
             StorePathError::DanglingEscape => {
                 f.write_str("an escape must be followed by a separator or another escape")
             }
+            StorePathError::EmptyPath => f.write_str(
+                "a path of no levels names the whole store - say `StorePath::root()` to mean it",
+            ),
         }
     }
 }
