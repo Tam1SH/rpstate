@@ -9,24 +9,56 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
-## `flush_prefix` commits a prefix, not a write
+## `durable()` on one field commits everyone else's unfinished writes
 
-`durable()` on one field also lands every buffered write under the same
-prefix. In redb and sqlite, `pending_prefix(&lock, prefix)` collects the whole
-subtree and commits it in one transaction. The text backends go further:
-`flush_prefix` ignores its argument and calls `save_now()`, rewriting the entire
-document, so one durable write makes the whole store durable.
+`durable()` on one field also lands every buffered write under the same prefix.
+In redb and sqlite, `pending_prefix(&lock, prefix)` collects the whole subtree
+and commits it in one transaction. The text backends go further: `flush_prefix`
+ignores its argument and calls `save_now()`, rewriting the entire document, so
+one durable write makes the whole store durable.
 
 The granularity dates from when `Field` was the only primitive and a prefix held
 exactly one value. With `ReactiveMap` and `Kv` a prefix now covers an arbitrary
-number of unrelated keys.
+number of unrelated keys. An assumption that was true and quietly stopped being
+true is the shape of a bug, not of a trade.
 
-Two consequences: a durable write costs more than it looks, and how much it
-commits depends on the engine — a text backend is accidentally stronger than
-redb. Both are documented on `Field::durable`; the wider behaviour must not be
-relied on.
+**And it is a correctness bug, not a cost one.** This crate has no transactions
+as a class, so the debounce buffer is the only grouping an application has: while
+values sit in it, they are not yet a fact. Writing `a`, intending to write `b`,
+and having unrelated code call `durable()` in between puts `a` on disk without
+`b` - a state the application never meant to be persistable, at a moment it did
+not choose. Extra durability is not free, because durability is a claim about a
+moment.
 
-Not urgent. Correctness holds; predictability of cost does not.
+It also differs by engine: the same call commits a subtree on redb and the whole
+store on json, so what survives a crash depends on the backend. A guarantee whose
+scope moves with the engine is not one, and this crate sells five engines behind
+one facade.
+
+**The repair is to make the text engines as granular as the binary ones.** It is
+tempting to argue the other way - a file is replaced whole, so only whole-store
+durability is expressible - and that argument does not hold. Atomicity says how
+the file is swapped, not which changes the new contents carry; a file holding `a`
+and not `b` is perfectly writable.
+
+What actually blocks it is that a text store has no pending set: `set_node`
+mutates the live document and schedules the debouncer, so the document *is* the
+buffer and the file merely lags. By the time `durable()` is called, `b` is
+already in the thing that gets serialised.
+
+So the change is the one redb already has - changes pending separately from what
+is on disk - at the cost of a shadow of the last persisted document, which for a
+config file is nothing.
+
+**And it closes a second entry for free.** *A concurrent external edit is rolled
+back* happens because the live document is treated as the truth and written over
+whatever the file holds. With a pending set the write becomes "re-read, apply
+only what is pending, replace" - which is what `edits_for_update` gives, from the
+other end. Two complaints, one change.
+
+Grouping - "these fields are only meaningful together" - stays an honest gap of
+its own rather than something masquerading as a property of the debouncer. See
+the composite entry in the sector research.
 
 ## A write costs two reads
 
@@ -197,6 +229,358 @@ purpose.
 This is the case for a schema saying which properties may be null: on toml the
 document alone cannot answer it, and the declaration is the only place the
 answer exists. See *The schema belongs in the store, as JSON Schema*.
+
+## The inspector finds no schema at all on a text engine
+
+`get_schema_snapshots` for the text engines returns an empty list every time, so
+`amethystate-cli inspect` shows no declared structs for a json, toml or ron
+store. The snapshot is written; nothing reads it back.
+
+The encoding is applied twice. Writing puts `meta_key("schema", prefix)` - an
+already joined and escaped two-segment path - into the flat metadata document as
+**one name**:
+
+```rust
+let key = store::meta_key("schema", prefix);
+let parts = [key.as_str()];
+```
+
+Reading calls `scan(&[])`, and `generic_scan` composes each child through
+`prefix.try_push(&k)` and hands back `full.as_str()` - joining a second time, so
+the separator inside that one name is escaped: `schema\.ondisk`. The reader then
+looks for a literal `"schema."` prefix, which cannot match.
+
+**The repair is not a `strip_prefix` that unescapes.** That was tried and it is
+a workaround over untyped access: it undoes the second encoding and still
+compares strings, so a prefix that itself holds a separator - `app.panel` -
+stays a guess. What the reader wants is the flat document's **raw child names**,
+which `Navigable::scan_children` already produces and `generic_scan` is the one
+wrapping into a path. So `TextDocument` is missing a way to enumerate records as
+names, and the kind is then read as `parse_joined(name).segments()[0]` rather
+than matched as text. The inverse of `meta_key` belongs beside it, so one place
+knows the layout instead of the writer and the reader each knowing half.
+
+Found by `the_recorded_shape_survives_this_engines_codec`, which is why the
+inspector-shaped tests in `shape_on_disk.rs` are redb-only: that file did not
+compile without redb at all, and a per-engine test had to stop going through the
+inspector to run.
+
+## `StoreBuilder` grows a method per idea, and the config it fills does not
+
+`StoreConfig` already groups: `retry_policy: RetryPolicy` is one field holding
+several knobs. The builder flattened that group back into `retry_interval` and
+`retry_budget`, and has been gaining a method per idea ever since - seven
+configuration setters today, and the read-policy work below wants three more.
+
+**Counting who actually reaches for them settles what to move**, across this
+repository, its tests, its examples and the book:
+
+| method | call sites |
+| --- | --- |
+| `backend` | 85 |
+| `debounce` | 25 |
+| `watch_interval` | 9 |
+| `parallel_reads` | 6 |
+| `retry_interval` | 0 |
+| `retry_budget` | 0 |
+| `on_persist_failure` | 0 |
+
+**Groups take a functor, not a value and not a `.done()`.**
+
+```rust
+StoreBuilder::new(path)
+    .backend(Backend::Json)
+    .disk(|d| d.debounce(200.ms())
+               .watch_every(1.s())
+               .retry_every(200.ms())
+               .give_up_after(10)
+               .on_failure(notify))
+    .read_policy(ReadPolicy::lenient)
+    .tuning(|t| t.parallel_reads(true))
+    .build()?
+```
+
+`impl FnOnce(P) -> P` buys three things at once. The group's type is never named
+by a caller, so it stays out of documentation and autocomplete. The closure
+starts from the default, so only what changes is written and forgetting
+`Default::default()` cannot silently zero the rest. And a named `fn(P) -> P` is
+accepted wherever a closure is, so reuse across several stores is a function
+with a name rather than a bound value - and a preset *is* a functor:
+`.read_policy(ReadPolicy::lenient)` needs no separate mechanism.
+
+Returning the parent with `.done()` is the shape to avoid: it needs a back
+pointer, makes indentation load-bearing, and cannot be reused.
+
+**`disk`, not `persist`**, because the group is honestly two-way: `debounce`,
+`retry_*` and `on_persist_failure` are about writing, `watch_interval` is about
+noticing somebody else's write.
+
+**What stays flat, and why it is not the same reason.** `backend` because 85
+call sites say so. `migrations` and `provide` because they are not settings at
+all - they are *inputs*: the steps to run, and the values those steps (and, once
+the read policy lands, the checks) are handed. Filing an input under settings
+confuses two natures.
+
+**One judgement call left open.** `parallel_reads` would be alone in `tuning`,
+and a group of one is usually a smell. What justifies it is that a second knob
+is right there: the threshold below which splitting costs more than it saves,
+today the hardcoded `PARALLEL_MIN_LEN = 1024`. If that never comes out, leave
+`parallel_reads` flat rather than keep a group for it.
+
+**Cost:** `debounce`, `watch_interval` and `parallel_reads` move, which is forty
+call sites in this repository alone and every caller outside it. Breaking, and
+not the kind a one-line changelog entry covers - it wants a before-and-after.
+
+## A value coming in from the disk passes through nothing
+
+Interception is one-way. `run_interceptors` is reached from `field_ops`,
+`map_ops` and `Field::set` - every one a write. The path that brings a value the
+other way, `set_forwarded` from the store subscription, asks nobody.
+
+There are three doors inward and none of them consults anything the application
+declared:
+
+| door | what it does with a bad value |
+| --- | --- |
+| construction | `store.get::<T>()?.unwrap_or_else(\|\| default.clone())` |
+| the subscription - an external edit, or another handle's write | decodes it and puts it in the signal |
+| a migration | hands it to the step as raw bytes |
+
+So the only thing a read reacts to is **bytes that will not decode**. That case
+is handled: `unreadable` is set and the field answers with its declared default.
+A value that decodes perfectly and is nonsense - a window at -32000, a font size
+of zero, the name of a theme that does not exist - goes into the signal and out
+to every subscriber. A write interceptor cannot help: the value is already on
+the disk.
+
+**A check on the way in cannot have the shape of one on the way out.** An
+interceptor is `Fn(Change<T>) -> Option<Change<T>>` and `None` means "refuse
+this write". Nothing can refuse what is already stored, so inbound `None` can
+only mean "answer with the default instead" - which is exactly what a decode
+failure already does. A sanitiser therefore joins a channel that exists: the
+field reports the default and says why, through `Field::try_get` and
+`unreadable`.
+
+**It has to be on all three doors.** A value sanitised when the file is edited
+under a running program but not when the program starts is worse than no
+sanitiser, because which one you get depends on whether the store happened to be
+open.
+
+**Which rules out a runtime registration, and that is the load-bearing part.**
+`intercept` is a method on the handle - `field.intercept(..)` - and the first
+door is construction: `field_with_path` reads `store.get::<TValue>(&path)?` and
+builds the signal from it *before any handle exists*. Nothing can be registered
+on a `Field` in time to see the value that `Field` starts with. So a check on
+the way in has to be **declared**, which puts it in the macro's attribute
+vocabulary - short again after this release: `default`, `key`, `nested`,
+`volatile`, and a fifth for this.
+
+It cannot be a trait on the leaf type either, at least not without asking
+something of every leaf: a blanket "no check" impl and a specific one overlap,
+and the `Probe` trick answers predicates, not calls.
+
+**On the subscription it runs for what came from outside, and that is
+expressible.** The external-change diff emits `source: None` on every event it
+raises, so a value from the file watcher or another process is distinguishable
+from one this process just wrote and already put through the write interceptor.
+Running both on the same value invites the two to disagree.
+
+**For a map it is the same question as the silent skip.** `map_entries` already
+drops an entry whose key will not parse as `K`, without a word - see *A key that
+will not parse disappears from a scan*. An entry that parses into nonsense wants
+the same policy as one that will not parse at all, so these should be decided
+together rather than one being silent and the other absent.
+
+### Decided: strict by default, loosened only where it is written down
+
+**Three scopes, and they do not overlap.** They answer different failures and
+each has its own addressee, so no "the more specific wins" rule is needed:
+
+| what failed | who is told | policy lives on |
+| --- | --- | --- |
+| the file - will not parse, will not open, is not this format | whoever called `build` | `StoreBuilder::on_unreadable` |
+| a declared path inside a prefix | whoever called `new_with` | `#[amethystate(on_unreadable = ..)]` |
+| one value | nobody: it becomes the default and appears in the report | `#[amestate(check = ..)]` |
+
+Quarantining belongs at the top and nowhere else: a file cannot be set aside for
+one prefix and kept for another, and a document that will not parse at all is a
+failure no per-prefix policy lives long enough to see. A store that quarantined
+and started fresh has to say so **to the application**, not only to the log -
+someone will have to explain to a person where their settings went.
+
+**`Refuse` means `new_with` returns `Err`.** Nothing new is needed for it: the
+generated constructor is `fn new_with(store: &Store) -> StorageResult<Self>`
+already. Today an unreadable field quietly takes its default and construction
+succeeds; refusing is declining to hand back an object that looks like it worked.
+
+**And it is the default.** A declared path that cannot be read is far more often
+a bug or a tampered file than a thing to shrug at, and shrugging is what makes a
+stale value indistinguishable from a successful write - the failure the
+non-finite float entry above is still about. This is a behaviour change and it
+belongs in this release, where the breaking section is already long: one line
+now against years of "why did my settings reset".
+
+**Two things strictness must not sweep in.**
+
+*Half of absence is not a failure - the other half is.* A prefix that was never
+written is a first launch: seed the defaults and say nothing. A prefix that
+*has* been written and is missing one of its declared paths is damage - a key
+somebody deleted, an external edit, a migration that did not finish. Refusing
+the first would refuse every first launch; shrugging at the second is how a
+setting disappears without a word.
+
+Both discriminators are already on the disk, and one of them is this release's
+work:
+
+| initialisation marker | in the recorded schema | path | outcome |
+| --- | --- | --- | --- |
+| absent | - | absent | `Seeded` - a first launch |
+| present | **no** | absent | `Seeded` - the field is new in this build |
+| present | yes | absent | **`Missing`** - it was written and is gone |
+
+The middle row needs the schema snapshot, because the marker alone cannot tell a
+deleted key from a field this version of the program has only just declared. It
+is also exactly where *two defaults - one for a new install and one for an
+existing one* belongs: a field absent because it is new, on a store that is not,
+takes the for-existing value, and the commonest schema change of all stops
+needing a migration step.
+
+So the outcome is five, not four, and strictness is stated precisely rather than
+"except for absence": `Missing` refuses, `Seeded` does not.
+
+```rust
+Outcome::Read
+Outcome::Undecodable   // the bytes are there and will not read
+Outcome::Refused       // read fine; the check said no
+Outcome::Seeded        // was not there and was not meant to be
+Outcome::Missing       // was declared and written, and is not there now
+```
+
+**And no `is_corrupted()` convenience over it.** Four of the five are different
+decisions, and a word that collapses them collapses them in the reader's head
+too - which happened twice while this entry was being written.
+
+*A map entry is data, not a declared path.* One bad entry out of a thousand is
+no reason to withhold the struct. Declared fields are strict; map entries are
+dropped and reported.
+
+**The dial is the same at all three scales, and starts tight.**
+
+```rust
+StoreBuilder::new(path).on_unreadable(Default)          // the whole store
+#[amethystate(prefix = "ui", on_unreadable = Default)]  // this prefix
+#[amestate(default = 14, on_unreadable = Default)]      // this field
+```
+
+Loosening is opt-in and visible in the declaration rather than hidden in
+behaviour. `unreadable` and `Field::try_get` are not replaced by any of this -
+they become how a *deliberately* lenient field says it fell back.
+
+**No aggregate, because there is nothing to aggregate.** The store never builds
+structs; the application does, by name, one call site at a time. Three prefixes
+refusing is three ordinary `?` in the caller's own control flow, and there is no
+moment at which the store could decide to give up - it was never the one asking.
+
+### The list this has to be checked against
+
+Every way a store can be wrong, what should be observed, and whether anything
+observes it today. Written before the code so the code can be held to it - and
+because half of these are already covered by the `tamper_*` suite, which is
+where the rest belong too.
+
+**The file.** Whoever called `build` is the one told.
+
+| what is wrong | should be | today |
+| --- | --- | --- |
+| no file | seeded, nothing said | yes |
+| zero bytes | refused | `an_empty_file_is_refused` |
+| truncated mid-document | refused, file untouched | `a_truncated_file_is_refused_and_left_alone` |
+| valid document, rubbish after it | refused | `valid_content_followed_by_rubbish_is_refused` |
+| another format's content | refused, naming the format expected | **no** |
+| root is a scalar | refused | `a_scalar_root_is_refused` |
+| unreadable - permissions, a directory in the way | reported, not a panic | `a_path_that_cannot_be_written_is_reported` |
+| metadata gone, data present | defaults must not come back over removals | `tamper_meta`, **ignored - open** |
+
+**A declared path.** Whoever called `new_with` is the one told.
+
+| what is wrong | should be | today |
+| --- | --- | --- |
+| prefix never written | every field `Seeded`, silent | yes |
+| prefix written, a declared key deleted | `Missing`, refuses | **no** - reads as absent, seeds silently |
+| prefix written, field new in this build | `Seeded`, silent | **no** - indistinguishable from the row above |
+| value is the wrong type | `Undecodable`, refuses | `tamper_shapes` reports; does not refuse |
+| value out of range | `Refused`, takes the default, in the report | **no** |
+| a leaf became a branch | refused | `a_leaf_that_became_a_branch_is_reported` |
+| nested struct's inner field broken | the parent sees it settled | **no** |
+
+**A map entry.** Nobody is told by refusing - these are data, and the struct is
+still built.
+
+| what is wrong | should be | today |
+| --- | --- | --- |
+| one key will not parse as `K` | dropped, name in `unreadable_keys()` | **no** - `continue`, silent |
+| one value will not decode | dropped, key in `dropped()` | **no** - silent |
+| *every* key fails | one line of drift at open: the key type changed | **no** - reads as an empty map |
+| `clear()` while an unreadable entry is there | everything goes, and it is said | **no** - goes silently |
+| the map's path holds a scalar | refused | `a_section_that_holds_a_scalar...` |
+
+**While the store is open.** And this is the row that does not fit the rest:
+**strictness has no runtime form.** A struct that already exists cannot be
+un-built, so an external edit that breaks a field cannot refuse anything - it can
+only fall back and report. So the policy differs by moment, and that difference
+has to be documented rather than discovered.
+
+| what is wrong | should be | today |
+| --- | --- | --- |
+| an edit makes a field undecodable | falls back, reports; never refuses | keeps the **stale** value - see the float entry |
+| an edit deletes a declared key | falls back to the default, reports | `field_delete` |
+| an edit adds an unparseable map key | appears in `unreadable_keys()` | **no** |
+| a broken edit is not overwritten by us | left alone | `a_broken_external_edit_is_not_silently_overwritten` |
+
+### What the check receives
+
+**A field's check is a predicate**, `Fn(&T) -> bool`, and rejection takes the
+declared default - which sits in the same attribute, so what happens on refusal
+is visible without looking anywhere else. Allowing a repairing form as well
+(`|n| n.clamp(8, 72)`) through an `Into<Verdict<T>>` return fails on coherence
+the moment `T` is `bool`, which is an ordinary field type, so one honest shape
+beats two spellings of one idea. Clamping on the way *in* is also the wrong
+end: that is what a write interceptor is for.
+
+**A struct's check corrects rather than refuses.** Refusing the whole thing
+would throw away every good field over one bad relationship, so its shape is
+`Fn(&mut Schema, &Provided) -> Policy`. And the reason it needs a schema view
+rather than `_Data`: `_Data` cannot say *which* path, cannot say what happened
+to it - read, undecodable, absent-and-seeded - and collapses a map into a
+`HashMap` where a dropped entry has nowhere to be mentioned.
+
+That view is generated per struct and reachable by name, `s.font_size()`,
+`s.net().host()`, with the shape of each accessor decided by the `Role` the
+macro already reads off the type - so a role stops being only a record on disk
+and starts deciding an API. It is built during the load, handed to the check,
+and then **kept by the instance**, so `ui.schema()` afterwards is the same
+object rather than a second type.
+
+**A check is a bare `fn` and captures nothing**, so it can only reach intrinsic
+invariants - `min < max`. The interesting ones are extrinsic: does that monitor
+still exist, is that theme installed. That is the Readest failure exactly, and
+it cannot be answered without the application's world. The door for it is built
+and in use: `StoreBuilder::provide` with `MigrationContext::require`, invented
+because a migration step is a bare `fn` with the same need.
+
+**Order:** every value first, then children, then parents - a parent's check
+should see nested structs already settled.
+
+**And the corrected value does not go back to the disk.** Writing it back
+silently rewrites somebody's edit, and
+`a_broken_external_edit_is_not_silently_overwritten` pins the opposite. Hold the
+corrected value in memory and let the next ordinary write settle the file.
+
+Two neighbours from the sector research belong with this and are not the same
+thing: quarantining a file that will not parse at all, under a name that says so
+rather than a silent default; and loading the fields that do read while
+collecting the errors of those that do not, instead of refusing the whole
+struct.
 
 ## Metadata carries no format version - deliberately, for now
 
@@ -1047,6 +1431,28 @@ key attached and a line saying the document holds a key this library could not
 have written; `generic_scan` logs the child it passed over at `warn`, naming
 the prefix and the name, which is what "Decided: a key with no name" below
 settles it as.
+
+**`map_entries` still has two of them, and one is a different cause.**
+`primitives/map_ops.rs` skips an entry whose path yields no name, and then skips
+one where `K::from_str` refuses the name:
+
+    let Ok(key) = K::from_str(&key_str) else {
+        continue;
+    };
+
+The first is the malformed-path case again. The second is not: the path is fine
+and the **key does not parse as the map's key type** - a
+`ReactiveMap<u32, _>` whose file holds `alpha` under it, after a hand edit or a
+key type that changed without a migration. The entry is dropped from `entries`,
+and therefore from the projection, `len` and `keys`, with nothing logged and
+nothing returned.
+
+So a hand-edited file can make a map quietly shorter, and the shape of the
+failure is the one this crate keeps finding: a `continue` where a sentence
+belongs. What to do with it is genuinely open, because unlike a malformed path
+this is data the caller may have to be told about rather than a file this
+library could not have written - the same question as the read-side policy
+entry above, and probably answered with it.
 
 ## Migration cleanup deletes one key, so a composite field survives being dropped
 
@@ -1899,6 +2305,455 @@ writes for cost cannot tell which they have.
 
 Distinct from the `flush_prefix` entry at the top, which is about how much rides
 along with a prefix flush.
+
+## Two flushes racing leave the older document on disk
+
+Found by `tests/atomicity_stress.rs::writers_racing_each_other_all_land`, which
+fails about twice in ten runs. Four threads write their own paths on one store,
+flushing when they feel like it; every writer joins, a final `save_now` returns
+success, the store is reopened - and one path comes back holding a value from
+earlier in the run. Not the default, which is what a write that never happened
+would look like: an earlier state of the same document.
+
+`StoreFile::persist` (`backend/text/store.rs:120`) is the whole of it:
+
+```rust
+let content = self.doc.read().serialize()?;
+persist_atomic(&self.path, &content, self.write_policy)?;
+```
+
+The read guard is a temporary and dies at the end of the first statement. The
+replacement then runs holding nothing, so two flushes - the debouncer's thread
+and a `save_now` from anywhere - interleave as: A serialises, B serialises, B
+replaces, A replaces. The file ends up with what A saw.
+
+Each replacement is still atomic. What is missing is that the flushes are not
+ordered with respect to each other, so atomicity per write buys nothing once
+there are two writers. `save_now` returning `Ok` means this thread's replacement
+landed, not that it is the one still there.
+
+The fix is a lock held across serialise-and-replace rather than across the read
+alone. Per file rather than per store, since the two files are already written
+one after the other - which is its own gap: a crash between them leaves the data
+and the schema bookkeeping describing different stores, and nothing puts those
+two replacements in one transaction.
+
+## Decided: the library refuses, the application sanitises
+
+A value the format cannot hold is refused, and nothing in the library ever
+coerces one quietly. What `NaN` should become - zero, the last good value, a
+refused form - is known only to the application, and it can already say so:
+`ReactiveField::intercept` and `ReactiveMap::intercept`/`intercept_key` take a
+change and return it rewritten or refuse it, before anything lands or fires.
+That is a sanitising layer at `set` and it exists today.
+
+```
+set(v)
+  |- the application's interceptors    <- coercion lives here, and only here
+  |- the codec's gate                  <- refusal lives here
+  |- the value lands
+```
+
+The gate cannot be an interceptor: that list is the application's and is
+ordered, so something installed after it could put back what it rejected. It is
+the last thing before the document.
+
+This is not a design to invent. **toml already has it**: `u64::MAX`, `u128`,
+`i128`, `()`, unit structs, `Some(None)` and a `Vec<Option<T>>` holding a `None`
+are all refused at the write with a report naming the path. The work is giving
+the other four the same treatment against their own limits, with toml as the
+worked example.
+
+Two places, because they need different information:
+
+- `serialize_node` holds the value and the format, and nothing else. It is where
+  json writes `null` for a `NaN` today, and refusing there closes five of the
+  json findings in one edit.
+- `set_node` holds the path. Depth needs both halves, so it cannot live above.
+
+What the gate is actually for, after the probes: non-finite floats on json and
+sqlite, `Option<Option<T>>` flattening on json, sqlite **and** redb, and depth.
+Two things that looked like gate material are not - ron's lost variants and
+redb's positional structs are both defects, and leave for the list above.
+
+The round-trip verification flag shrinks accordingly. Once the gate covers those
+three, what is left for it is asymmetries nobody has enumerated. Keep it as an
+option, off by default, and build it last - it was justified when it was the
+only thing addressing the class, and it no longer is.
+
+## Decided: one depth limit, declared per prefix, checked before anything is written
+
+A single number, below the weakest engine, counted as `path_depth +
+value_depth`. **60** - under ron's 64, with room for the level a format spends on
+its own root, which is why json's budget is 127 rather than 128.
+
+Counting segments alone does not work: ron's budget is shared, so a path of 64
+plus any nesting still kills the file, and redb's path is free while its value
+is unbounded.
+
+What the limit buys beyond safety is that **the guarantee stops depending on the
+engine**. Today the same code behaves differently on five backends, which is the
+theme of everything above. One number below the weakest means a store written on
+json reads on ron, and the book has one figure instead of five.
+
+A prefix may declare its own. The schema snapshot is already per prefix, so the
+allowance lands on disk with the rest of the shape and a reader of the file can
+see it without running the program. Raising it globally would mean "this store
+is now engine-specific"; raising it for one prefix means "this component is",
+and drift and migrations are already reckoned per prefix. Paths outside any
+declared prefix - `Kv`, a write at an arbitrary path - take the default.
+
+**Validated at open**, against the engine: a prefix declaring 200 opened on ron
+fails at startup naming the prefix and both numbers. Once at build time for the
+developer, rather than when a user's data happens to go deep. The declaration is
+a budget the author writes, like a version - nothing derives it from the type,
+and nothing could.
+
+### How the depth is measured without building anything
+
+Not by inspecting the value - by the time it reaches the engine the type is
+gone, it is a `&dyn erased_serde::Serialize`, and a five-level struct is
+indistinguishable from a five-level tree. Nor by building the node and walking
+it: building is the dangerous act, and on redb it is what overflows the stack.
+
+Serde is a push protocol and the engine is on the receiving end. A counting
+serializer wrapper is enough:
+
+```
+serialize_seq / _map / _struct  -> depth += 1; if depth > limit, Err
+end                             -> depth -= 1
+```
+
+Nothing is allocated, no node is built, the type is never needed, and the stack
+at the point of refusal is `limit` frames deep by construction. `erased_serde`
+exists precisely to put a `&mut dyn Serializer` under a `&dyn Serialize`.
+
+`serde_json` already does exactly this on the **read** side - `check_recursion!`
+against `RECURSION_LIMIT`. What is missing is the same thing on the write side,
+on all five. The path is the other half and costs `path.len()`.
+
+### Recursive types, and why the limit is affordable
+
+A recursive type's depth is fixed by data rather than by code, so any limit is a
+cliff on someone's data rather than an error in their program. That is the one
+real cost, and it is small: recursive *types* are ordinary, deep recursive
+*persisted data* is not. A file browser persists which nodes are expanded, not
+the tree; nested layout is bounded by what a person can stand to look at.
+
+And a graph does not need depth. Stored as edges - `ReactiveMap<NodeId, Node>`
+with `Vec<NodeId>` inside - any graph is two levels, whatever its diameter. An
+adjacency **list** rather than a matrix, since a UI tree's children are ordered.
+The flat form is also strictly more expressive: a nested value cannot hold a
+cycle at all, while an edge set holds one for free. The nested form wins on
+exactly one point, that derive writes it for you.
+
+So a tree deep enough to meet the limit wanted to be an edge set anyway - not to
+satisfy the limit, but because a nested blob rewrites and re-notifies the whole
+tree on every change to any node, which is the opposite of what a reactive store
+is for. The refusal message should say this, and say that bytes or a string are
+one level if reactivity inside is not wanted.
+
+What the store does not have is any understanding of the ids inside those
+values: no cascade on delete, no notification through a reference, no rewriting
+of references by a migration, nothing against a cycle. That is a foreign key,
+it is a database feature, and it is a note about where this library ends rather
+than a task. Ordering over rows (`RFC-reactive-table.md`) is wanted by everyone
+drawing a list; reference integrity is wanted by whoever has a graph. Different
+weights, and they should not be added together.
+
+## Decided: the layer to unify is the node, not the parser
+
+The traversal is already unified and I was wrong to say otherwise. `Navigable`
+abstracts a node - `get_child`, `insert_child`, `is_map`, `scan_children` - and
+all three text engines walk it through the same `generic_get` / `generic_set` /
+`generic_scan`.
+
+The divergence is one level down, in what `Navigable` is implemented **for**:
+
+```rust
+impl Navigable for serde_json::Value    // json_doc.rs:16
+impl Navigable for ::ron::value::Value  // ron_doc.rs:16
+impl Navigable for toml_edit::Item      // toml_doc.rs:16
+```
+
+The abstraction says how to walk a tree and nothing about what a node can hold.
+Every representational finding sits exactly there: ron loses variants because
+`ron::value::Value` has no variant case; toml answers a parent path with its
+only child's value because that is `toml_edit::Item`'s behaviour; the depth
+limits differ because `parse` and `serialize` are the foreign libraries.
+
+So the change is `Navigable` for **one owned node type**, with a reader and a
+writer per format into it. `generic_*` does not change at all. That is smaller
+than a new document layer, and it is the same per-format work any alternative
+would need.
+
+It also explains why the root defect and the leaf-scan defect are identical on
+all three: they are in the shared half, and one edit fixes three engines.
+
+### Rejected: tree-sitter
+
+It fixes the differing depth limits, ron's lost variants, the per-format
+document quirks and comment preservation - and none of the top tier above, which
+is path handling, scan logic and the value codec, all of it above the parser.
+
+The costs are not small. Tree-sitter parses and does not print, so three parsers
+become three grammars plus three CST mappings plus three writers; even a
+splicing printer needs per-format knowledge of quoting and table headers. It is
+a C dependency with a grammar's worth of C each, on a library whose sqlite
+backend exists for mobile. A CST of a hundred-thousand-entry document is heavy
+against an envelope where 100k is already the edge. And two of the five engines
+gain nothing.
+
+Running the grammars in WASM removes the C toolchain and adds a WASM runtime,
+which is heavier than the C it replaces, and lands on iOS where JIT is
+forbidden - the same platform that motivated avoiding C. It would earn its
+place only for grammars supplied at run time, which is a different product.
+
+### Rejected: reading a damaged file partially
+
+The one thing tree-sitter is uniquely good at is a tree with error nodes from
+broken input, and it is not wanted. An application running on a half-parsed file
+runs on state no version of the program ever wrote - neither the old state nor
+the defaults, but an arbitrary subset. That is a member of the category above,
+added deliberately.
+
+It is not wanted for diagnosis either. What helps when a file is broken is the
+file: a person opens it, support attaches it to a ticket. A tree with error
+nodes is a worse artefact than the original, and the one useful thing - where it
+broke - the existing parsers already give precisely (`recursion limit exceeded
+at line 128 column 255`).
+
+The answer to a damaged file stays: refuse, name the position, leave the file
+alone, and let the application choose between stopping and starting fresh. This
+is also what keeps quarantine file-level rather than structural - a partial read
+would be a structural quarantine under another name.
+
+## What five engines did with the same values, measured
+
+One probe per engine, run against the category below rather than reasoned about:
+`tests/probe_json.rs`, `probe_toml.rs`, `probe_ron.rs`, `probe_redb.rs`,
+`probe_sqlite.rs`. They print rather than assert, so they pass whatever they
+find - they are raw material, not a suite, and most of them should be thrown
+away once the handful worth keeping have been rewritten as tests that fail.
+
+Every store in them names its backend, because the default is redb and a text
+probe that does not name one measures redb instead. That mistake is already
+recorded further down; it cost eight files once.
+
+Read the tables in the probe files for the full detail. What follows is what
+changes a decision.
+
+### The store's own defects, worst first
+
+Not codec limits and not policy - logic in the store, and mostly small. Four of
+these are silent data destruction through the public API.
+
+| what | where | confirmed |
+| --- | --- | --- |
+| a path that computed to nothing is the root, and a struct written there replaces the whole document | shared `generic_set` | `tests/empty_path_is_the_root.rs` |
+| `delete_prefix` destroys siblings whose name has a character below `.` | `utils::key_range` + sqlite skipping `is_under` | measured, 6 characters |
+| reordering two same-typed struct fields silently swaps their values | the binary codec writes structs positionally | `tests/field_order_is_load_bearing.rs` |
+| `scan_keys` of a leaf returns the leaf, so a recursive walk never ends | shared `scan_keys_recursive`, `store.rs:1116` | `tests/scan_keys_of_a_leaf.rs`, all three text engines |
+| a migration's prefix scan uses `starts_with` / `GLOB` rather than `is_under` | `redb/migration.rs:116`, `sqlite/migration.rs:132` | redb measured; sqlite read, not run |
+| every enum loses its variant name on ron, so an app with an enum anywhere cannot start | `ron_doc.rs` reparses through `ron::value::Value` | measured |
+| a scalar at a path 82 levels deep makes the toml file unopenable, and nothing reports it until the next start | path levels bypass `serialize_node` | measured |
+| `rmp_serde` has no depth limit at all: a write commits and every later process aborts on a stack overflow | redb | measured, depth 4406 |
+
+The empty-path one has a second half worth keeping in view. The same question is
+answered four ways in one file:
+
+```rust
+generic_get([])            -> Some(root)         // read the whole store
+generic_set([], node)      -> *root = node       // replace the whole store
+generic_delete([])         -> Ok(None)           // do nothing
+generic_delete_subtree([]) -> *root = empty_map  // erase the whole store
+```
+
+`generic_delete` is the only one that treats an empty path as not naming
+anything, and it is the only one that is right. The fix is a
+`StorePathError::EmptyPath` at construction, which settles all four at once and
+leaves `StorePath::root()` as the way to say it on purpose.
+
+### What redb keeps that the text engines lose
+
+The negative result, and it is large enough to bound the category. Confirmed
+through a reopen: non-finite floats bit-for-bit including the sign of `NaN` and
+a `NaN` payload; `-0.0` keeps its sign; `Option::None` survives; `u128`/`i128`
+exact, and narrowing is refused rather than wrapped; key encoding injective
+across seven near-collisions; prefix scans stop at the level boundary in both
+directions, including the siblings sqlite leaks on; no residue after a
+write-then-delete; non-string map keys, which no text engine can hold.
+
+So the representational half of the category belongs to the document formats.
+redb's own two defects are structural instead - positional structs and no depth
+limit - and neither is a codec limit.
+
+### Depth, all five measured
+
+| engine | limit | what it counts |
+| --- | --- | --- |
+| ron | 64 | path + value |
+| toml | ~81 path, ~80 value | separately; they do not combine |
+| json | 127 | path + value |
+| sqlite | 254 | value only; the path is a `TEXT` key and costs nothing |
+| redb | none | the stack ends around 3,200 on the read side |
+
+Two of the three text engines already pay for a check by accident: ron refuses a
+value past 64 at the write, and toml reparses the node in `serialize_node`. What
+none of them check is the **path**, whose levels are built straight into the live
+document and are met by the parser only at the next open.
+
+## Accepted on the way in, refused or altered on the way out
+
+A category, not a bug. A write returns `Ok`, and the read of the same path does
+not give back what was written - because the codec, the document or the key
+encoding will take something on the way in that it will not return on the way
+out. Every instance below was found separately and filed separately, and they
+are one shape:
+
+| what | write says | read gives | where |
+| --- | --- | --- | --- |
+| nesting past `serde_json`'s 128 | `Ok` | the file does not open at all | `serializer_damage.rs` |
+| the same value at a deeper path | `Ok` | the file does not open at all | `serializer_damage.rs` |
+| `f64::NAN` on json, and on sqlite because it stores json | `Ok` | nothing - written as `null` | `non_finite_float.rs` |
+| `Option::None` on toml | `Ok` | the node is not there | fixed; was a panic on `unwrap` |
+| a key with escapes in it | `Ok` | a different path, or a residue node | `backend_conformance.rs`, 2 failing |
+| clearing a map on a text engine | `Ok` | a node left behind | its own entry below |
+
+Three severities, and the middle one is the worst to live with:
+
+- **The file will not open.** Total, immediate, and at least it is loud.
+- **The value comes back different or not at all.** Silent. Nothing in the
+  application ever learns, and the wrong value is now the stored one.
+- **Residue.** A path nobody wrote is readable, which is only visible to a scan.
+
+What makes it a category worth naming is that the fixes do not compose. Each
+instance has a cheap local fix - count the path's depth, refuse `NaN`, escape
+keys differently - and the next instance is not covered by any of them. Only
+reading back what was just written addresses the class as a class.
+
+That was the argument for the round-trip flag, and probing all five engines
+weakened it: most of what the category holds turned out to be defects in the
+store rather than limits of a codec, and what remains of the representational
+half is enumerable - non-finite floats, nested `Option`, depth. Those are worth
+refusing by name at the write. The flag stays as an option for what nobody has
+enumerated; the decisions above have the shape.
+
+It also says where these belong as tests: the general form is a property -
+what a store returns for a path equals what was written to it - and
+`backend_conformance.rs` is already the place that generates values and paths
+and checks exactly that. Two of its failures are members of this category and
+are not currently read as such. Instances found elsewhere should end up there as
+generated cases rather than as one hand-written test each.
+
+The five engines will not agree on the answer and are not supposed to: what a
+format can hold is a property of the format. What they can agree on is that the
+disagreement is reported rather than discovered later, which is the decision
+already recorded under *a document engine refuses where it cannot represent*.
+
+## A `Serialize` that never failed can still write a file that cannot be read
+
+An instance of the category above, kept separate because it is the one with a
+measurement behind it.
+
+
+`tests/serializer_damage.rs`. The store refuses a value whose serializer errors,
+and refuses it where it is written: `set` returns a report naming the path and
+carrying what the serializer said, the file does not move a byte, and the next
+flush is unaffected. Declaring a path whose *default* cannot be written fails at
+the declaration, so a type that refuses everything never gets as far as a file.
+Three tests pin that, and they pass.
+
+What is not covered by refusing is a serializer that **succeeds** and still
+writes a document the reader will not accept. `serde_json` bounds recursion at
+128 on the way in and not on the way out, so a value nesting deeper than that is
+taken without complaint and the file it lands in cannot be opened again:
+
+```
+JSON codec error: recursion limit exceeded at line 128 column 255
+```
+
+`a_value_the_writer_accepts_can_always_be_read_back` is `#[ignore]` with that as
+its finding. The nesting is the instance; the class is any asymmetry between
+what a codec will write and what it will read, and every text engine has its own
+version of it.
+
+Backups do not cover it, and are not supposed to. They are taken on open and
+`clean_backups` removes them once it succeeds, which is the right scope: a
+migration transforms data the store did not write, and failing part of the way
+through leaves a document of neither shape. That is rare, bounded, and worth
+copying a whole file for. An ordinary flush is none of those, and a copy before
+each replacement would double the I/O of every write for a store that already
+cannot lose the previous file to a torn one.
+
+A copy would not help here anyway. It would be taken while the file was still
+good, and the damage arrives with the write - so what would be needed is a kept
+generation, not a backup, and that is a different feature with a different
+price. `the_backup_covers_the_open_and_ends_with_it` states the scope so it is
+written down somewhere other than the position of a `clean_backups` call.
+
+Prevention is possible at all only because the asymmetry is one-sided in a
+useful direction. The limit lives in `serde_json`'s `Deserializer` - the thing
+that reads text - and neither `Value` nor the `Serializer` has one. So a
+document of any depth is legal in memory and legal to write, and the only way
+to learn that it cannot be read is to run the reader. Which can be done at the
+write, where the caller is still standing.
+
+What must not be done is check the value on its own. The budget is spent by the
+whole document, and the levels the store nests a value under to spell its path
+come out of the same allowance:
+
+```
+segments  2, value depth 120 -> opens
+segments  2, value depth 126 -> does not
+segments 10, value depth 120 -> does not
+segments 40, value depth 120 -> does not
+```
+
+`where_a_value_is_written_does_not_decide_whether_it_can_be_read` is `#[ignore]`
+on that contrast: the same `Deep(120)` survives at a two-level path and not at a
+ten-level one. A check that round-trips the value in isolation passes it in both
+places and is therefore wrong, which is worth writing down because it is the
+cheap implementation and the obvious one to reach for.
+
+So the candidates, in the order they should be considered:
+
+- Weigh the path with the value: depth already spent by the path plus depth the
+  value adds, against the reader's limit. The store knows the path at `set`, the
+  arithmetic is free, and it is the only cheap check that is also correct.
+- Read the whole document back after writing it. Catches this and every other
+  asymmetry a codec might have, and doubles the cost of every flush.
+- Bound depth at the encoder with a constant. Cheapest, and wrong in the same
+  way as checking the value alone unless the path is counted.
+
+The two are not alternatives and should not be one setting. The first is
+arithmetic on a depth the store already knows, costs nothing measurable, and can
+simply always run - a write it refuses was going to make the file unreadable.
+The second parses the document it just rendered, on every flush, and is a real
+price: it is the one that belongs behind a flag, off by default, for an
+application that would rather spend the time than ever meet a file it cannot
+open.
+
+That flag goes where the rest of this is going. `StoreConfig` grew
+`file_write: FileWritePolicy` for the retry budgets, and this is the same kind
+of question about the same operation:
+
+```rust
+StoreBuilder::new(path)
+    .file_write(|w| w.verifying(Verify::ByReadingItBack))
+```
+
+with `Verify::ByArithmeticOnly` the default. Naming not settled; what is settled
+is that the cheap check is not a setting and the expensive one is.
+
+The limits of the other four engines are not measured - only `serde_json`'s 128
+is - so the arithmetic needs a per-codec number before it can be written, and
+the codec is the right place to hold it.
+
+Separately, `tests/atomic_write.rs` has an `#[ignore]` where the backup *is*
+load-bearing - during an open - and is overwritten by the broken file it exists
+to replace. That one is a defect in the scope described here, not an argument
+for widening it.
 
 ## `LocalScope::clear` does the opposite of what it says
 
@@ -2845,17 +3700,17 @@ Reported from an application built on this, not found here, which is the part
 worth keeping: it is reachable by the shortest path the API offers.
 
 ```rust
-StoreBuilder::for_app(app, config)   // settings.redb, from the default engine
-    .backend(Backend::Json)          // changes the engine, not the file
+StoreBuilder::located(|at| at.app(app, config))?  // settings.redb, from the default engine
+    .backend(Backend::Json)                       // changes the engine, not the file
 ```
 
-`for_app` ends in `new`, which fills in an extension when the path has none,
-and it takes it from `default_backend()`. `backend` set only its own field. So
-the json engine opened a redb file and failed on its first byte with `stream
-did not contain valid UTF-8` - a message about encoding, for a mistake about
-which file to open, which is why it cost the reporter a debugging session
-rather than a glance. `StoreBuilder::new("app/settings").backend(Json)` does
-the same thing without `for_app` anywhere near it.
+Picking a location ends in `new`, which fills in an extension when the path has
+none, and it takes it from `default_backend()`. `backend` set only its own
+field. So the json engine opened a redb file and failed on its first byte with
+`stream did not contain valid UTF-8` - a message about encoding, for a mistake
+about which file to open, which is why it cost the reporter a debugging session
+rather than a glance. `StoreBuilder::new("app/settings").backend(Json)` does the
+same thing with no location involved at all.
 
 **Done by remembering who chose the extension.** The builder keeps
 `caller_named_extension`, and `backend` re-derives the extension when the
