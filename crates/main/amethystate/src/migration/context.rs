@@ -403,7 +403,7 @@ pub fn encode<T: Serialize>(
 ) -> StorageResult<Vec<u8>> {
     match storage.format() {
         #[cfg(feature = "redb")]
-        CodecFormat::MessagePack => rmp_serde::to_vec(value)
+        CodecFormat::MessagePack => rmp_serde::to_vec_named(value)
             .map_err(CodecError::from)
             .change_context(StorageError::Codec),
 

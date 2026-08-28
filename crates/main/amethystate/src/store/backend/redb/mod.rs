@@ -564,7 +564,16 @@ impl StoreBackend for RedbStore {
             .with(|buf| {
                 let mut b = buf.borrow_mut();
                 b.clear();
-                let mut ser = Serializer::new(&mut *b).with_bytes(BytesMode::ForceAll);
+                // `with_struct_map` writes a struct as a map of its field
+                // names. Without it a struct goes out as an array, so which
+                // slot held which name is nowhere in the file - and swapping
+                // two same-typed fields in the declaration silently swapped
+                // every stored value, while renaming one was invisible. The
+                // schema snapshot beside the data names every field; the data
+                // did not, and only one of the two was consulted on a read.
+                let mut ser = Serializer::new(&mut *b)
+                    .with_bytes(BytesMode::ForceAll)
+                    .with_struct_map();
                 erased_serde::serialize(value, &mut ser).map_err(CodecError::from)?;
 
                 Ok::<Vec<u8>, CodecError>(Vec::from(&b[..]))

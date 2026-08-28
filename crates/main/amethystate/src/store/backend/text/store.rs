@@ -19,7 +19,7 @@ use crate::store::{
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -46,6 +46,15 @@ pub struct StoreFile<D> {
     pub backup_path: PathBuf,
     pub doc: Arc<RwLock<D>>,
     pub write_policy: FileWritePolicy,
+    /// Held across rendering the document *and* replacing the file, so two
+    /// flushes cannot interleave.
+    ///
+    /// Each replacement is atomic on its own, which buys nothing once there are
+    /// two writers: the debouncer's thread and a `save_now` from anywhere would
+    /// both render, then both replace, and whichever replaced second won -
+    /// leaving the file holding what the *first* one saw. `save_now` returning
+    /// `Ok` meant this thread's replacement landed, not that it is still there.
+    flush: Arc<Mutex<()>>,
 }
 
 impl<D> Clone for StoreFile<D> {
@@ -55,6 +64,7 @@ impl<D> Clone for StoreFile<D> {
             backup_path: self.backup_path.clone(),
             doc: self.doc.clone(),
             write_policy: self.write_policy,
+            flush: self.flush.clone(),
         }
     }
 }
@@ -92,6 +102,7 @@ impl<D: TextDocument> StoreFile<D> {
             backup_path,
             doc: Arc::new(RwLock::new(initial_doc)),
             write_policy,
+            flush: Arc::new(Mutex::new(())),
         }
     }
 
@@ -118,7 +129,15 @@ impl<D: TextDocument> StoreFile<D> {
         }
     }
 
+    /// Renders the document and replaces the file with it, as one step.
+    ///
+    /// The lock covers both halves rather than the read alone. A guard taken
+    /// only for the render is released before the replacement, which is where
+    /// two flushes used to cross: A renders, B renders, B replaces, A replaces,
+    /// and the file ends up holding what A saw.
     pub fn persist(&self) -> StorageResult<()> {
+        let _flushing = self.flush.lock();
+
         let content = self
             .doc
             .read()

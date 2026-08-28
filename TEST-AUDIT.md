@@ -48,6 +48,18 @@ checkable. This is what has been done about them.
 - **`atomic_write.rs:66`** is replaced by
   `a_write_that_landed_leaves_no_temporary_behind`, in a directory of its own,
   which catches a deliberately leaked temporary - confirmed by leaking one.
+- **Two flushes no longer cross.** `StoreFile::persist` holds one lock across
+  rendering the document *and* replacing the file; the guard it used to take
+  covered the read alone and was gone before the replacement, so A rendered, B
+  rendered, B replaced, A replaced, and the file kept what A saw.
+  `writers_racing_each_other_all_land` failed twice in ten runs and now passes
+  twenty out of twenty.
+- **A struct on redb is stored by name.** `with_struct_map` and `to_vec_named`
+  at the three write sites; the reader took either form already. Reordering two
+  same-typed fields no longer swaps every stored value, a renamed field is no
+  longer invisible, and a `skip_serializing_if` in the middle no longer moves
+  the field after it into its place - the last being the silent one, where the
+  write said `Ok`, the read said `Ok`, and the value was different.
 - **The sqlite scan boundary is fixed**, and the tests that were waiting for it
   are no longer `#[ignore]`d. `scan_prefix` and `scan_keys` run their committed
   rows through `is_under`, as redb always did, and `key_range`'s upper bound is

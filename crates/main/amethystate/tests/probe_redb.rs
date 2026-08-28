@@ -984,15 +984,18 @@ struct Skipping {
     last: String,
 }
 
-/// The store writes a struct as an array of its fields, so the fields are read
-/// back by position. `skip_serializing_if` removes an element from the middle
-/// of that array, and everything after it moves up one place.
+/// A field that is not written does not move the ones after it.
 ///
-/// Here the shift is caught, because a `String` will not decode where an
-/// `Option<u32>` is expected: the write returns `Ok`, the flush lands, and the
-/// read fails - the value is on disk and cannot be got back. `#[serde(default)]`
-/// on the field does not help, because nothing is missing as far as the reader
-/// can tell; the array is simply one shorter than the struct.
+/// The store used to write a struct as an array, so the fields were read back
+/// by position and `skip_serializing_if` removed an element from the middle -
+/// everything after it moved up one place. The shift was caught here only
+/// because a `String` will not decode where an `Option<u32>` is expected: the
+/// write returned `Ok`, the flush landed, and the read failed, so the value was
+/// on disk and could not be got back. `#[serde(default)]` did not help, because
+/// nothing was missing as far as the reader could tell - the array was simply
+/// one shorter than the struct.
+///
+/// With the fields written by name there is no position to shift.
 #[test]
 fn a_skipped_field_shifts_the_ones_after_it() {
     let value = Skipping {
@@ -1000,10 +1003,11 @@ fn a_skipped_field_shifts_the_ones_after_it() {
         middle: None,
         last: "tail".into(),
     };
-    let Trip { wrote, read } = trip("probe_skip_field", &value);
-    wrote.expect("the write was refused, which would be the repair");
-    let read = read.expect_err("the shift is caught today only by the type change");
-    assert!(read.contains::<amethystate::errors::CodecError>());
+    assert_eq!(
+        trip("probe_skip_field", &value).value(),
+        Some(value),
+        "a skipped field still moved the ones after it"
+    );
 
     let filled = Skipping {
         first: 1,
@@ -1027,9 +1031,13 @@ struct SkippingAligned {
     last: u32,
 }
 
-/// **A silent alteration.** Skipping the middle field moves `last` into
-/// `middle`, and `last` takes its default. The write returns `Ok`, the read
-/// returns `Ok`, and the value is not the one that was written.
+/// The same shift where the types line up, which is where nothing caught it.
+///
+/// **This was the silent one.** Skipping the middle field moved `last` into
+/// `middle` and gave `last` its default: the write returned `Ok`, the read
+/// returned `Ok`, and the value was not the one that had been written. Named
+/// fields end it - `last` is found by its name whether or not `middle` was
+/// written.
 #[test]
 fn a_skipped_field_silently_moves_the_next_one_when_the_types_agree() {
     let value = SkippingAligned {
@@ -1039,12 +1047,8 @@ fn a_skipped_field_silently_moves_the_next_one_when_the_types_agree() {
     };
     assert_eq!(
         trip("probe_skip_aligned", &value).value(),
-        Some(SkippingAligned {
-            first: 1,
-            middle: Some(99),
-            last: 0,
-        }),
-        "the value is kept today, which would be the repair"
+        Some(value),
+        "a skipped field still moved the next one into its place"
     );
 }
 
@@ -1060,14 +1064,14 @@ struct SizeV2 {
     width: u32,
 }
 
-/// **A silent alteration**, and the one most likely to be met by accident: a
-/// struct is stored as an array, so its fields are addressed by position and
-/// never by name. Swapping two fields of the same type in the source silently
-/// swaps every value already on disk, and renaming a field is invisible.
+/// **This was the silent alteration most likely to be met by accident.** A
+/// struct was stored as an array, so its fields were addressed by position and
+/// never by name: swapping two fields of the same type in the source swapped
+/// every value already on disk, and renaming one was invisible. Nothing in the
+/// file recorded which name held which slot, so no read could notice - while
+/// the text engines caught the same edit, because json and toml store names.
 ///
-/// Nothing in the file records which name held which slot, so no read can
-/// notice. On the text engines the same edit is caught - json and toml store
-/// the names.
+/// They are stored by name here too now.
 #[test]
 fn a_struct_is_stored_by_position_so_reordering_its_fields_swaps_the_values() {
     let file = TempPath::new("probe_field_order");
@@ -1091,10 +1095,10 @@ fn a_struct_is_stored_by_position_so_reordering_its_fields_swaps_the_values() {
     assert_eq!(
         store.get::<SizeV2>(&path).unwrap(),
         Some(SizeV2 {
-            height: 1280,
-            width: 720,
+            width: 1280,
+            height: 720,
         }),
-        "the names are kept today, which would be the repair"
+        "reordering two same-typed fields still swaps what they hold"
     );
     drop(store);
 }

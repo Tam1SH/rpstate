@@ -1,9 +1,9 @@
 //! Whether a struct on disk knows which field is which.
 //!
-//! The schema snapshot beside the data names every field. The data written by
-//! the binary codec does not: a struct goes out as an array, and which slot
-//! held which name is not in the file. So the two halves of the store disagree
-//! about what a struct is, and only one of them is consulted on a read.
+//! The schema snapshot beside the data names every field, and the data did not:
+//! the binary codec wrote a struct as an array, so which slot held which name
+//! was nowhere in the file. The two halves of the store disagreed about what a
+//! struct is, and only one of them was consulted on a read.
 
 #![cfg(feature = "redb")]
 
@@ -31,12 +31,10 @@ struct SizeV2 {
 /// values mean.
 ///
 /// Nothing about this is a migration: no version was bumped, because from the
-/// author's side nothing about the data changed. If the read is positional,
-/// the values swap and every later read is wrong in a way no error reports.
+/// author's side nothing about the data changed. When the read was positional
+/// the values swapped and every later read was wrong in a way no error
+/// reported - 1280 by 720 came back 720 by 1280.
 #[test]
-#[ignore = "known: the binary codec writes a struct as an array, so field \
-            identity is the declaration order and reordering two same-typed \
-            fields silently swaps the stored values"]
 fn reordering_two_fields_does_not_swap_what_they_hold() {
     let path = TempPath::new("field_order");
 

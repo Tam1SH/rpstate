@@ -202,13 +202,12 @@ fn a_reader_never_meets_a_half_written_file() {
 /// one's last value - after every writer has finished and a final `save_now`
 /// has returned success, so there is nothing left in flight to excuse it.
 ///
-/// This fails about twice in ten runs, and what comes back is a value from
-/// earlier in the run rather than the default, which is the shape of a stale
-/// document landing on a newer one rather than of a write never made.
+/// It used to fail about twice in ten runs, and what came back was a value from
+/// earlier in the run rather than the default - the shape of a stale document
+/// landing on a newer one rather than of a write never made. `StoreFile::persist`
+/// rendered the document under a guard it then dropped, and replaced the file
+/// holding nothing, so two flushes crossed.
 #[test]
-#[ignore = "known: `StoreFile::persist` serialises the document and then replaces \
-            the file with no lock across the pair, so two flushes can interleave \
-            and the older content wins"]
 fn writers_racing_each_other_all_land() {
     let seed = seed();
     let path = TempPath::new("stress_racers");
