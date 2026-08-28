@@ -5,7 +5,9 @@ use crate::migration::set::MigrationSet;
 use crate::store::backend::sqlite::migration::SqliteMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
+use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
+use crate::store::depth::DepthBudget;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::traits::MigrationBackendAdapter;
@@ -103,6 +105,10 @@ struct SqliteStoreInner {
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
     write_lock: Arc<Mutex<()>>,
+    /// What this store may spend on a path and its value together. sqlite's own
+    /// path is a `TEXT` key and costs nothing, so almost all of it is the
+    /// value's - until the store promises to stay readable somewhere stricter.
+    budget: DepthBudget,
 }
 
 impl SqliteStoreInner {
@@ -266,6 +272,7 @@ impl SqliteStoreInner {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer()?;
+        self.budget.check(&path, value).attach_with(|| at(&self.path))?;
         let vec = sonic_rs::to_vec(&value)
             .map_err(CodecError::from)
             .doing(StorageError::Codec, &self.path)
@@ -640,6 +647,7 @@ impl SqliteStore {
             subscriptions,
             next_sub_id,
             write_lock,
+            budget: DepthBudget::resolve(&config.limits, Backend::Sqlite),
         });
 
         let store = Self { inner };

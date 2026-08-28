@@ -1,5 +1,5 @@
 use crate::migration::builder::MigrationBuilder;
-use crate::store::config::{AfterGivingUp, FileWritePolicy, StoreConfig};
+use crate::store::config::{AfterGivingUp, FileWritePolicy, StoreConfig, WriteLimits};
 use crate::store::{StorageError, StorageResult};
 use crate::{MigrationReport, Store};
 use error_stack::{Report, ResultExt};
@@ -39,6 +39,40 @@ impl Backend {
             Backend::Ron => "ron",
             #[cfg(feature = "sqlite")]
             Backend::Sqlite => "db",
+        }
+    }
+
+    /// How deeply this engine's codec will read, counting the path and the
+    /// value together.
+    ///
+    /// Not a setting. Every codec here reads less deeply than it writes, so a
+    /// value past this is taken without complaint and cannot be read back -
+    /// which on the text engines means the whole file, since the document is
+    /// parsed as one. Measured rather than looked up: `tests/probe_*.rs` walked
+    /// each engine to its boundary.
+    ///
+    /// `redb` has no limit of its own. `rmp_serde` recurses until the stack
+    /// ends, around three thousand levels, and the process dies rather than an
+    /// error being returned - on every later start, because the value is
+    /// already committed. The number here is imposed for that reason: far above
+    /// any data anyone means to store, far below where the stack gives out.
+    pub const fn depth_ceiling(self) -> usize {
+        match self {
+            #[cfg(feature = "redb")]
+            Backend::Redb => 512,
+            // 128 in `serde_json`, less the level the root object spends.
+            #[cfg(feature = "json")]
+            Backend::Json => 127,
+            // Measured at 81 for a path and 80 for a value, which do not add up
+            // on toml - the lower of the two holds for both.
+            #[cfg(feature = "toml")]
+            Backend::Toml => 80,
+            #[cfg(feature = "ron")]
+            Backend::Ron => 64,
+            // `sonic_rs` stops at 255; the path is a `TEXT` key and costs
+            // nothing, so the whole of it is the value's.
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => 254,
         }
     }
 
@@ -439,6 +473,30 @@ impl StoreBuilder {
         configure: impl FnOnce(FileWritePolicy) -> FileWritePolicy,
     ) -> Self {
         self.config.file_write = configure(self.config.file_write);
+        self
+    }
+
+    /// What this store refuses to hold, as against what its codec cannot.
+    ///
+    /// The codec's own ceiling is enforced whatever is set here - a value it
+    /// cannot read back is refused always, because taking it produces a file
+    /// that will not open. What this adds is the store's own: a cap on how deep
+    /// a path may go, and a claim that the contents stay readable on engines
+    /// other than the one running.
+    ///
+    /// ```no_run
+    /// # use amethystate::store::builder::{Backend, StoreBuilder, default_backend};
+    /// let store = StoreBuilder::new("./settings")
+    ///     .limits(|l| l.key_depth(8).portable_across([default_backend()]))
+    ///     .build()?;
+    /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+    /// ```
+    ///
+    /// Naming the engines rather than saying *all* is deliberate: "all" changes
+    /// under a store when one is added, and the honest requirement is usually
+    /// narrower than every engine this crate happens to carry.
+    pub fn limits(mut self, configure: impl FnOnce(WriteLimits) -> WriteLimits) -> Self {
+        self.config.limits = configure(std::mem::take(&mut self.config.limits));
         self
     }
 

@@ -8,6 +8,7 @@ use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
+use crate::store::depth::DepthBudget;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
@@ -203,6 +204,9 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     /// between was either lost or clobbered.
     pub(crate) writes: Arc<AtomicU64>,
     pub(crate) persisted: Arc<AtomicU64>,
+    /// What this store may spend on a path and its value together, worked out
+    /// once from the codec's own ceiling and whatever the caller promised.
+    pub(crate) budget: DepthBudget,
     _watch_debouncer: Arc<Debouncer>,
     _watcher: RecommendedWatcher,
 }
@@ -407,6 +411,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             health,
             writes,
             persisted,
+            budget: DepthBudget::for_codec(&config.limits, D::format()),
             _watch_debouncer: watch_debouncer,
             _watcher: watcher,
         });
@@ -483,6 +488,9 @@ impl<D: TextDocument> TextStoreInner<D> {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer()?;
+        self.budget
+            .check(path, value)
+            .attach_with(|| format!("file: {}", self.files.data.path.display()))?;
         let node = D::serialize_node(value)
             .doing(StorageError::Write, &self.files.data.path)
             .attach_with(|| format!("node: {path}"))?;

@@ -2,6 +2,7 @@ pub mod backend;
 pub mod builder;
 pub mod config;
 pub mod default;
+pub mod depth;
 pub mod durable;
 mod error;
 pub mod kv;

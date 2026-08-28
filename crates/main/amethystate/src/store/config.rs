@@ -1,4 +1,5 @@
 use crate::store::StorageError;
+use crate::store::builder::Backend;
 use error_stack::Report;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -106,6 +107,73 @@ impl Default for FileWritePolicy {
     }
 }
 
+/// What a store refuses to hold.
+///
+/// Three things get confused as one and are not:
+///
+/// - **The codec's ceiling is a fact.** `ron` will not read past 64 levels
+///   whatever anyone configures. A write past it produces a file that codec
+///   cannot read, so it is refused always, and there is nothing here to turn
+///   that off. See [`Backend::depth_ceiling`].
+/// - **Key depth is a setting**, and it is the one below. How deep a path may
+///   go is the application's business - it knows the shape of its own paths -
+///   and capping it also reserves the rest of the shared budget for values,
+///   which is the half nobody thinks about: sixty levels of path on ron leaves
+///   four for whatever is stored there.
+/// - **Portability is a policy**, and depth is one row of it. What each engine
+///   cannot hold is a table, not a number: non-finite floats on json, anything
+///   past `i64` on toml, a unit enum variant on ron, a non-string map key on
+///   every text engine.
+///
+/// [`Backend::depth_ceiling`]: crate::store::builder::Backend::depth_ceiling
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WriteLimits {
+    /// How many levels a path may have, or no limit of the store's own.
+    ///
+    /// The codec's ceiling still applies either way, and the path spends the
+    /// same budget the value does.
+    pub key_depth: Option<usize>,
+
+    /// Engines this store's contents must remain readable on, beyond the one
+    /// actually running.
+    ///
+    /// Empty means no such claim, which is the default: a store nobody intends
+    /// to move has no reason to pay for it.
+    pub portable_across: Vec<Backend>,
+}
+
+impl WriteLimits {
+    /// At most this many levels in a path.
+    pub fn key_depth(mut self, levels: usize) -> Self {
+        self.key_depth = Some(levels);
+        self
+    }
+
+    /// Refuse whatever these engines could not give back, whichever one is
+    /// running.
+    ///
+    /// The set rather than *all*, because "all" is a moving target - it changes
+    /// under a store when an engine is added - and because the honest
+    /// requirement is usually narrower: an application shipping json on the
+    /// desktop and sqlite on a phone needs those two and has no opinion about
+    /// ron.
+    pub fn portable_across(mut self, engines: impl IntoIterator<Item = Backend>) -> Self {
+        self.portable_across = engines.into_iter().collect();
+        self
+    }
+
+    /// The deepest a path and its value may go together, given the engine that
+    /// is running and whatever else this store promised to stay readable on.
+    pub fn ceiling(&self, running: Backend) -> usize {
+        self.portable_across
+            .iter()
+            .map(|engine| engine.depth_ceiling())
+            .chain(std::iter::once(running.depth_ceiling()))
+            .min()
+            .unwrap_or_else(|| running.depth_ceiling())
+    }
+}
+
 /// What the store does about a flush that has been failing for longer than
 /// the retry budget. It keeps retrying either way; this is only about who is
 /// told.
@@ -155,6 +223,9 @@ pub struct StoreConfig {
     /// [`retry_policy`]: StoreConfig::retry_policy
     pub file_write: FileWritePolicy,
 
+    /// What this store refuses to hold, as against what its codec cannot.
+    pub limits: WriteLimits,
+
     pub on_persist_failure: Option<PersistFailureCallback>,
 
     /// Whether reading a large collection back may use more than one core.
@@ -183,6 +254,7 @@ impl StoreConfig {
                 budget: Duration::from_secs(60),
             },
             file_write: FileWritePolicy::default(),
+            limits: WriteLimits::default(),
             on_persist_failure: None,
             parallel_reads: false,
         }

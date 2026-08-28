@@ -10,7 +10,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
+use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
+use crate::store::depth::DepthBudget;
 use crate::{
     MigrationReport,
     store::error::{StorageError, StorageResult},
@@ -119,6 +121,10 @@ struct RedbStoreInner {
     next_sub_id: Arc<AtomicU64>,
     write_lock: Arc<Mutex<()>>,
     parallel_reads: bool,
+    /// What this store may spend on a path and its value together. redb needs
+    /// it most: `rmp_serde` has no limit of its own, so a value deep enough
+    /// commits and then kills every process that opens the file afterwards.
+    budget: DepthBudget,
 }
 
 impl RedbStoreInner {
@@ -363,6 +369,7 @@ impl RedbStore {
             next_sub_id: Arc::new(AtomicU64::new(1)),
             write_lock,
             parallel_reads: config.parallel_reads,
+            budget: DepthBudget::resolve(&config.limits, Backend::Redb),
         });
 
         let store = Self { inner };
@@ -549,6 +556,10 @@ impl StoreBackend for RedbStore {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.inner.check_debouncer()?;
+        self.inner
+            .budget
+            .check(&path, value)
+            .attach_with(|| format!("store: {}", self.inner.path.display()))?;
         let bytes = SERIALIZATION_BUFFER
             .with(|buf| {
                 let mut b = buf.borrow_mut();

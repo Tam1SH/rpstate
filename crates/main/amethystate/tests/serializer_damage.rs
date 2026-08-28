@@ -184,16 +184,15 @@ impl<'de> Deserialize<'de> for Deep {
     }
 }
 
-/// The store writes it, and then cannot open what it wrote.
+/// A value the reader will not accept is refused at the write.
 ///
 /// The place to catch this is the write, not a copy taken before it: at the
-/// moment the value arrives the file is still good, and what the store lacks
-/// is not a spare but a reason to say no. The test below records how far the
-/// backup was ever meant to reach.
+/// moment the value arrives the file is still good, and what the store lacked
+/// was not a spare but a reason to say no. It has one now - the codec's ceiling
+/// is counted before anything is encoded - so this pins the refusal and the
+/// file surviving it.
 #[cfg(feature = "json")]
 #[test]
-#[ignore = "known: a value that writes deeper than the reader accepts is taken \
-            without complaint, and the file it lands in cannot be opened again"]
 fn a_value_the_writer_accepts_can_always_be_read_back() {
     let path = TempPath::new("ser_too_deep");
 
@@ -205,8 +204,16 @@ fn a_value_the_writer_accepts_can_always_be_read_back() {
         let deep =
             field_with_path::<Deep>(&store, ["ser", "deep"], Deep(0), Uuid::new_v4()).unwrap();
 
-        deep.set(Deep(TOO_DEEP))
-            .expect("the writer took a value it will not read back");
+        let refused = deep
+            .set(Deep(TOO_DEEP))
+            .expect_err("a value deeper than the reader accepts was taken");
+
+        // The whole report: the ceiling, what the path spent of it, and why a
+        // deeper value is not merely inconvenient. Any one of those as a
+        // `contains` would be satisfied by a line number in the same dump.
+        insta::assert_snapshot!("too_deep_to_read_back", common::shape(&refused));
+
+        assert_eq!(deep.get(), Deep(0), "a refused write changed the value");
         store.save_now().unwrap();
     }
 
@@ -216,60 +223,64 @@ fn a_value_the_writer_accepts_can_always_be_read_back() {
         .expect("the store cannot open the file it wrote itself");
 }
 
-/// Writes `value` at a path `segments` levels down, and says whether the store
-/// can open the file afterwards.
+/// Writes `value` at a path `segments` levels down, and says what the write
+/// answered.
 #[cfg(feature = "json")]
-fn survives_a_reopen(label: &str, segments: usize, value: u32) -> bool {
+fn written_at_depth(label: &str, segments: usize, value: u32) -> Result<(), String> {
     let path = TempPath::new(label);
     let mut names: Vec<String> = (0..segments).map(|s| format!("s{s}")).collect();
     names.push("leaf".to_string());
 
-    {
-        let store = StoreBuilder::new(path.path())
-            .backend(text_backend())
-            .build()
-            .unwrap();
-        let field = field_with_path::<Deep>(
-            &store,
-            names.iter().map(String::as_str).collect::<Vec<_>>(),
-            Deep(0),
-            Uuid::new_v4(),
-        )
+    let store = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .build()
         .unwrap();
-        field.set(Deep(value)).unwrap();
-        store.save_now().unwrap();
-    }
+    let field = field_with_path::<Deep>(
+        &store,
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        Deep(0),
+        Uuid::new_v4(),
+    )
+    .unwrap();
 
+    let wrote = field.set(Deep(value)).map_err(|e| format!("{e:?}"));
+    store.save_now().unwrap();
+
+    // Whatever the write answered, the file must still be a store. That is the
+    // half this used to be unable to check, because the write always succeeded
+    // and the reopen always failed.
+    drop(store);
     StoreBuilder::new(path.path())
         .backend(text_backend())
         .build()
-        .is_ok()
+        .expect("the store cannot open a file it wrote itself");
+
+    wrote
 }
 
 /// The reader's budget is spent by the whole document, so where a value is put
-/// decides whether it can be read back.
+/// decides whether it may be written there.
 ///
-/// The same `Deep(120)` survives at a two-level path and does not at a
-/// ten-level one. Nothing about the value changed; the levels the store nests
-/// it under to spell its path came out of the same allowance.
+/// The same `Deep(120)` is taken at a two-level path and refused at a ten-level
+/// one. Nothing about the value changed; the levels the store nests it under to
+/// spell its path come out of the same allowance.
 ///
-/// This is the reason a check cannot look at the value alone. Whatever refuses
-/// the write has to weigh the path with it, which the store knows at `set` -
-/// so the check is affordable, but only if it is asked the right question.
+/// This is why a check cannot look at the value alone - it would pass both -
+/// and it is the shape of the defect this used to record: the deeper one was
+/// taken too, and the file never opened again.
 #[cfg(feature = "json")]
 #[test]
-#[ignore = "known: a value the store accepts at one path makes the file \
-            unreadable at a deeper one, and nothing weighs the two together"]
-fn where_a_value_is_written_does_not_decide_whether_it_can_be_read() {
+fn where_a_value_is_written_decides_whether_it_may_be_written() {
+    written_at_depth("depth_shallow", 2, 120)
+        .expect("a value well inside the budget was refused at a two-level path");
+
+    let refused = written_at_depth("depth_deeper", 10, 120)
+        .expect_err("the same value was taken at a ten-level path, which cannot be read back");
+
     assert!(
-        survives_a_reopen("depth_shallow", 2, 120),
-        "the shallow case has stopped working, so the contrast below says nothing \
-         and the numbers here need choosing again"
-    );
-    assert!(
-        survives_a_reopen("depth_deeper", 10, 120),
-        "the same value the store reads back at a two-level path cannot be read at \
-         a ten-level one"
+        refused.contains("the path spends 11 levels"),
+        "the refusal must say what the path itself cost, which is the half a \
+         caller would not think of: {refused}"
     );
 }
 
