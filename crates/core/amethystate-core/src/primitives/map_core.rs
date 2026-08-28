@@ -58,7 +58,7 @@ pub struct ReactiveMapCore<K, V> {
     pub subscribers_key: Arc<DashMap<K, Vec<(u64, SubscriberKey<K, V>, SubscriptionMeta)>>>,
     pub next_id: Arc<AtomicU64>,
     pub intercept_depth: Arc<AtomicUsize>,
-    pub cache: Arc<dashmap::DashMap<K, V>>,
+    pub cache: Arc<DashMap<K, V>>,
 }
 
 impl<K, V> Clone for ReactiveMapCore<K, V> {
@@ -130,7 +130,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             subscribers_key: Arc::new(DashMap::new()),
             next_id: Arc::new(AtomicU64::new(0)),
             intercept_depth: Arc::new(AtomicUsize::new(0)),
-            cache: Arc::new(dashmap::DashMap::with_capacity(entries)),
+            cache: Arc::new(DashMap::with_capacity(entries)),
         }
     }
 

@@ -221,6 +221,14 @@ impl Store {
     }
 }
 
+/// Addressing the store by path, with nothing in the way - and what that costs
+/// is written on [`StoreBackend`] itself, which is worth reading before
+/// reaching for any of it. The short of it: a write here lands wherever it is
+/// aimed, declared paths included, and
+/// [`Kv`](crate::store::Kv) is the surface that refuses to.
+///
+/// [`Store::get`] and [`Store::set`] are the same operations under a shorter
+/// name, so they carry the same warning.
 impl StoreBackend for Store {
     fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
         self.0.get_raw(path)

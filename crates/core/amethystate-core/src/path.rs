@@ -511,6 +511,16 @@ impl std::error::Error for StorePathError {}
 /// is a name, and letting one stand in for a path is the confusion this type
 /// exists to end - `store.get(["ui", "width"])` and `store.get("ui.width")`
 /// would otherwise look alike and mean different things.
+#[diagnostic::on_unimplemented(
+    message = "a path is a list of levels, and `{Self}` is not one",
+    label = "expected something like `[\"ui\", \"width\"]`",
+    note = "a string is a name, not a path: `\"ui.width\"` would be one level \
+            whose name holds a separator, which is somewhere else entirely. \
+            Spell the nesting out, or use `StorePath::parse_joined` to read a \
+            path out of a string on purpose",
+    note = "addressing one name rather than a path is what `Kv` is for, and it \
+            does take `&str`"
+)]
 pub trait IntoStorePath {
     fn into_store_path(self) -> Result<StorePath, StorePathError>;
 }
