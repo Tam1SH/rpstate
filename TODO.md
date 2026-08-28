@@ -2528,6 +2528,23 @@ alone, and let the application choose between stopping and starting fresh. This
 is also what keeps quarantine file-level rather than structural - a partial read
 would be a structural quarantine under another name.
 
+## What the tests do not test
+
+In `TEST-AUDIT.md`, because it is long enough to bury everything around it.
+
+Four passes over the suite, one per area, each asking whether a test would say
+so if the behaviour under it were broken. The expected answer was loose error
+matching - `is_err()` on a `Report` whose context says exactly what happened -
+and that is there. It is not the largest part. The largest part is tests that
+**never run** or that **cannot fail**: four confy tests that return before their
+first assertion in every CI cell, a macro golden that `macrotest` writes for
+itself rather than failing, an adapter crate outside the workspace whose 324
+lines of tests only build on one machine, and about a dozen tests that stay green
+under a named one-line mutation of the code they exist to guard.
+
+Every entry there names the line to change, so it is confirmable in one edit
+rather than by argument.
+
 ## What five engines did with the same values, measured
 
 One probe per engine, run against the category below rather than reasoned about:
