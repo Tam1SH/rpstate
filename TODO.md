@@ -2635,6 +2635,68 @@ would need.
 It also explains why the root defect and the leaf-scan defect are identical on
 all three: they are in the shared half, and one edit fixes three engines.
 
+### The ron node, worked out and not yet built
+
+Every enum loses its variant name on ron, so an application with an enum
+anywhere in its state cannot start. The cause is two lines in
+`ron_doc.rs::serialize_node`:
+
+```rust
+let s = ron::ser::to_string(value)?;              // "On", "Level(3)", "(a: 1)"
+let node: ron::value::Value = ron::from_str(&s)?; // Unit, Seq([3]), Map{..}
+```
+
+`ron::value::Value` is `Bool | Char | Map | Number | Option | String | Bytes |
+Seq | Unit` - no variant among them. The reparse *succeeds*, which is why
+nothing errors, and the name is gone. `EmptyStruct {}` dies the same way: ron
+writes `()`, which reparses as `Unit`.
+
+`ron::value::RawValue` (present in 0.12.1) is a `#[repr(transparent)]` wrapper
+over `str`. `RawValue::from_rust(value)` renders and stops; `into_rust::<T>()`
+parses back. Measured: `Level(3)` is kept as `"Level(3)"` and reads back as
+`Mode::Level(3)`. That fixes the class rather than a list of cases - the node
+stops being a model of ron and becomes ron.
+
+**But `Node` has to be `Navigable`**, and raw text cannot be walked into. So:
+
+```rust
+enum RonNode {
+    Branch(BTreeMap<String, RonNode>),  // a level the store made
+    Leaf(Box<RawValue>),                // a value the application wrote
+}
+```
+
+**Telling one from the other on parse.** Measured: the serializer already
+distinguishes them - a struct renders `(x:1)` and a map renders `{"a":1}` - and
+`RawValue` keeps that, while parsing into `Value` collapses both to `Map`. So
+the split can be syntactic, with no schema involved: deserialize one level as
+`BTreeMap<String, Box<RawValue>>`, look at each value's first character, `{`
+means recurse and anything else is a leaf.
+
+It cannot be a `Deserialize` impl on `RonNode`: serde's model erases the
+distinction, `visit_map` fires for both, and the recursion has to work on the
+text.
+
+**The case it does not fix**, also measured: a user's own `BTreeMap<String, _>`
+renders `{"a":1}`, identical to a branch, so a map-valued leaf still reads back
+as a level. That is exactly today's behaviour, so nothing regresses - and the
+complete answer is the schema, which records `Role::{Field, Map, Node}` per path
+and is the discriminator this lacks.
+
+**The part that needs designing before it is written.** `with_bytes_de` carries
+this note today:
+
+> deserialize from the node, not from its rendered text: a `Value` map renders
+> as `{..}`, which a struct deserializer will not accept
+
+Reading a *branch* as a struct works only because `Value` presents itself to
+serde as a map and serde decides whether the target is a struct or a
+`HashMap`. A `Branch` has to do the same, which means either a `Deserializer`
+impl for `RonNode` or converting a branch to `Value` for that one operation -
+and the conversion loses variants again for leaves *inside* the branch being
+read. Narrow, but it is the thing to settle first rather than discover halfway
+through.
+
 ### Rejected: tree-sitter
 
 It fixes the differing depth limits, ron's lost variants, the per-format
