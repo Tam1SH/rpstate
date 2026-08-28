@@ -517,6 +517,14 @@ against a 50ms budget.
 `watcher_race` is the mirror problem - load-*insensitive*, because it checks
 nothing the load would affect.
 
+Seen since, which pins which two: a `--workspace --all-features --no-fail-fast`
+run failed `json_store::store_tests::file_watch_emits_delete_for_external_removal`
+and `ron_store::store_tests::file_watch_emits_set_for_external_change`, and the
+whole lib suite passed 137/137 immediately after. The tell that it was load and
+not a change: the same test body is generated for all three text engines by
+`define_store_test_suite!`, and two of the six instances failed. A break in what
+they test would have taken all six.
+
 ---
 
 ## Hygiene
@@ -544,6 +552,14 @@ nothing the load would affect.
   `amethystate-slint`'s `ir.rs`/`lib.rs` have no tests at all.
 - Five identical copies of the `doc!` macro and `settle()` across the tamper
   files.
+- **`define_store_test_suite!` outlived its reason.** It generates one body per
+  text engine because a store used to be one per binary; there is no such
+  constraint now, and `backend_conformance.rs` already says one statement to
+  every engine and reports which engine it failed on. What the macro gives
+  instead is triplication: one flaky watcher test is three flaky tests, and one
+  fix to a shared body is invisible until three suites agree. What it holds that
+  the conformance suite does not - the file-watch tests, which are about a text
+  file changing under the store - is what should move, and the rest should go.
 - `tests/map_delete_prefix_notify.rs:24` and `tests/map_order.rs:33` describe
   their bugs in the present tense while asserting the fixed behaviour, against
   this repo's own rule that documentation describes the present.
