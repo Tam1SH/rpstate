@@ -34,10 +34,13 @@ use amethystate::{IntoGlobalStore, StoreBuilder};
 "./app.redb".init_global();
 
 // Platform config directory (XDG on Linux, AppData on Windows, Application Support on macOS)
-StoreBuilder::for_app("my-app", "settings")?.init_global();
+StoreBuilder::located(|at| at.app("my-app", "settings"))?.init_global();
+
+// Beside the executable, for an installation somebody unpacked
+StoreBuilder::located(|at| at.beside_the_executable("settings"))?.init_global();
 
 // With options
-StoreBuilder::for_app("my-app", "settings")?
+StoreBuilder::located(|at| at.app("my-app", "settings"))?
     .debounce(500)
     .init_global();
 

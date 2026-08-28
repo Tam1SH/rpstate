@@ -412,6 +412,24 @@ deliberate: every one of them is.
 
 ### Added
 
+- **`StoreBuilder::located` answers where a store goes, in one place.** A path
+  the caller already has still goes to `new`; everything that has to ask the
+  machine instead - the configuration directory this platform keeps, or a folder
+  somebody unpacked and can move - is now behind one entry point taking a
+  closure. `at.app(app, config)` is the ordinary case, `at.app_under(layout, ..)`
+  names the convention where it must not move once an application has shipped,
+  and `at.beside_the_executable(name)` is the portable install, which had no
+  answer at all before. The layouts are named for what they are - `Layout::App`
+  for XDG everywhere, `Layout::Native` for what the host system says, and
+  `Layout::ProjectDirs` where the compatibility feature is on - rather than for
+  which version of `confy` used them.
+- **`StoreBuilder::file_write` sets how hard one write to one file fights.**
+  Under `retry_interval` rather than beside it: this is what happens inside a
+  single attempt, and only once it has run out does a flush count as having
+  failed. `WriteAttempts::times(20).apart(Duration::from_millis(250))` reads as
+  what it is, and the two steps of a write - getting the bytes into a file of
+  their own, and replacing the target with it - carry their own budgets, since
+  a full disk stays full while a holder lets go by itself.
 - **`shape::Probe` asks the compiler what a declared field is.** A field's role
   and whether it may hold nothing are facts about its type, and both now reach
   `FieldDescriptor` from the type rather than from how it was written - so an
@@ -432,6 +450,22 @@ deliberate: every one of them is.
 
 ### Fixed
 
+- **A text store's contents reach the disk before its name does.** The write
+  built the replacement file and swapped it in without flushing, so the rename
+  could land while the bytes were still in the write-back cache - which is how a
+  config file comes back truncated after a power cut, and Windows offers no
+  write-through on the replacement itself. The flush is now ours, and a unit
+  test pins the order rather than the consequence, since no test reproduces
+  losing power.
+- **A file someone else is holding is retried on its own budget.** One counter
+  used to cover creating the temporary file, writing it, flushing it and
+  replacing the target alike - five tries fifteen milliseconds apart. But a full
+  disk stays full, while an antivirus, an indexer or a cloud client holding the
+  target lets go by itself, so those are different failures: the replacement now
+  defaults to five tries a hundred milliseconds apart, the way Chromium does it,
+  and ordinary I/O keeps a short one. Both are `StoreBuilder::file_write`. A
+  retried replacement also takes its temporary file back from the failure
+  instead of writing the whole document again.
 - Writing `None` to a toml store no longer panics. A value that holds nothing
   serialises to no toml at all, so the document has no key to read back, and the
   write path unwrapped the read that follows a write - `field.set(None)` on any

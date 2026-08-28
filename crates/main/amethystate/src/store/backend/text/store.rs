@@ -1,6 +1,5 @@
 use super::document::TextDocument;
 use super::error::TextStoreError;
-use std::borrow::Cow;
 use crate::MigrationReport;
 use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
@@ -10,7 +9,7 @@ use crate::store::StorageResult;
 use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
-use crate::store::config::StoreConfig;
+use crate::store::config::{FileWritePolicy, StoreConfig};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
@@ -21,6 +20,7 @@ use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,7 @@ pub struct StoreFile<D> {
     pub path: PathBuf,
     pub backup_path: PathBuf,
     pub doc: Arc<RwLock<D>>,
+    pub write_policy: FileWritePolicy,
 }
 
 impl<D> Clone for StoreFile<D> {
@@ -52,6 +53,7 @@ impl<D> Clone for StoreFile<D> {
             path: self.path.clone(),
             backup_path: self.backup_path.clone(),
             doc: self.doc.clone(),
+            write_policy: self.write_policy,
         }
     }
 }
@@ -82,12 +84,13 @@ pub(super) fn meta_key(kind: &str, path: &StorePath) -> StorePath {
 }
 
 impl<D: TextDocument> StoreFile<D> {
-    pub fn new(path: PathBuf, initial_doc: D) -> Self {
+    pub fn new(path: PathBuf, initial_doc: D, write_policy: FileWritePolicy) -> Self {
         let backup_path = backup_of(&path);
         Self {
             path,
             backup_path,
             doc: Arc::new(RwLock::new(initial_doc)),
+            write_policy,
         }
     }
 
@@ -120,7 +123,7 @@ impl<D: TextDocument> StoreFile<D> {
             .read()
             .serialize()
             .attach_with(|| format!("file: {}", self.path.display()))?;
-        persist_atomic(&self.path, &content)
+        persist_atomic(&self.path, &content, self.write_policy)
             .map_err(TextStoreError::from)
             .change_context(StorageError::Flush)
             .attach_with(|| format!("file: {}", self.path.display()))?;
@@ -263,8 +266,8 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let meta_path = config.path.with_extension("meta");
 
         let files = StoreFiles {
-            data: StoreFile::new(path, D::empty()),
-            meta: StoreFile::new(meta_path, D::empty()),
+            data: StoreFile::new(path, D::empty(), config.file_write),
+            meta: StoreFile::new(meta_path, D::empty(), config.file_write),
         };
 
         files.create_backups()?;
@@ -824,46 +827,62 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
     }
 }
 
-fn persist_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+/// Writes `content` where `path` names, so that a reader sees either the whole
+/// of it or none.
+///
+/// The temporary file is made in the target's own directory, because a
+/// replacement has to sit on the same volume, and the contents are flushed
+/// before the name is moved: otherwise the rename can reach the disk while the
+/// bytes are still in the write-back cache, which is how a config file comes
+/// back truncated after a power cut. Windows offers no write-through on the
+/// replacement itself, so the flush has to be ours.
+///
+/// A replacement that has to be retried takes the same temporary file back from
+/// the failure and tries again with it: the contents are written and flushed
+/// already, and only the name is in dispute.
+///
+/// How long each of the two steps is worth is [`FileWritePolicy`], because what
+/// is holding the file is the application's business and not this function's.
+fn persist_atomic(path: &Path, content: &str, policy: FileWritePolicy) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     let dir = path.parent().unwrap_or(Path::new("."));
 
-    let mut attempts = 5;
-    loop {
-        match NamedTempFile::new_in(dir) {
-            Ok(mut tmp) => {
-                if let Err(e) = tmp.write_all(content.as_bytes()) {
-                    attempts -= 1;
-                    if attempts == 0 {
-                        return Err(e);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(15));
-                    continue;
-                }
-
-                match tmp.persist(path) {
-                    Ok(_) => return Ok(()),
-                    Err(e) => {
-                        attempts -= 1;
-                        if attempts == 0 {
-                            return Err(e.error);
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(15));
-                    }
-                }
+    let mut written = None;
+    for attempt in 0..policy.write.attempts.max(1) {
+        match write_temp(dir, content) {
+            Ok(tmp) => {
+                written = Some(tmp);
+                break;
             }
+            Err(e) if attempt + 1 >= policy.write.attempts => return Err(e),
+            Err(_) => std::thread::sleep(policy.write.pause),
+        }
+    }
+    let mut tmp = written.expect("the loop above returns rather than falling through");
+
+    for attempt in 0..policy.replace.attempts.max(1) {
+        match tmp.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(e) if attempt + 1 >= policy.replace.attempts => return Err(e.error),
             Err(e) => {
-                attempts -= 1;
-                if attempts == 0 {
-                    return Err(e);
-                }
-                std::thread::sleep(std::time::Duration::from_millis(15));
+                tmp = e.file;
+                std::thread::sleep(policy.replace.pause);
             }
         }
     }
+    unreachable!("the loop above returns on its last attempt")
+}
+
+/// The contents in a file of their own, beside the target and already on the
+/// disk.
+fn write_temp(dir: &Path, content: &str) -> std::io::Result<NamedTempFile> {
+    let mut tmp = NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.as_file().sync_all()?;
+    Ok(tmp)
 }
 
 pub(super) fn scan_prefix_impl<D: TextDocument>(

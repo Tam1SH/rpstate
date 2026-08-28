@@ -1,11 +1,12 @@
-use crate::store::StorageResult;
-use std::path::PathBuf;
-use std::time::Duration;
-
 use crate::migration::builder::MigrationBuilder;
-
-use crate::store::config::StoreConfig;
+use crate::store::config::{AfterGivingUp, FileWritePolicy, StoreConfig};
+use crate::store::{StorageError, StorageResult};
 use crate::{MigrationReport, Store};
+use error_stack::{Report, ResultExt};
+use std::any::Any;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Which engine backs a store.
 ///
@@ -54,27 +55,27 @@ impl Backend {
             #[cfg(feature = "redb")]
             Backend::Redb => {
                 let (s, r) = crate::store::backend::redb::RedbStore::open(config, mset)?;
-                Ok((Store::from_arc(std::sync::Arc::new(s)), r))
+                Ok((Store::from_arc(Arc::new(s)), r))
             }
             #[cfg(feature = "json")]
             Backend::Json => {
                 let (s, r) = crate::store::backend::text::JsonStore::open(config, mset)?;
-                Ok((Store::from_arc(std::sync::Arc::new(s)), r))
+                Ok((Store::from_arc(Arc::new(s)), r))
             }
             #[cfg(feature = "toml")]
             Backend::Toml => {
                 let (s, r) = crate::store::backend::text::TomlStore::open(config, mset)?;
-                Ok((Store::from_arc(std::sync::Arc::new(s)), r))
+                Ok((Store::from_arc(Arc::new(s)), r))
             }
             #[cfg(feature = "ron")]
             Backend::Ron => {
                 let (s, r) = crate::store::backend::text::RonStore::open(config, mset)?;
-                Ok((Store::from_arc(std::sync::Arc::new(s)), r))
+                Ok((Store::from_arc(Arc::new(s)), r))
             }
             #[cfg(feature = "sqlite")]
             Backend::Sqlite => {
                 let (s, r) = crate::store::backend::sqlite::SqliteStore::open(config, mset)?;
-                Ok((Store::from_arc(std::sync::Arc::new(s)), r))
+                Ok((Store::from_arc(Arc::new(s)), r))
             }
         }
     }
@@ -114,6 +115,41 @@ pub const fn default_backend() -> Backend {
     }
 }
 
+/// How a [`Store`] is opened: where its file is, which engine reads it, and
+/// what the store does while it runs.
+///
+/// Two ways in. [`StoreBuilder::new`] takes a path the caller already has;
+/// [`StoreBuilder::located`] works one out from what the machine says, and is
+/// where the platform's configuration directory and a portable install beside
+/// the executable live.
+///
+/// ```no_run
+/// use amethystate::store::builder::StoreBuilder;
+///
+/// let store = StoreBuilder::new("./settings").build()?;
+/// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+/// ```
+///
+/// Everything past that is optional and reads in one chain. Naming the engine
+/// matters wherever it matters which format is on disk, because
+/// [`default_backend`] picks the first one the build has:
+///
+/// ```no_run
+/// use amethystate::store::builder::{Backend, Layout, StoreBuilder};
+/// use amethystate::store::config::WriteAttempts;
+/// use std::time::Duration;
+///
+/// let store = StoreBuilder::located(|at| at.app_under(Layout::Native, "my-app", "settings"))?
+///     .backend(Backend::Json)
+///     .debounce(Duration::from_millis(500))
+///     .file_write(|w| w.replacing(WriteAttempts::times(20).apart(Duration::from_millis(250))))
+///     .build()?;
+/// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+/// ```
+///
+/// A store that migrations run against is built the same way, with
+/// [`StoreBuilder::migrations`] and [`StoreBuilder::build_with_report`] when
+/// what they did is wanted back.
 pub struct StoreBuilder {
     backend: Backend,
     config: StoreConfig,
@@ -126,13 +162,162 @@ pub struct StoreBuilder {
     caller_named_extension: bool,
 }
 
+/// Which convention decides where an application's files belong.
+///
+/// The two disagree about enough of the tree that a store written under one is
+/// not found under the other, so an application that has shipped should say
+/// which it means rather than let a feature flag elsewhere in the build decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// The XDG layout, followed on every platform. What [`Location::app`] uses
+    /// unless a compatibility feature says otherwise.
+    App,
+
+    /// Wherever the host system says an application's files go, which differs
+    /// from [`Layout::App`] off Linux. The one a desktop application usually
+    /// wants, since it is where the rest of the platform's software puts
+    /// things.
+    Native,
+
+    /// The layout the `directories` crate produces.
+    ///
+    /// Offered because `confy` 0.6 wrote there, so an application that used to
+    /// keep its configuration through `confy` can still find it. Available with
+    /// the `confy-compat-0-6` feature, which is what brings that crate in.
+    #[cfg(feature = "confy-compat-0-6")]
+    ProjectDirs,
+}
+
+impl Layout {
+    /// What [`Location::app`] picks: [`Layout::ProjectDirs`] where the
+    /// compatibility feature is on, and [`Layout::App`] otherwise.
+    pub const fn default_for_build() -> Self {
+        #[cfg(feature = "confy-compat-0-6")]
+        {
+            Self::ProjectDirs
+        }
+        #[cfg(not(feature = "confy-compat-0-6"))]
+        {
+            Self::App
+        }
+    }
+}
+
+/// The places [`StoreBuilder::located`] knows how to find, one method each.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Location;
+
+impl Location {
+    /// The configuration directory this platform keeps for `app_name`.
+    ///
+    /// Which convention that is comes from the build's features; name it with
+    /// [`Location::app_under`] where it must not move.
+    pub fn app(
+        self,
+        app_name: impl AsRef<str>,
+        config_name: impl AsRef<str>,
+    ) -> StorageResult<PathBuf> {
+        self.app_under(Layout::default_for_build(), app_name, config_name)
+    }
+
+    /// The same, under the layout named rather than the one the features chose.
+    pub fn app_under(
+        self,
+        layout: Layout,
+        app_name: impl AsRef<str>,
+        config_name: impl AsRef<str>,
+    ) -> StorageResult<PathBuf> {
+        let app_name = app_name.as_ref();
+        let args = || etcetera::AppStrategyArgs {
+            top_level_domain: "rs".to_string(),
+            author: String::new(),
+            app_name: app_name.to_string(),
+        };
+
+        let path = match layout {
+            Layout::App => {
+                use etcetera::{AppStrategy, app_strategy::choose_app_strategy};
+
+                choose_app_strategy(args())
+                    .change_context(StorageError::Open)
+                    .attach("this system has no home directory to put an application's own under")?
+                    .config_dir()
+            }
+            Layout::Native => {
+                use etcetera::{AppStrategy, app_strategy::choose_native_strategy};
+
+                choose_native_strategy(args())
+                    .change_context(StorageError::Open)
+                    .attach("this system has no home directory to put an application's own under")?
+                    .config_dir()
+            }
+            #[cfg(feature = "confy-compat-0-6")]
+            Layout::ProjectDirs => {
+                use directories::ProjectDirs;
+
+                ProjectDirs::from("rs", "", app_name)
+                    .ok_or_else(|| {
+                        Report::new(StorageError::Open)
+                            .attach("this system has no configuration directory for an application")
+                    })?
+                    .config_dir()
+                    .to_path_buf()
+            }
+        }
+        .join(config_name.as_ref());
+
+        ensure_parent(&path).attach_with(|| format!("application: {app_name}"))?;
+        Ok(path)
+    }
+
+    /// Beside the running executable, for an installation that is a folder
+    /// somebody unpacked and can move.
+    ///
+    /// Not where an installed application belongs: `Program Files` and
+    /// `/usr/bin` are not writable by the person running the program, and on
+    /// macOS the executable lives inside the bundle, so a file beside it is
+    /// inside a signed directory. Any of those shows up as a failure to open
+    /// the store, which is at startup rather than at the first write.
+    pub fn beside_the_executable(
+        self,
+        file_name: impl AsRef<Path>,
+    ) -> StorageResult<PathBuf> {
+        let exe = std::env::current_exe()
+            .change_context(StorageError::Open)
+            .attach("the running executable cannot be located, so nothing is beside it")?;
+
+        let dir = exe.parent().ok_or_else(|| {
+            Report::new(StorageError::Open)
+                .attach(format!("executable: {}", exe.display()))
+                .attach("the running executable is not in a directory")
+        })?;
+
+        let path = dir.join(file_name);
+        ensure_parent(&path).attach_with(|| format!("executable: {}", exe.display()))?;
+        Ok(path)
+    }
+}
+
+fn ensure_parent(path: &Path) -> StorageResult<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+
+    std::fs::create_dir_all(parent)
+        .change_context(StorageError::Open)
+        .attach_with(|| format!("directory: {}", parent.display()))
+        .attach_with(|| format!("store: {}", path.display()))
+}
+
 impl StoreBuilder {
     /// A store at an explicit path.
     ///
     /// An extension that is given is kept, whatever engine ends up running -
     /// the path is the caller's. Without one the engine's own extension is
     /// used, and it follows [`StoreBuilder::backend`] if that names another
-    /// engine later. [`StoreBuilder::for_app`] is the variant that picks a
+    /// engine later. [`StoreBuilder::located`] is the variant that picks a
     /// location as well.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let mut path: PathBuf = path.into();
@@ -148,82 +333,46 @@ impl StoreBuilder {
         }
     }
 
-    /// Returns a [`StoreBuilder`] configured to use the platform-appropriate configuration
-    /// directory for the given application name.
+    /// A store where the machine says it goes, rather than at a path the caller
+    /// already has.
     ///
-    /// The directory strategy depends on the active feature flag:
-    /// - `confy-compat-0-6`: uses the `directories` crate (legacy `confy` v0.6 behavior)
-    /// - default: uses the `etcetera` crate (XDG / native OS strategy)
-    pub fn for_app(
-        app_name: impl AsRef<str>,
-        config_name: impl AsRef<str>,
-    ) -> std::io::Result<Self> {
-        #[cfg(feature = "confy-compat-0-6")]
-        {
-            Self::for_app_v06(app_name, config_name)
-        }
-        #[cfg(not(feature = "confy-compat-0-6"))]
-        {
-            Self::for_app_v2(app_name, config_name)
-        }
+    /// [`StoreBuilder::new`] is the whole of the simple case: there is a path,
+    /// and it is handed over. Everything else is a question about the machine -
+    /// which directory this platform keeps for an application, whether this
+    /// install is a folder somebody unpacked - and all of it is behind here, so
+    /// the answer is chosen in one place rather than assembled at the call site.
+    ///
+    /// The closure is handed a [`Location`] and returns the path it picked.
+    /// Every method on it makes sure the directory above the file exists, so
+    /// what comes back is somewhere a store can actually be opened, and reports
+    /// what went wrong when it is not.
+    ///
+    /// ```no_run
+    /// # use amethystate::store::builder::{Layout, StoreBuilder};
+    /// // The configuration directory this platform keeps for an application.
+    /// let store = StoreBuilder::located(|at| at.app("my-app", "settings"))?.build()?;
+    ///
+    /// // The same, under a named convention rather than whatever the build's
+    /// // features chose - worth spelling once an application has shipped.
+    /// let store = StoreBuilder::located(|at| {
+    ///     at.app_under(Layout::Native, "my-app", "settings")
+    /// })?
+    /// .build()?;
+    ///
+    /// // Beside the running executable, for an install that can be moved.
+    /// let store = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
+    /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+    /// ```
+    ///
+    /// The file name carries no extension in any of those, so the engine that
+    /// runs names it - see [`StoreBuilder::backend`] for what that means when
+    /// the engine is chosen afterwards.
+    pub fn located(
+        pick: impl FnOnce(Location) -> StorageResult<PathBuf>,
+    ) -> StorageResult<Self> {
+        Ok(Self::new(pick(Location)?))
     }
 
-    /// [`StoreBuilder::for_app`] pinned to the `etcetera` layout, whatever
-    /// the feature flags say.
-    ///
-    /// Worth naming explicitly when a config location must not move because a
-    /// dependency elsewhere in the build turned a compatibility feature on.
-    pub fn for_app_v2(
-        app_name: impl AsRef<str>,
-        config_name: impl AsRef<str>,
-    ) -> std::io::Result<Self> {
-        use etcetera::{AppStrategy, AppStrategyArgs, choose_app_strategy};
-
-        let project = choose_app_strategy(AppStrategyArgs {
-            top_level_domain: "rs".to_string(),
-            author: "".to_string(),
-            app_name: app_name.as_ref().to_string(),
-        })
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
-
-        let mut path = project.config_dir();
-        path.push(config_name.as_ref());
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        Ok(Self::new(path))
-    }
-
-    #[cfg(feature = "confy-compat-0-6")]
-    /// [`StoreBuilder::for_app`] pinned to the layout `confy` 0.6 used, by way
-    /// of the `directories` crate.
-    ///
-    /// For reading configuration an older version of the application wrote;
-    /// [`StoreBuilder::for_app_v2`] is the current layout.
-    pub fn for_app_v06(
-        app_name: impl AsRef<str>,
-        config_name: impl AsRef<str>,
-    ) -> std::io::Result<Self> {
-        use directories::ProjectDirs;
-
-        let project = ProjectDirs::from("rs", "", app_name.as_ref()).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Failed to resolve system application directories",
-            )
-        })?;
-
-        let mut path = project.config_dir().to_path_buf();
-        path.push(config_name.as_ref());
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        Ok(Self::new(path))
-    }
     /// How long a write waits in the buffer before it is flushed.
     ///
     /// Raising this batches more writes into one commit; lowering it narrows
@@ -262,6 +411,34 @@ impl StoreBuilder {
         self
     }
 
+    /// How hard one write to one file fights before it reports a failure.
+    ///
+    /// Below [`retry_interval`], not beside it: this is what happens inside a
+    /// single attempt, and only once it has run out does a flush count as
+    /// having failed at all. It applies to the text engines, which replace a
+    /// file to write it; `redb` and `sqlite` hold their own handle.
+    ///
+    /// ```no_run
+    /// # use amethystate::store::builder::StoreBuilder;
+    /// # use amethystate::store::config::WriteAttempts;
+    /// # use std::time::Duration;
+    /// let store = StoreBuilder::new("settings.json")
+    ///     .file_write(|w| {
+    ///         w.replacing(WriteAttempts::times(20).apart(Duration::from_millis(250)))
+    ///     })
+    ///     .build()?;
+    /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+    /// ```
+    ///
+    /// [`retry_interval`]: StoreBuilder::retry_interval
+    pub fn file_write(
+        mut self,
+        configure: impl FnOnce(FileWritePolicy) -> FileWritePolicy,
+    ) -> Self {
+        self.config.file_write = configure(self.config.file_write);
+        self
+    }
+
     /// Runs once per failing streak, with a rendered reason, when a flush
     /// has been failing for longer than the retry budget - after any write
     /// awaiting that flush has been told it failed.
@@ -270,15 +447,11 @@ impl StoreBuilder {
     /// lands: an error each ([`AfterGivingUp::Fail`], the default without a
     /// callback), nothing at all ([`AfterGivingUp::Ignore`]), or a panic
     /// ([`AfterGivingUp::Poison`]).
-    ///
-    /// [`AfterGivingUp::Fail`]: crate::store::config::AfterGivingUp::Fail
-    /// [`AfterGivingUp::Ignore`]: crate::store::config::AfterGivingUp::Ignore
-    /// [`AfterGivingUp::Poison`]: crate::store::config::AfterGivingUp::Poison
     pub fn on_persist_failure<F>(mut self, callback: F) -> Self
     where
-        F: Fn(&str) -> crate::store::config::AfterGivingUp + Send + Sync + 'static,
+        F: Fn(&str) -> AfterGivingUp + Send + Sync + 'static,
     {
-        self.config.on_persist_failure = Some(std::sync::Arc::new(callback));
+        self.config.on_persist_failure = Some(Arc::new(callback));
         self
     }
 
@@ -318,7 +491,7 @@ impl StoreBuilder {
     ///
     /// [`MigrationContext::provided`]: crate::MigrationContext::provided
     /// [`MigrationContext::require`]: crate::MigrationContext::require
-    pub fn provide<T: std::any::Any>(mut self, value: T) -> Self {
+    pub fn provide<T: Any>(mut self, value: T) -> Self {
         self.migration_builder.provide(value);
         self
     }
@@ -344,7 +517,7 @@ impl StoreBuilder {
     /// [`default_backend`].
     ///
     /// An extension this crate chose moves with the engine: a path left
-    /// without one by [`StoreBuilder::new`] or [`StoreBuilder::for_app`] is
+    /// without one by [`StoreBuilder::new`] or [`StoreBuilder::located`] is
     /// named for whichever engine actually runs, so a store asked for as
     /// `json` is not opened on a file called `.redb`. An extension the caller
     /// spelled stays as it is.
@@ -393,8 +566,9 @@ mod tests {
     /// A path with no extension gets one from the engine that is actually
     /// going to open it, whenever the engine is named. Otherwise a store asked
     /// for as `json` is opened on a file this crate called `.redb`, and the
-    /// engine meets another engine's bytes: `for_app` names a config without an
-    /// extension, so this is the ordinary way to reach it rather than a corner.
+    /// engine meets another engine's bytes: a location names a config without
+    /// an extension, so this is the ordinary way to reach it rather than a
+    /// corner.
     #[cfg(all(feature = "redb", feature = "json"))]
     #[test]
     fn a_defaulted_extension_follows_the_engine_that_is_named() {
