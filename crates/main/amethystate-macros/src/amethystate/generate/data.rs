@@ -57,7 +57,12 @@ pub(crate) fn data_impl(
     let version_val = macro_args.version.unwrap_or(0);
 
     let field_descriptors = p_fields.iter().map(|e| {
-        let fname_str = e.ident.as_ref().unwrap().to_string();
+        // The stored name, not the Rust one. `#[amestate(key = "..")]` moves
+        // where the value goes, and everything that reads or writes it already
+        // used `stored_name` - the schema alone was describing a path nothing
+        // held, so a migration planned off the snapshot planned against a name
+        // that was not there.
+        let fname_str = e.stored_name();
         let ty = &e.ty;
         let type_name = quote!(#ty).to_string().replace(" ", "");
 

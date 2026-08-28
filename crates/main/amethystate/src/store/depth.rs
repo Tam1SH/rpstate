@@ -67,11 +67,11 @@ impl ser::Error for DepthError {
 /// A scalar is zero: it opens nothing. A `Vec<u8>` is one, a `Vec<Vec<u8>>` two.
 /// Counting stops at `limit + 1`, so a value far deeper than the limit costs no
 /// more to refuse than one just past it.
-pub fn depth_of<T>(value: &T, limit: usize) -> Result<usize, DepthError>
+pub fn depth_of<T>(value: &T, limit: usize, human_readable: bool) -> Result<usize, DepthError>
 where
     T: Serialize + ?Sized,
 {
-    let state = State::new(limit);
+    let state = State::new(limit, human_readable);
     value.serialize(state.counter())?;
     Ok(state.deepest.get())
 }
@@ -81,8 +81,9 @@ where
 pub fn depth_of_erased(
     value: &dyn erased_serde::Serialize,
     limit: usize,
+    human_readable: bool,
 ) -> Result<usize, DepthError> {
-    let state = State::new(limit);
+    let state = State::new(limit, human_readable);
     let mut erased = <dyn erased_serde::Serializer>::erase(state.counter());
 
     match value.erased_serialize(&mut erased) {
@@ -95,6 +96,26 @@ pub fn depth_of_erased(
     }
 }
 
+/// What the codec behind `engine` answers to `is_human_readable`.
+///
+/// Only `rmp_serde` says no. The three text codecs and sonic-rs under sqlite
+/// all say yes, and a `Serialize` that branches on it - which is ordinary -
+/// hands each of them a different shape.
+const fn human_readable(engine: Backend) -> bool {
+    match engine {
+        #[cfg(feature = "redb")]
+        Backend::Redb => false,
+        #[cfg(feature = "json")]
+        Backend::Json => true,
+        #[cfg(feature = "toml")]
+        Backend::Toml => true,
+        #[cfg(feature = "ron")]
+        Backend::Ron => true,
+        #[cfg(feature = "sqlite")]
+        Backend::Sqlite => true,
+    }
+}
+
 /// What one store may spend, worked out once when it opens.
 ///
 /// The ceiling is the running codec's, lowered by anything the store promised
@@ -104,6 +125,9 @@ pub fn depth_of_erased(
 pub struct DepthBudget {
     pub ceiling: usize,
     pub key_depth: Option<usize>,
+    /// What the running codec answers to `is_human_readable`, so the count is
+    /// of the shape that is actually going to be written.
+    pub human_readable: bool,
 }
 
 impl DepthBudget {
@@ -112,6 +136,7 @@ impl DepthBudget {
         Self {
             ceiling: limits.ceiling(engine),
             key_depth: limits.key_depth,
+            human_readable: human_readable(engine),
         }
     }
 
@@ -131,10 +156,13 @@ impl DepthBudget {
             #[cfg(feature = "ron")]
             CodecFormat::Ron => Backend::Ron,
             #[cfg(test)]
-            CodecFormat::Default => return Self {
-                ceiling: usize::MAX,
-                key_depth: limits.key_depth,
-            },
+            CodecFormat::Default => {
+                return Self {
+                    ceiling: usize::MAX,
+                    key_depth: limits.key_depth,
+                    human_readable: true,
+                };
+            }
         };
         Self::resolve(limits, engine)
     }
@@ -167,7 +195,7 @@ impl DepthBudget {
         }
 
         let left = self.ceiling.saturating_sub(levels);
-        match depth_of_erased(value, left) {
+        match depth_of_erased(value, left, self.human_readable) {
             Ok(_) => Ok(()),
             Err(DepthError::TooDeep { .. }) => Err(Report::new(StorageError::Codec)
                 .attach(format!("path: {path}"))
@@ -193,15 +221,25 @@ struct State {
     deepest: Cell<usize>,
     too_deep: Cell<bool>,
     limit: usize,
+    /// The answer the running codec would give.
+    ///
+    /// Branching on `is_human_readable` is an ordinary thing for a `Serialize`
+    /// to do - `uuid` writes a string to json and sixteen bytes to msgpack, and
+    /// it is far from alone. A counter that answered for itself would be shown
+    /// a shape the codec is not going to write, and would measure the wrong
+    /// one: on redb, where the codec says `false`, that let a value through
+    /// with room to spare and then killed the process reading it back.
+    human_readable: bool,
 }
 
 impl State {
-    fn new(limit: usize) -> Self {
+    fn new(limit: usize, human_readable: bool) -> Self {
         Self {
             depth: Cell::new(0),
             deepest: Cell::new(0),
             too_deep: Cell::new(false),
             limit,
+            human_readable,
         }
     }
 
@@ -379,7 +417,7 @@ impl<'a> Serializer for Counter<'a> {
     }
 
     fn is_human_readable(&self) -> bool {
-        true
+        self.state.human_readable
     }
 }
 
@@ -480,58 +518,58 @@ mod tests {
 
     #[test]
     fn a_scalar_opens_nothing() {
-        assert_eq!(depth_of(&1u32, 10).unwrap(), 0);
-        assert_eq!(depth_of("text", 10).unwrap(), 0);
-        assert_eq!(depth_of(&(), 10).unwrap(), 0);
+        assert_eq!(depth_of(&1u32, 10, true).unwrap(), 0);
+        assert_eq!(depth_of("text", 10, true).unwrap(), 0);
+        assert_eq!(depth_of(&(), 10, true).unwrap(), 0);
     }
 
     #[test]
     fn a_level_is_a_level_whatever_opens_it() {
-        assert_eq!(depth_of(&vec![1u32, 2], 10).unwrap(), 1);
-        assert_eq!(depth_of(&Flat::default_for_test(), 10).unwrap(), 1);
-        assert_eq!(depth_of(&(1u32, 2u32), 10).unwrap(), 1);
+        assert_eq!(depth_of(&vec![1u32, 2], 10, true).unwrap(), 1);
+        assert_eq!(depth_of(&Flat::default_for_test(), 10, true).unwrap(), 1);
+        assert_eq!(depth_of(&(1u32, 2u32), 10, true).unwrap(), 1);
         assert_eq!(
-            depth_of(&HashMap::from([("a".to_string(), 1u32)]), 10).unwrap(),
+            depth_of(&HashMap::from([("a".to_string(), 1u32)]), 10, true).unwrap(),
             1
         );
     }
 
     #[test]
     fn nesting_adds_up() {
-        assert_eq!(depth_of(&Nested::default_for_test(), 10).unwrap(), 2);
-        assert_eq!(depth_of(&vec![vec![1u32]], 10).unwrap(), 2);
-        assert_eq!(depth_of(&Ladder(7), 20).unwrap(), 7);
+        assert_eq!(depth_of(&Nested::default_for_test(), 10, true).unwrap(), 2);
+        assert_eq!(depth_of(&vec![vec![1u32]], 10, true).unwrap(), 2);
+        assert_eq!(depth_of(&Ladder(7), 20, true).unwrap(), 7);
     }
 
     /// The deepest branch is what a reader has to follow, not the last one.
     #[test]
     fn the_answer_is_the_deepest_branch_not_the_final_one() {
         let uneven = (Ladder(5), Ladder(1));
-        assert_eq!(depth_of(&uneven, 20).unwrap(), 6);
+        assert_eq!(depth_of(&uneven, 20, true).unwrap(), 6);
     }
 
     /// An `Option` is not a level, or `Option<T>` would measure deeper than the
     /// `T` it holds and every optional field would cost one for nothing.
     #[test]
     fn an_option_costs_nothing() {
-        assert_eq!(depth_of(&Some(vec![1u32]), 10).unwrap(), 1);
-        assert_eq!(depth_of(&None::<Vec<u32>>, 10).unwrap(), 0);
-        assert_eq!(depth_of(&Some(Some(1u32)), 10).unwrap(), 0);
+        assert_eq!(depth_of(&Some(vec![1u32]), 10, true).unwrap(), 1);
+        assert_eq!(depth_of(&None::<Vec<u32>>, 10, true).unwrap(), 0);
+        assert_eq!(depth_of(&Some(Some(1u32)), 10, true).unwrap(), 0);
     }
 
     #[test]
     fn a_variant_costs_what_it_wraps() {
-        assert_eq!(depth_of(&Shape::Unit, 10).unwrap(), 0);
-        assert_eq!(depth_of(&Shape::Newtype(1), 10).unwrap(), 1);
-        assert_eq!(depth_of(&Shape::Tuple(1, 2), 10).unwrap(), 1);
-        assert_eq!(depth_of(&Shape::Struct { a: 1 }, 10).unwrap(), 1);
+        assert_eq!(depth_of(&Shape::Unit, 10, true).unwrap(), 0);
+        assert_eq!(depth_of(&Shape::Newtype(1), 10, true).unwrap(), 1);
+        assert_eq!(depth_of(&Shape::Tuple(1, 2), 10, true).unwrap(), 1);
+        assert_eq!(depth_of(&Shape::Struct { a: 1 }, 10, true).unwrap(), 1);
     }
 
     /// The refusal arrives without following the value to the bottom, which is
     /// the whole reason for counting rather than building.
     #[test]
     fn a_value_past_the_limit_is_refused_rather_than_followed() {
-        let err = depth_of(&Ladder(5_000), 8).unwrap_err();
+        let err = depth_of(&Ladder(5_000), 8, true).unwrap_err();
         assert!(
             matches!(err, DepthError::TooDeep { limit: 8 }),
             "expected a depth refusal naming the limit, got {err}"
@@ -540,21 +578,60 @@ mod tests {
 
     #[test]
     fn the_limit_itself_is_allowed() {
-        assert_eq!(depth_of(&Ladder(8), 8).unwrap(), 8);
-        assert!(depth_of(&Ladder(9), 8).is_err());
+        assert_eq!(depth_of(&Ladder(8), 8, true).unwrap(), 8);
+        assert!(depth_of(&Ladder(9), 8, true).is_err());
     }
 
     /// The erased path is the one a store actually uses.
     #[test]
     fn an_erased_value_measures_the_same() {
         let value: &dyn erased_serde::Serialize = &vec![vec![1u32]];
-        assert_eq!(depth_of_erased(value, 10).unwrap(), 2);
+        assert_eq!(depth_of_erased(value, 10, true).unwrap(), 2);
 
         let deep: &dyn erased_serde::Serialize = &Ladder(20);
         assert!(matches!(
-            depth_of_erased(deep, 4).unwrap_err(),
+            depth_of_erased(deep, 4, true).unwrap_err(),
             DepthError::TooDeep { limit: 4 }
         ));
+    }
+
+    /// Branching on `is_human_readable` is ordinary - `uuid` writes a string to
+    /// json and sixteen bytes to msgpack, and it is far from alone - so a
+    /// counter that answered for itself would be shown a shape the codec is not
+    /// going to write.
+    ///
+    /// On redb the codec says no, and the value below is shallow in the form
+    /// the guard used to see and deep in the one that actually lands. It went
+    /// through with room to spare and then killed every process that opened the
+    /// file.
+    #[test]
+    fn the_count_is_of_the_shape_this_codec_will_write() {
+        struct TwoFaced;
+
+        impl Serialize for TwoFaced {
+            fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                if s.is_human_readable() {
+                    s.serialize_u32(0)
+                } else {
+                    Ladder(30).serialize(s)
+                }
+            }
+        }
+
+        assert_eq!(depth_of(&TwoFaced, 40, true).unwrap(), 0);
+        assert_eq!(depth_of(&TwoFaced, 40, false).unwrap(), 30);
+
+        assert!(
+            depth_of(&TwoFaced, 8, true).is_ok(),
+            "the human-readable form is a scalar and fits anywhere"
+        );
+        assert!(
+            matches!(
+                depth_of(&TwoFaced, 8, false).unwrap_err(),
+                DepthError::TooDeep { limit: 8 }
+            ),
+            "the binary form is thirty levels and must be refused at eight"
+        );
     }
 
     impl Flat {

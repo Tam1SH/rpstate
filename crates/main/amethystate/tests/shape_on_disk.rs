@@ -21,6 +21,11 @@ pub struct Recorded {
     #[amestate(default = 8080)]
     pub port: u16,
 
+    /// A field whose path is not its Rust name, so the snapshot and the data
+    /// have somewhere to disagree.
+    #[amestate(key = "listen_addr", default = "0.0.0.0".to_string())]
+    pub bind: String,
+
     #[amestate(default = None)]
     pub note: Option<String>,
 
@@ -111,6 +116,38 @@ fn the_snapshot_records_what_each_path_is() {
     assert!(note.optional, "a path that may hold nothing says so");
 
     assert_eq!(field(&snapshot.fields, "widths").shape.role, Role::Map);
+}
+
+/// The snapshot names the path the value is at, not the field it came from.
+///
+/// `#[amestate(key = "..")]` moves where a value goes, and everything that
+/// reads or writes it uses that name. The descriptor was built from the Rust
+/// identifier instead, so the file said `bind` while the data sat at
+/// `listen_addr` - and anything planning a migration off the snapshot was
+/// planning against a path nothing held.
+#[cfg(feature = "redb")]
+#[test]
+fn the_snapshot_names_the_path_rather_than_the_field() {
+    let path = TempPath::new("shape_on_disk_key");
+    let snapshot = snapshot_of(&path);
+
+    assert_eq!(
+        field(&snapshot.fields, "listen_addr").type_name,
+        "String",
+        "the snapshot must name the stored path"
+    );
+    assert!(
+        !snapshot.fields.iter().any(|f| f.name == "bind"),
+        "the snapshot names the Rust field, which nothing on disk is called"
+    );
+
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let state = Recorded::new_with(&store).unwrap();
+    assert_eq!(
+        state.bind().get(),
+        "0.0.0.0",
+        "and the value is still reachable through the field it was declared as"
+    );
 }
 
 #[cfg(feature = "redb")]

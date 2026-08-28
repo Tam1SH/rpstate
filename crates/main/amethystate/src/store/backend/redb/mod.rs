@@ -1225,6 +1225,25 @@ mod tests {
         assert_eq!(retrieved, Some(test_value));
     }
 
+    /// Waits for `condition`, and says whether it came true.
+    ///
+    /// These tests used to sleep two hundred milliseconds against a fifty
+    /// millisecond budget and assert afterwards. That is a guess rather than a
+    /// bound on anything: it passes while the machine is quiet and fails when
+    /// the binary is busy, which is exactly when a test is least useful. The
+    /// deadline here is long enough that reaching it means the thing genuinely
+    /// did not happen, and a run on a quiet machine returns as soon as it does.
+    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        condition()
+    }
+
     fn failing_store(tag: &str, decision: AfterGivingUp) -> (RedbStore, Arc<Mutex<Vec<String>>>) {
         let mut config = StoreConfig::new(unique_path(tag));
         config.save_debounce = Duration::from_millis(10);
@@ -1259,10 +1278,9 @@ mod tests {
         store
             .set(StorePath::from_segments(["doomed"]), &1u32)
             .unwrap();
-        thread::sleep(Duration::from_millis(200));
 
         assert!(
-            !heard.lock().is_empty(),
+            wait_until(|| !heard.lock().is_empty()),
             "on_persist_failure never ran once the streak outlived the budget"
         );
         assert!(
@@ -1296,7 +1314,15 @@ mod tests {
         store
             .set(StorePath::from_segments(["waiting"]), &1u32)
             .unwrap();
-        thread::sleep(Duration::from_millis(200));
+        // Polled by reading rather than by writing: a `set` that succeeds
+        // schedules the debouncer and restarts its quiet period, so a loop that
+        // polls with a write keeps the flush from ever reaching the retry
+        // streak it is waiting for.
+        assert!(
+            wait_until(|| store.inner.health.failure().is_some()),
+            "the flush never gave up, so there is nothing for a write to be \
+             refused by"
+        );
         assert!(
             store.set(StorePath::from_segments(["nope"]), &2u32).is_err(),
             "the store should be refusing writes before the disk comes back"
@@ -1306,8 +1332,10 @@ mod tests {
 
         // The retry loop is still running, so the next attempt lands on its
         // own - nothing here asks it to.
-        thread::sleep(Duration::from_millis(200));
-
+        assert!(
+            wait_until(|| store.inner.health.failure().is_none()),
+            "a flush that can land again never cleared the failure"
+        );
         store
             .set(StorePath::from_segments(["fine"]), &3u32)
             .expect("writes should work again once a flush has landed");
@@ -1324,10 +1352,9 @@ mod tests {
         store
             .set(StorePath::from_segments(["doomed"]), &1u32)
             .unwrap();
-        thread::sleep(Duration::from_millis(200));
 
         assert!(
-            store.inner.debouncer.is_poisoned(),
+            wait_until(|| store.inner.debouncer.is_poisoned()),
             "AfterGivingUp::Poison should have taken the writer down"
         );
 
