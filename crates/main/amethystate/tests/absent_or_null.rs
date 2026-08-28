@@ -18,9 +18,9 @@
 //! the format answers `set(None)` and `delete` with the same document - a
 //! distinction the other engines keep and this one cannot.
 
+use amethystate::amethystate;
 use amethystate::store::StoreBackend;
 use amethystate::store::builder::{Backend, StoreBuilder, default_backend};
-use amethystate::amethystate;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 

@@ -125,9 +125,9 @@ fn a_prefix_delete_over_a_dotted_name_survives_a_restart() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.delete_prefix(["cfg"]).unwrap();
         store.save_now().unwrap();
     }
@@ -158,9 +158,9 @@ fn a_key_with_no_name_survives_a_round_trip() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "height"], &720u32).unwrap();
         store.save_now().unwrap();
     }

@@ -311,10 +311,10 @@ impl StoreBackend for Store {
     fn flush_async(&self) -> crate::store::durable::Commit {
         self.0.flush_async()
     }
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
         self.0.is_initialized(namespace)
     }
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         self.0.set_initialized(namespace, state)
     }
 }

@@ -3,9 +3,9 @@ use super::error::{FieldError, ReactiveFieldResult};
 use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::sync_backend::SyncBridge;
-use crate::store::{Commit, Durable, StoreBackend, SubscriptionId};
-use crate::Store;
-use amethystate_core::path::StorePath;
+use crate::store::{Commit, Durable, StoreBackend, StoreSubscription};
+use amethystate_core::Signal;
+use amethystate_core::path::{IntoStorePath, StorePath};
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use error_stack::{Report, ResultExt};
 use std::fmt::{self, Debug};
@@ -13,17 +13,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub use amethystate_core::primitives::field_core::FieldValue;
-
-pub struct StoreSubscription {
-    pub store: Store,
-    pub id: SubscriptionId,
-}
-
-impl Drop for StoreSubscription {
-    fn drop(&mut self) {
-        self.store.unsubscribe(self.id);
-    }
-}
 
 /// A single persisted value with a live signal behind it.
 ///
@@ -228,8 +217,10 @@ where
     /// let net = store.kv().namespace("net");
     /// assert_eq!(net.get::<u16>("port").unwrap(), Some(8080));
     /// ```
-    pub fn path(&self) -> StorePath {
-        self.inner.path.clone()
+    /// Lent, not handed over: a caller asking where a field lives usually wants
+    /// to read it and drop it, and cloning on their behalf decides for them.
+    pub fn path(&self) -> &StorePath {
+        &self.inner.path
     }
 
     /// Calls `callback` whenever the value changes, and keeps doing so until
@@ -381,14 +372,14 @@ where
                         .store_sub
                         .as_ref()
                         .ok_or_else(|| Report::new(FieldError::SourceGone))?;
-                    sub.store
+                    sub.store()
                         .flush_prefix(&inner.path)
                         .change_context(FieldError::Storage)
                         .attach_with(|| format!("committing a field write: {}", inner.path))
                 }),
                 start: Arc::new(move || match start.upgrade() {
                     Some(inner) => match inner.store_sub.as_ref() {
-                        Some(sub) => sub.store.flush_async(),
+                        Some(sub) => sub.store().flush_async(),
                         None => Commit::gone(),
                     },
                     None => Commit::gone(),
@@ -470,7 +461,7 @@ where
         );
 
         if let Some(sub) = &self.inner.store_sub {
-            let backend = SyncBridge::new(sub.store.clone());
+            let backend = SyncBridge::new(sub.store().clone());
             amethystate_core::field_set(
                 &backend,
                 &self.inner.core,
@@ -569,11 +560,8 @@ where
     /// # use std::sync::Arc;
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// # let store = StoreBuilder::new(&*path).build().unwrap();
-    /// # use amethystate::store::StorePath;
-    /// let session: Field<String> = Field::new_volatile(
-    ///     StorePath::from_segments(["app", "session"]),
-    ///     "anonymous".to_string(),
-    /// );
+    /// let session: Field<String> =
+    ///     Field::new_volatile(["app", "session"], "anonymous".to_string());
     ///
     /// session.set("alice".to_string()).unwrap();
     /// assert_eq!(session.get(), "alice");
@@ -582,13 +570,31 @@ where
     /// let app = store.kv().namespace("app");
     /// assert_eq!(app.get::<String>("session").unwrap(), None);
     /// ```
-    pub fn new_volatile(path: StorePath, default: TValue) -> Self {
+    #[track_caller]
+    pub fn new_volatile(path: impl IntoStorePath, default: TValue) -> Self {
         Self::new_volatile_with_id(path, default, Uuid::new_v4())
     }
 
     /// [`Field::new_volatile`] with the instance id chosen rather than
     /// generated.
-    pub fn new_volatile_with_id(path: StorePath, default: TValue, instance_id: Uuid) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// If the levels do not make a path - an empty one among them, a dangling
+    /// escape, or none at all. Written-out levels are the caller's to get
+    /// right, which is the same bargain [`StorePath::from_segments`] makes and
+    /// how every caller here reached this already. Levels that come from data
+    /// go through [`StorePath::try_from_segments`] first.
+    #[track_caller]
+    pub fn new_volatile_with_id(
+        path: impl IntoStorePath,
+        default: TValue,
+        instance_id: Uuid,
+    ) -> Self {
+        let path = path
+            .into_store_path()
+            .unwrap_or_else(|e| panic!("a volatile field needs a path: {e}"));
+
         Self {
             inner: Arc::new(FieldInner {
                 core: FieldCore::new(default),
@@ -605,10 +611,7 @@ impl<TValue> PartialEq for Field<TValue> {
     fn eq(&self, other: &Self) -> bool {
         self.inner.path == other.inner.path
             && self.inner.instance_id == other.inner.instance_id
-            && Arc::ptr_eq(
-                &self.inner.core.signal.value,
-                &other.inner.core.signal.value,
-            )
+            && Signal::ptr_eq(&self.inner.core.signal, &other.inner.core.signal)
     }
 }
 
@@ -788,7 +791,7 @@ where
 
     fn commit(&self) -> ReactiveFieldResult<()> {
         if let Some(sub) = &self.0.inner.store_sub {
-            sub.store
+            sub.store()
                 .flush_prefix(&self.0.inner.path)
                 .change_context(FieldError::Storage)
                 .attach_with(|| format!("committing a field write: {}", self.0.inner.path))?;
@@ -798,7 +801,7 @@ where
 
     async fn commit_async(&self) -> ReactiveFieldResult<()> {
         if let Some(sub) = &self.0.inner.store_sub {
-            sub.store
+            sub.store()
                 .flush_async()
                 .await
                 .change_context(FieldError::Storage)
@@ -832,7 +835,7 @@ mod tests {
             .expect("field should be created");
 
         assert_eq!(field.get(), 14);
-        assert_eq!(field.path(), StorePath::from_segments(["ui", "font_size"]));
+        assert_eq!(field.path(), &StorePath::from_segments(["ui", "font_size"]));
 
         field.set(18).expect("set should succeed");
         assert_eq!(store.get::<i32>(["ui", "font_size"]).unwrap(), Some(18));
@@ -867,10 +870,7 @@ mod tests {
                 inner: Arc::new(FieldInner {
                     core,
                     path: StorePath::from_segments(["test", "field"]),
-                    store_sub: Some(Arc::new(StoreSubscription {
-                        store: store.clone(),
-                        id: sub_id,
-                    })),
+                    store_sub: Some(Arc::new(StoreSubscription::new(store.clone(), sub_id))),
                     instance_id: Default::default(),
                     unreadable: Unreadable::default(),
                 }),
@@ -943,8 +943,7 @@ mod tests {
 
     #[test]
     fn test_field_additional_coverage() {
-        let field =
-            Field::<i32>::new_volatile(StorePath::from_segments(["test"]), 42);
+        let field = Field::<i32>::new_volatile(StorePath::from_segments(["test"]), 42);
 
         let disp = field.intercept(|mut change| {
             change.new_value *= 2;
@@ -1001,10 +1000,8 @@ mod tests {
     #[test]
     #[traced_test]
     fn test_field_recursion_warning() {
-        let field = Field::<i32>::new_volatile(
-            StorePath::from_segments(["test", "recursive_field"]),
-            0,
-        );
+        let field =
+            Field::<i32>::new_volatile(StorePath::from_segments(["test", "recursive_field"]), 0);
 
         let field_clone = field.clone();
 
@@ -1021,8 +1018,7 @@ mod tests {
 
     #[test]
     fn test_field_subscribe_external() {
-        let field =
-            Field::<i32>::new_volatile(StorePath::from_segments(["test", "ext"]), 0);
+        let field = Field::<i32>::new_volatile(StorePath::from_segments(["test", "ext"]), 0);
         let fork = field.fork();
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1089,10 +1085,8 @@ mod tests {
     }
     #[test]
     fn test_field_update_and_modify() {
-        let field = Field::<i32>::new_volatile(
-            StorePath::from_segments(["test", "update_modify"]),
-            10,
-        );
+        let field =
+            Field::<i32>::new_volatile(StorePath::from_segments(["test", "update_modify"]), 10);
 
         let updated = field.update(|val| val + 5).unwrap();
         assert_eq!(updated, 15);

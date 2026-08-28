@@ -184,6 +184,20 @@ impl<T: Clone + 'static> Signal<T> {
     }
 }
 
+impl<T> Signal<T> {
+    /// Whether these are two handles on the same signal, rather than two
+    /// signals holding equal values.
+    ///
+    /// An associated function like [`Arc::ptr_eq`], and named after it, because
+    /// `a == b` would read as a question about the values. Callers comparing
+    /// handles used to reach into `value` and call `Arc::ptr_eq` on it
+    /// themselves, which made every one of them depend on how a signal is put
+    /// together.
+    pub fn ptr_eq(a: &Self, b: &Self) -> bool {
+        Arc::ptr_eq(&a.value, &b.value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

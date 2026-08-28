@@ -317,10 +317,7 @@ impl Location {
     /// macOS the executable lives inside the bundle, so a file beside it is
     /// inside a signed directory. Any of those shows up as a failure to open
     /// the store, which is at startup rather than at the first write.
-    pub fn beside_the_executable(
-        self,
-        file_name: impl AsRef<Path>,
-    ) -> StorageResult<PathBuf> {
+    pub fn beside_the_executable(self, file_name: impl AsRef<Path>) -> StorageResult<PathBuf> {
         let exe = std::env::current_exe()
             .change_context(StorageError::Open)
             .attach("the running executable cannot be located, so nothing is beside it")?;
@@ -404,9 +401,7 @@ impl StoreBuilder {
     /// The file name carries no extension in any of those, so the engine that
     /// runs names it - see [`StoreBuilder::backend`] for what that means when
     /// the engine is chosen afterwards.
-    pub fn located(
-        pick: impl FnOnce(Location) -> StorageResult<PathBuf>,
-    ) -> StorageResult<Self> {
+    pub fn located(pick: impl FnOnce(Location) -> StorageResult<PathBuf>) -> StorageResult<Self> {
         Ok(Self::new(pick(Location)?))
     }
 

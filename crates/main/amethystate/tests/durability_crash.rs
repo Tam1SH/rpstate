@@ -8,9 +8,9 @@
 //! This is a statement about a store, not about one engine, so it runs against
 //! every engine that is compiled in.
 
+use amethystate::StoreBuilder;
 use amethystate::store::builder::Backend;
 use amethystate::store::field_with_path;
-use amethystate::StoreBuilder;
 use amethystate_core::test_utils::unique_path;
 use std::path::Path;
 use std::time::Duration;
@@ -24,13 +24,9 @@ fn write_then_abort(backend: Backend, path: &Path) -> ! {
         .build()
         .unwrap();
 
-    let plain = field_with_path::<u16>(
-        &store,
-        ["n", "plain"],
-        1,
-        amethystate::uuid::Uuid::new_v4(),
-    )
-    .unwrap();
+    let plain =
+        field_with_path::<u16>(&store, ["n", "plain"], 1, amethystate::uuid::Uuid::new_v4())
+            .unwrap();
     let durable = field_with_path::<u16>(
         &store,
         ["n", "durable"],

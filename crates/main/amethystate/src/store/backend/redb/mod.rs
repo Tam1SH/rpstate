@@ -31,9 +31,9 @@ use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
 use rmp_serde::config::BytesMode;
 use std::cell::RefCell;
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 use uuid::Uuid;
@@ -79,7 +79,7 @@ fn apply_pending(
         match op {
             utils::PendingOp::Set(b) => {
                 table
-                    .insert(&**key, &b[..])
+                    .insert(key.as_str(), &b[..])
                     .doing(StorageError::Flush, path)
                     .attach_with(|| format!("table: {}", TABLE_DATA.name()))
                     .attach_with(|| format!("key: {key}"))
@@ -87,13 +87,13 @@ fn apply_pending(
             }
             utils::PendingOp::Delete => {
                 table
-                    .remove(&**key)
+                    .remove(key.as_str())
                     .doing(StorageError::Flush, path)
                     .attach_with(|| format!("table: {}", TABLE_DATA.name()))
                     .attach_with(|| format!("key: {key}"))?;
             }
             utils::PendingOp::Init(seeded) => {
-                let init_key = utils::init_key(key);
+                let init_key = utils::init_key(key.as_str());
                 if *seeded {
                     meta.insert(init_key.as_str(), &[][..]).map(|_| ())
                 } else {
@@ -161,7 +161,7 @@ impl RedbStoreInner {
     fn flush_locked(&self, prefix: &StorePath) -> StorageResult<()> {
         let changes = {
             let lock = self.pending.lock();
-            utils::pending_prefix(&lock, prefix.as_str())
+            utils::pending_prefix(&lock, prefix)
         };
         let txn = self
             .db()?
@@ -214,7 +214,9 @@ impl RedbStoreInner {
         if let Some(reason) = self.health.failure() {
             return Err(error_stack::Report::new(StorageError::CommitFailed)
                 .attach(format!("the background flush is not landing: {reason:#}"))
-                .attach("what is already buffered is still being retried, and reads are unaffected"));
+                .attach(
+                    "what is already buffered is still being retried, and reads are unaffected",
+                ));
         }
         if self.debouncer.is_poisoned() {
             panic!("debouncer thread is dead — store integrity cannot be guaranteed");
@@ -558,8 +560,16 @@ impl StoreBackend for RedbStore {
         self.inner.check_debouncer()?;
         self.inner
             .budget
-            .check(&path, value)
+            .check_path(&path)
             .attach_with(|| format!("store: {}", self.inner.path.display()))?;
+
+        // Counted during the codec's own pass rather than in one of its own.
+        // redb needs it most: `rmp_serde` has no ceiling, so a value deep
+        // enough is committed and then kills every process that opens the file
+        // afterwards - and building the value to measure it is the very act
+        // that overflows the stack.
+        let depth = self.inner.budget.for_value(&path);
+        let counted = depth.count(value);
         let bytes = SERIALIZATION_BUFFER
             .with(|buf| {
                 let mut b = buf.borrow_mut();
@@ -574,12 +584,23 @@ impl StoreBackend for RedbStore {
                 let mut ser = Serializer::new(&mut *b)
                     .with_bytes(BytesMode::ForceAll)
                     .with_struct_map();
-                erased_serde::serialize(value, &mut ser).map_err(CodecError::from)?;
+                serde::Serialize::serialize(&counted, &mut ser).map_err(CodecError::from)?;
 
                 Ok::<Vec<u8>, CodecError>(Vec::from(&b[..]))
             })
-            .doing(StorageError::Codec, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?;
+            .map_err(|e| {
+                if depth.overflowed() {
+                    self.inner
+                        .budget
+                        .too_deep(&path)
+                        .attach(format!("store: {}", self.inner.path.display()))
+                } else {
+                    error_stack::Report::new(e)
+                        .change_context(StorageError::Codec)
+                        .attach(format!("store: {}", self.inner.path.display()))
+                        .attach(format!("key: {path}"))
+                }
+            })?;
 
         let old_bytes = self
             .committed_or_buffered(&path)
@@ -589,16 +610,13 @@ impl StoreBackend for RedbStore {
 
         {
             let mut lock = self.inner.pending.lock();
-            lock.insert(
-                Arc::from(path.as_str()),
-                utils::PendingOp::Set(bytes.clone()),
-            );
+            lock.insert(path.clone(), utils::PendingOp::Set(bytes.clone()));
         }
 
         utils::emit_events(
             &self.inner.subscriptions,
             StoreEvent {
-                path: Arc::from(path.as_str()),
+                path: path.joined_arc(),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(bytes),
@@ -661,9 +679,9 @@ impl StoreBackend for RedbStore {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
             lock.iter()
-                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix, &bound))
-                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(Vec::from))))
-                .collect::<StorageResult<_>>()?
+                .filter(|(key, op)| op.is_data() && utils::is_under(key.as_str(), prefix, &bound))
+                .map(|(key, op)| (key.clone(), op.value().map(Vec::from)))
+                .collect()
         };
         buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -685,14 +703,14 @@ impl StoreBackend for RedbStore {
         let bound = utils::subtree_bound(prefix);
         let prefix = prefix.as_str();
 
-        let mut buffered: Vec<(Arc<str>, Option<Vec<u8>>)> = {
+        let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
             lock.iter()
-                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix, &bound))
-                .map(|(k, op)| (k.clone(), op.value().map(Vec::from)))
+                .filter(|(key, op)| op.is_data() && utils::is_under(key.as_str(), prefix, &bound))
+                .map(|(key, op)| (key.clone(), op.value().map(Vec::from)))
                 .collect()
         };
-        buffered.sort_unstable_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
+        buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
         let read_txn = self
             .inner
@@ -725,20 +743,20 @@ impl StoreBackend for RedbStore {
             }
 
             // Everything the buffer holds ahead of this key belongs before it.
-            while pending.peek().is_some_and(|(p, _)| p.as_ref() < key) {
+            while pending.peek().is_some_and(|(p, _)| p.as_str() < key) {
                 let (p, value) = pending.next().expect("peeked");
                 if let Some(value) = value {
-                    visit(&p, &value)?;
+                    visit(p.as_str(), &value)?;
                 }
             }
 
             match pending.peek() {
                 // A buffered write replaces this one, a buffered delete removes
                 // it, and either way the buffer's turn is now.
-                Some((p, _)) if p.as_ref() == key => {
+                Some((p, _)) if p.as_str() == key => {
                     let (p, value) = pending.next().expect("peeked");
                     if let Some(value) = value {
-                        visit(&p, &value)?;
+                        visit(p.as_str(), &value)?;
                     }
                 }
                 _ => visit(key, v.value())?,
@@ -747,7 +765,7 @@ impl StoreBackend for RedbStore {
 
         for (p, value) in pending {
             if let Some(value) = value {
-                visit(&p, &value)?;
+                visit(p.as_str(), &value)?;
             }
         }
 
@@ -796,9 +814,9 @@ impl StoreBackend for RedbStore {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
             lock.iter()
-                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix, &bound))
-                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(|_| Vec::new()))))
-                .collect::<StorageResult<_>>()?
+                .filter(|(key, op)| op.is_data() && utils::is_under(key.as_str(), prefix, &bound))
+                .map(|(key, op)| (key.clone(), op.value().map(|_| Vec::new())))
+                .collect()
         };
         buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -810,7 +828,6 @@ impl StoreBackend for RedbStore {
 
     fn delete_with_source(&self, path: &StorePath, source: Option<Uuid>) -> StorageResult<()> {
         self.inner.check_debouncer()?;
-        let path_arc: Arc<str> = Arc::from(path.as_str());
 
         let old_bytes = self
             .committed_or_buffered(path)
@@ -824,13 +841,13 @@ impl StoreBackend for RedbStore {
 
         {
             let mut lock = self.inner.pending.lock();
-            lock.insert(path_arc.clone(), utils::PendingOp::Delete);
+            lock.insert(path.clone(), utils::PendingOp::Delete);
         }
 
         utils::emit_events(
             &self.inner.subscriptions,
             StoreEvent {
-                path: path_arc,
+                path: path.joined_arc(),
                 op: StoreOp::Delete,
                 old: Some(old_bytes),
                 new: None,
@@ -859,7 +876,7 @@ impl StoreBackend for RedbStore {
         {
             let mut lock = self.inner.pending.lock();
             for (path, _) in keys {
-                lock.insert(Arc::from(path.as_str()), utils::PendingOp::Delete);
+                lock.insert(path, utils::PendingOp::Delete);
             }
         }
 
@@ -905,12 +922,12 @@ impl StoreBackend for RedbStore {
         commit
     }
 
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
-        if self.inner.initialized.lock().contains(namespace) {
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
+        if self.inner.initialized.lock().contains(namespace.as_str()) {
             return Ok(true);
         }
 
-        let key = utils::init_key(namespace);
+        let key = utils::init_key(namespace.as_str());
         let read_txn = self
             .inner
             .db()?
@@ -928,22 +945,22 @@ impl StoreBackend for RedbStore {
             .is_some();
 
         if found {
-            self.inner.initialized.lock().insert(Arc::from(namespace));
+            self.inner.initialized.lock().insert(namespace.joined_arc());
         }
         Ok(found)
     }
 
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
-        if self.inner.initialized.lock().contains(namespace) == state.is_seeded() {
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
+        if self.inner.initialized.lock().contains(namespace.as_str()) == state.is_seeded() {
             return Ok(());
         }
 
         self.inner.check_debouncer()?;
-        let key: Arc<str> = Arc::from(namespace);
+        let key = namespace.joined_arc();
         self.inner
             .pending
             .lock()
-            .insert(Arc::clone(&key), utils::PendingOp::Init(state.is_seeded()));
+            .insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
 
         let mut initialized = self.inner.initialized.lock();
         if state.is_seeded() {
@@ -1296,7 +1313,9 @@ mod tests {
 
         // The reads the store already had are untouched by any of it.
         assert_eq!(
-            store.get::<u32>(StorePath::from_segments(["doomed"])).unwrap(),
+            store
+                .get::<u32>(StorePath::from_segments(["doomed"]))
+                .unwrap(),
             Some(1)
         );
 
@@ -1324,7 +1343,9 @@ mod tests {
              refused by"
         );
         assert!(
-            store.set(StorePath::from_segments(["nope"]), &2u32).is_err(),
+            store
+                .set(StorePath::from_segments(["nope"]), &2u32)
+                .is_err(),
             "the store should be refusing writes before the disk comes back"
         );
 

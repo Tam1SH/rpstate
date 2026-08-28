@@ -3,7 +3,7 @@ use crate::error::FieldError;
 use crate::path::StorePath;
 use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
-use crate::{Change, FieldCore, InterceptDisposer, SignalSubscription};
+use crate::{Change, FieldCore, InterceptDisposer, Signal, SignalSubscription};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -38,7 +38,7 @@ impl<T, B> PartialEq for Field<T, B> {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
             && self.instance_id == other.instance_id
-            && Arc::ptr_eq(&self.core.signal.value, &other.core.signal.value)
+            && Signal::ptr_eq(&self.core.signal, &other.core.signal)
     }
 }
 

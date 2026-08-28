@@ -39,7 +39,12 @@ where
 }
 
 struct PipelineInner<T> {
-    signal: Arc<Signal<T>>,
+    /// Not `Arc<Signal<T>>`: a `Signal` is three `Arc`s already and clones by
+    /// bumping them. Wrapping it bought one refcount bump instead of three on a
+    /// clone that happens once, when a pipeline is built, and charged a pointer
+    /// hop on every `get` - which a retain-mode UI does per frame. The rare
+    /// case was being paid for by the hot one.
+    signal: Signal<T>,
     _source_subs: Vec<SignalSubscription>,
     _keepalive: Vec<Arc<dyn Send + Sync>>,
 }
@@ -61,7 +66,7 @@ where
     T: Clone + Send + Sync + 'static,
 {
     pub fn from_signal(
-        signal: Arc<Signal<T>>,
+        signal: Signal<T>,
         source_subs: Vec<SignalSubscription>,
         keepalive: Vec<Arc<dyn Send + Sync>>,
     ) -> Self {
@@ -99,8 +104,8 @@ where
     {
         let f = Arc::new(f);
         let initial = f(self.get());
-        let signal = Arc::new(Signal::new(initial));
-        let target = Arc::clone(&signal);
+        let signal = Signal::new(initial);
+        let target = signal.clone();
         let mapper = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
@@ -123,8 +128,8 @@ where
     {
         let f = Arc::new(f);
         let initial = f(self.get()).unwrap_or_default();
-        let signal = Arc::new(Signal::new(initial));
-        let target = Arc::clone(&signal);
+        let signal = Signal::new(initial);
+        let target = signal.clone();
         let mapper = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
@@ -150,8 +155,8 @@ where
         let initial = self.get();
         f(&initial);
 
-        let signal = Arc::new(Signal::new(initial));
-        let target = Arc::clone(&signal);
+        let signal = Signal::new(initial);
+        let target = signal.clone();
         let inspector = Arc::clone(&f);
 
         let sub = self.subscribe_with_source(move |value, source| {
@@ -174,8 +179,8 @@ where
     {
         let initial = self.get();
         let last = Arc::new(Mutex::new(initial.clone()));
-        let signal = Arc::new(Signal::new(initial));
-        let target = Arc::clone(&signal);
+        let signal = Signal::new(initial);
+        let target = signal.clone();
         let last_seen = Arc::clone(&last);
 
         let sub = self.subscribe_with_source(move |value, source| {
@@ -254,13 +259,15 @@ impl ReactiveScope {
 
 impl<R, T> IntoPipeline<T> for R
 where
-    R: Reactive<T> + Send + Sync + 'static,
+    R: Reactive<T>,
+    // Required by `IntoPipeline` itself rather than by `Reactive`, so it is not
+    // the repetition the `Send + Sync + 'static` on `R` was.
     T: Clone + Send + Sync + 'static,
 {
     fn pipe(self) -> Pipeline<T> {
         let initial = self.get();
-        let signal = Arc::new(Signal::new(initial));
-        let target = Arc::clone(&signal);
+        let signal = Signal::new(initial);
+        let target = signal.clone();
         let sub = self.subscribe_with_source(move |value, source| {
             target.set_forwarded(value.clone(), source);
         });
@@ -299,7 +306,7 @@ macro_rules! impl_tuple_pipeline {
             fn pipe(self) -> Pipeline<($($value_ty,)+)> {
                 let ($($source,)+) = self;
                 let initial = ($($source.get(),)+);
-                let signal = Arc::new(Signal::new(initial));
+                let signal = Signal::new(initial);
                 let mut source_subs = Vec::new();
                 let mut keepalive = Vec::new();
 
@@ -313,7 +320,7 @@ macro_rules! impl_tuple_pipeline {
                         keepalive.push(inner);
                     }
 
-                    let target = Arc::clone(&signal);
+                    let target = signal.clone();
                     let refresh_cb = Arc::clone(&refresh);
                     source_subs.push($source.subscribe_with_source(move |_, src| {
                         target.set_forwarded(refresh_cb(), src);

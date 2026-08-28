@@ -80,8 +80,5 @@ fn keys_forgets_a_removed_entry() {
     store.save_now().unwrap();
     cfg.items().remove("mike").unwrap();
 
-    assert_eq!(
-        cfg.items().keys(),
-        ["alpha", "bravo", "delta", "zulu"]
-    );
+    assert_eq!(cfg.items().keys(), ["alpha", "bravo", "delta", "zulu"]);
 }

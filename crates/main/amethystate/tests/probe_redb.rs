@@ -22,6 +22,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::Duration;
 
+/// A namespace named the way a key on disk spells it, so a name holding the
+/// separator stays distinguishable from the two levels it looks like.
+fn ns(joined: &str) -> StorePath {
+    StorePath::parse_joined(joined).expect("a namespace the test wrote itself")
+}
+
 /// A redb store with the debouncer and the watcher pushed out, so nothing
 /// lands except where a probe asks for it.
 fn open(file: &TempPath) -> Store {
@@ -286,7 +292,10 @@ fn strings_survive_whatever_they_hold() {
         ("quotes", "he said \"x\" and 'y'".to_string()),
         ("backslash", "a\\b\\\\c".to_string()),
         ("dots", "a.b..c.".to_string()),
-        ("unicode", "\u{4f60}\u{597d} \u{1f600} \u{5d0}\u{5d1}".to_string()),
+        (
+            "unicode",
+            "\u{4f60}\u{597d} \u{1f600} \u{5d0}\u{5d1}".to_string(),
+        ),
         ("combining", "e\u{301}\u{308}".to_string()),
         ("bom", "\u{feff}x".to_string()),
         ("bidi", "a\u{202e}b\u{202c}c".to_string()),
@@ -332,7 +341,10 @@ fn a_fixed_size_byte_array_round_trips() {
 #[test]
 fn a_nested_byte_vector_round_trips() {
     let value: Vec<Vec<u8>> = vec![vec![], vec![0], vec![255, 0, 128]];
-    assert_eq!(trip("probe_bytes_nested", &value).value(), Some(value.clone()));
+    assert_eq!(
+        trip("probe_bytes_nested", &value).value(),
+        Some(value.clone())
+    );
 }
 
 /// A string is not a byte vector even where the bytes would fit.
@@ -491,7 +503,11 @@ fn a_path_of_many_levels_round_trips() {
             "a {depth}-level path did not come back"
         );
         let keys = store.scan_keys(StorePath::segment("l0")).unwrap();
-        assert_eq!(keys, vec![path.clone()], "the scan lost a {depth}-level path");
+        assert_eq!(
+            keys,
+            vec![path.clone()],
+            "the scan lost a {depth}-level path"
+        );
         assert_eq!(keys[0].len(), depth, "the levels did not survive the key");
         drop(store);
     }
@@ -505,7 +521,10 @@ fn no_two_paths_share_a_key() {
         ("dotted_name", StorePath::from_segments(["a.b"])),
         ("escape_level", StorePath::from_segments(["a\\", "b"])),
         ("escaped_dot_name", StorePath::from_segments(["a\\.b"])),
-        ("escape_then_dotted", StorePath::from_segments(["a\\", ".b"])),
+        (
+            "escape_then_dotted",
+            StorePath::from_segments(["a\\", ".b"]),
+        ),
         ("backslash_name", StorePath::from_segments(["a\\b"])),
         ("three_levels", StorePath::from_segments(["a", "b", "c"])),
     ];
@@ -584,9 +603,18 @@ fn a_scan_stops_at_the_level_boundary() {
     want.sort();
     assert_eq!(seen, want, "the scan of `ui` crossed a level boundary");
 
-    assert_eq!(store.scan_keys(&sibling_longer).unwrap(), vec![sibling_longer.clone()]);
-    assert_eq!(store.scan_keys(&sibling_dotted).unwrap(), vec![sibling_dotted.clone()]);
-    assert_eq!(store.scan_keys(&sibling_nul).unwrap(), vec![sibling_nul.clone()]);
+    assert_eq!(
+        store.scan_keys(&sibling_longer).unwrap(),
+        vec![sibling_longer.clone()]
+    );
+    assert_eq!(
+        store.scan_keys(&sibling_dotted).unwrap(),
+        vec![sibling_dotted.clone()]
+    );
+    assert_eq!(
+        store.scan_keys(&sibling_nul).unwrap(),
+        vec![sibling_nul.clone()]
+    );
 
     assert_eq!(
         store.scan_keys(StorePath::root()).unwrap().len(),
@@ -658,7 +686,10 @@ fn a_name_ending_in_an_escape_does_not_widen_its_subtree() {
     seen.sort();
     let mut want = vec![at.clone(), under.clone()];
     want.sort();
-    assert_eq!(seen, want, "the scan of a name ending in an escape reached out");
+    assert_eq!(
+        seen, want,
+        "the scan of a name ending in an escape reached out"
+    );
 
     let mut seen = store.scan_keys(&plain).unwrap();
     seen.sort();
@@ -666,10 +697,7 @@ fn a_name_ending_in_an_escape_does_not_widen_its_subtree() {
     want.sort();
     assert_eq!(seen, want, "`a` reached into `a\\`");
 
-    assert_eq!(
-        store.scan_keys(StorePath::root()).unwrap().len(),
-        all.len()
-    );
+    assert_eq!(store.scan_keys(StorePath::root()).unwrap().len(), all.len());
     drop(store);
 }
 
@@ -747,7 +775,7 @@ fn the_stores_own_bookkeeping_is_not_readable_as_a_path() {
     {
         let store = open(&file);
         store.set(["probe", "a"], &1u32).unwrap();
-        store.mark_initialized("probe").unwrap();
+        store.mark_initialized(&ns("probe")).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
     }
 
@@ -757,7 +785,7 @@ fn the_stores_own_bookkeeping_is_not_readable_as_a_path() {
         vec![StorePath::from_segments(["probe", "a"])],
         "something other than the written path is readable"
     );
-    assert!(store.is_initialized("probe").unwrap());
+    assert!(store.is_initialized(&ns("probe")).unwrap());
     assert!(
         store
             .get::<serde_json::Value>(StorePath::segment("__init::probe"))
@@ -839,8 +867,7 @@ fn empty_and_degenerate_structures_survive() {
     let empty_map: BTreeMap<String, u32> = BTreeMap::new();
     assert_eq!(trip("probe_empty_map", &empty_map).value(), Some(empty_map));
 
-    let empty_string_key: BTreeMap<String, u32> =
-        [(String::new(), 1u32)].into_iter().collect();
+    let empty_string_key: BTreeMap<String, u32> = [(String::new(), 1u32)].into_iter().collect();
     assert_eq!(
         trip("probe_empty_map_key", &empty_string_key).value(),
         Some(empty_string_key)
@@ -1166,7 +1193,10 @@ fn a_map_with_non_string_keys_survives() {
         .collect();
     let Trip { wrote, read } = trip("probe_byte_keys", &bytes);
     wrote.expect("the write was refused");
-    assert_eq!(read.expect("byte-keyed map would not read back"), Some(bytes));
+    assert_eq!(
+        read.expect("byte-keyed map would not read back"),
+        Some(bytes)
+    );
 }
 
 /// A map key holding the separator, an escape or a NUL is a value, not a path,
@@ -1473,10 +1503,7 @@ fn many_keys_all_come_back() {
     let store = open(&file);
     let keys = store.scan_keys(StorePath::segment("probe")).unwrap();
     assert_eq!(keys.len() as u32, count, "the reopen lost or invented keys");
-    assert_eq!(
-        store.get::<u32>(["probe", "k19999"]).unwrap(),
-        Some(19_999)
-    );
+    assert_eq!(store.get::<u32>(["probe", "k19999"]).unwrap(), Some(19_999));
     drop(store);
 }
 
@@ -1542,12 +1569,16 @@ fn a_type_mismatch_is_a_failure_not_an_absence() {
 
     {
         let store = open(&file);
-        store.set(&path, &Fields {
-            a: 1,
-            b: "x".into(),
-            c: None,
-        })
-        .unwrap();
+        store
+            .set(
+                &path,
+                &Fields {
+                    a: 1,
+                    b: "x".into(),
+                    c: None,
+                },
+            )
+            .unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
     }
 
@@ -1576,12 +1607,12 @@ fn a_namespace_flag_and_its_data_land_together() {
     {
         let store = open(&file);
         store.set(["ns", "a"], &1u32).unwrap();
-        store.mark_initialized("ns").unwrap();
+        store.mark_initialized(&ns("ns")).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
     }
 
     let store = open(&file);
-    assert!(store.is_initialized("ns").unwrap());
+    assert!(store.is_initialized(&ns("ns")).unwrap());
     assert_eq!(store.get::<u32>(["ns", "a"]).unwrap(), Some(1));
     assert_eq!(store.scan_keys(StorePath::segment("ns")).unwrap().len(), 1);
     drop(store);
@@ -1595,17 +1626,17 @@ fn a_namespace_name_holding_a_separator_has_its_own_flag() {
 
     {
         let store = open(&file);
-        store.mark_initialized("a.b").unwrap();
+        store.mark_initialized(&ns("a.b")).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
     }
 
     let store = open(&file);
-    assert!(store.is_initialized("a.b").unwrap());
+    assert!(store.is_initialized(&ns("a.b")).unwrap());
     assert!(
-        !store.is_initialized("a").unwrap(),
+        !store.is_initialized(&ns("a")).unwrap(),
         "marking `a.b` marked `a` as well"
     );
-    assert!(!store.is_initialized("a\\.b").unwrap());
+    assert!(!store.is_initialized(&ns("a\\.b")).unwrap());
     drop(store);
 }
 

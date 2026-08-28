@@ -1,15 +1,21 @@
 use amethystate::StoreBuilder;
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
+
+/// A namespace named the way a key on disk spells it.
+fn ns(joined: &str) -> StorePath {
+    StorePath::parse_joined(joined).expect("a namespace the test wrote itself")
+}
 
 #[test]
 fn a_mark_is_visible_before_it_reaches_disk() {
     let store = StoreBuilder::new(unique_path("readback")).build().unwrap();
 
-    assert!(!store.is_initialized("settings").unwrap());
-    store.mark_initialized("settings").unwrap();
+    assert!(!store.is_initialized(&ns("settings")).unwrap());
+    store.mark_initialized(&ns("settings")).unwrap();
 
     assert!(
-        store.is_initialized("settings").unwrap(),
+        store.is_initialized(&ns("settings")).unwrap(),
         "the buffer answers, as it does for get"
     );
 }
@@ -20,12 +26,12 @@ fn a_mark_survives_a_flush_and_reopen() {
 
     {
         let store = StoreBuilder::new(path.clone()).build().unwrap();
-        store.mark_initialized("settings").unwrap();
+        store.mark_initialized(&ns("settings")).unwrap();
         store.save_now().unwrap();
     }
 
     let store = StoreBuilder::new(path).build().unwrap();
-    assert!(store.is_initialized("settings").unwrap());
+    assert!(store.is_initialized(&ns("settings")).unwrap());
 }
 
 /// A mark and the values beside it come back together after a prefix flush.
@@ -42,14 +48,14 @@ fn a_prefix_flush_carries_the_mark_for_that_namespace() {
     {
         let store = StoreBuilder::new(path.clone()).build().unwrap();
         store.set(["settings", "port"], &8080u16).unwrap();
-        store.mark_initialized("settings").unwrap();
+        store.mark_initialized(&ns("settings")).unwrap();
 
         store.flush_prefix(["settings"]).unwrap();
     }
 
     let store = StoreBuilder::new(path).build().unwrap();
     assert!(
-        store.is_initialized("settings").unwrap(),
+        store.is_initialized(&ns("settings")).unwrap(),
         "the mark is selected by the same prefix rule as its values"
     );
     assert_eq!(store.get::<u16>(["settings", "port"]).unwrap(), Some(8080));
@@ -59,7 +65,7 @@ fn a_prefix_flush_carries_the_mark_for_that_namespace() {
 fn a_mark_does_not_show_up_as_data() {
     let store = StoreBuilder::new(unique_path("notdata")).build().unwrap();
 
-    store.mark_initialized("settings").unwrap();
+    store.mark_initialized(&ns("settings")).unwrap();
     store.set(["settings", "port"], &1u16).unwrap();
 
     let found = store.scan_prefix(["settings"]).unwrap();

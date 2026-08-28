@@ -2,8 +2,8 @@ use crate::store::error::{StorageError, StorageResult};
 use error_stack::Report;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 /// A view over a primitive whose writes return only once they are on disk.

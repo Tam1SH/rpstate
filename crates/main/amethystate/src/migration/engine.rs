@@ -1,9 +1,7 @@
 use crate::migration::fields::FieldDescriptor;
 use crate::migration::meta::{PrefixMeta, SchemaSnapshot, StoredFieldEntry};
 use crate::migration::set::MigrationSet;
-use crate::migration::{
-    AppliedStep, ComponentOutcome, ComponentResult, NaggingRecord, SchemaDiff,
-};
+use crate::migration::{AppliedStep, ComponentOutcome, ComponentResult, NaggingRecord, SchemaDiff};
 use crate::observability::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
 use crate::store::{StorageError, StorageResult};
@@ -76,11 +74,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                                 version: entry.version,
                                 struct_name: Some(entry.struct_name.to_string()),
                                 schema_hash: entry.schema_hash,
-                                fields: entry
-                                    .fields
-                                    .iter()
-                                    .map(StoredFieldEntry::from)
-                                    .collect(),
+                                fields: entry.fields.iter().map(StoredFieldEntry::from).collect(),
                             },
                         )
                         .attach_with(|| {
@@ -328,8 +322,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         provided: &crate::migration::provided::Provided,
     ) -> StorageResult<Vec<AppliedStep>> {
         let mut new_steps = Vec::new();
-        let mut ctx =
-            MigrationContext::new(prefix.to_string(), storage).with_provided(provided);
+        let mut ctx = MigrationContext::new(prefix.to_string(), storage).with_provided(provided);
 
         for step in &migrator.steps {
             let sv = step.target_version();

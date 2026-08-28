@@ -33,7 +33,9 @@ pub struct Settings {
 }
 
 #[migrate(explicit)]
-fn settings_v1_to_v2(old: AmeData<v1::Settings>) -> amethystate::MigrationResult<AmeData<Settings>> {
+fn settings_v1_to_v2(
+    old: AmeData<v1::Settings>,
+) -> amethystate::MigrationResult<AmeData<Settings>> {
     Ok(AmeData::<Settings> {
         port: old.port,
         host: "the step ran".to_string(),
@@ -84,5 +86,9 @@ fn an_explicit_step_runs_when_it_is_handed_over() {
         "the step ran",
         "the step was passed in and should have run"
     );
-    assert_eq!(settings.port().get(), 8080, "and carried the old value over");
+    assert_eq!(
+        settings.port().get(),
+        8080,
+        "and carried the old value over"
+    );
 }

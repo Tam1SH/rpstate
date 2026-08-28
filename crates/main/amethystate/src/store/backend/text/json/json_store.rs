@@ -97,12 +97,12 @@ impl StoreBackend for JsonStore {
     fn flush_async(&self) -> crate::store::durable::Commit {
         self.0.flush_async()
     }
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
         self.0.is_initialized(namespace)
     }
     fn set_initialized(
         &self,
-        namespace: &str,
+        namespace: &StorePath,
         state: crate::store::InitState,
     ) -> StorageResult<()> {
         self.0.set_initialized(namespace, state)

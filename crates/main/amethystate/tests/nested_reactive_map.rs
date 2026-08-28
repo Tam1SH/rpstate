@@ -52,12 +52,6 @@ fn reactive_map_inside_nested_struct_seeds_defaults_only_once() {
         let settings = ProcessSettings::new_with(&store).unwrap();
 
         // Reopening must not re-seed the default over the user's edit.
-        assert_eq!(
-            settings
-                .columns()
-                .widths_px()
-                .get("name"),
-            Some(999u64)
-        );
+        assert_eq!(settings.columns().widths_px().get("name"), Some(999u64));
     }
 }

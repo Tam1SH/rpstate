@@ -65,20 +65,20 @@ fn apply_pending(
     for (key, op) in changes {
         match op {
             utils::PendingOp::Set(b) => {
-                ins.execute(rusqlite::params![&**key, &b[..]])
+                ins.execute(rusqlite::params![key.as_str(), &b[..]])
                     .map_err(SqliteStoreError::from)
                     .doing(StorageError::Flush, path)
                     .attach_with(|| format!("writing key: {key}"))
                     .attach_with(|| format!("value bytes: {}", b.len()))?;
             }
             utils::PendingOp::Delete => {
-                del.execute([&**key])
+                del.execute([key.as_str()])
                     .map_err(SqliteStoreError::from)
                     .doing(StorageError::Flush, path)
                     .attach_with(|| format!("deleting key: {key}"))?;
             }
             utils::PendingOp::Init(seeded) => {
-                let init_key = utils::init_key(key);
+                let init_key = utils::init_key(key.as_str());
                 if *seeded {
                     mark.execute(rusqlite::params![init_key, [] as [u8; 0]])
                 } else {
@@ -123,7 +123,7 @@ impl SqliteStoreInner {
 
         let changes = {
             let lock = self.pending.lock();
-            utils::pending_prefix(&lock, prefix.as_str())
+            utils::pending_prefix(&lock, prefix)
         };
 
         {
@@ -272,11 +272,25 @@ impl SqliteStoreInner {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.check_debouncer()?;
-        self.budget.check(&path, value).attach_with(|| at(&self.path))?;
-        let vec = sonic_rs::to_vec(&value)
-            .map_err(CodecError::from)
-            .doing(StorageError::Codec, &self.path)
-            .attach_with(|| format!("encoding key: {path}"))?;
+        self.budget
+            .check_path(&path)
+            .attach_with(|| at(&self.path))?;
+
+        // Counted during the codec's own pass. sqlite's path is a `TEXT` key
+        // and costs nothing of the value's budget, so almost all of the 254 is
+        // the value's - until the store promises to stay readable somewhere
+        // stricter, and `for_value` is where that arrives.
+        let depth = self.budget.for_value(&path);
+        let vec = sonic_rs::to_vec(&depth.count(&value)).map_err(|e| {
+            if depth.overflowed() {
+                self.budget.too_deep(&path).attach(at(&self.path))
+            } else {
+                error_stack::Report::new(CodecError::from(e))
+                    .change_context(StorageError::Codec)
+                    .attach(at(&self.path))
+                    .attach(format!("encoding key: {path}"))
+            }
+        })?;
 
         let old_bytes = self
             .committed_or_buffered(&path)
@@ -285,13 +299,13 @@ impl SqliteStoreInner {
 
         {
             let mut lock = self.pending.lock();
-            lock.insert(Arc::from(path.as_str()), utils::PendingOp::Set(vec.clone()));
+            lock.insert(path.clone(), utils::PendingOp::Set(vec.clone()));
         }
 
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(path.as_str()),
+                path: path.joined_arc(),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(vec),
@@ -320,15 +334,16 @@ impl SqliteStoreInner {
             let conn = self.conn.lock();
             let mut stmt = conn
                 .prepare_cached(
-                    "SELECT key, value FROM data WHERE key >= ? AND key < ? ORDER BY key",
+                    "SELECT key, value FROM data \
+                     WHERE key >= ?1 AND (?2 IS NULL OR key < ?2) ORDER BY key",
                 )
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
             let (low, high) = utils::key_range(prefix);
-            let range = format!("range: [{low}, {high})");
+            let range = utils::range_label(&low, &high);
             let rows = stmt
-                .query_map([low, high], |row| {
+                .query_map(rusqlite::params![low, high], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
                 })
                 .map_err(SqliteStoreError::from)
@@ -362,9 +377,11 @@ impl SqliteStoreInner {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.pending.lock();
             lock.iter()
-                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix.as_str(), &bound))
-                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(Vec::from))))
-                .collect::<StorageResult<_>>()?
+                .filter(|(key, op)| {
+                    op.is_data() && utils::is_under(key.as_str(), prefix.as_str(), &bound)
+                })
+                .map(|(key, op)| (key.clone(), op.value().map(Vec::from)))
+                .collect()
         };
         buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -380,14 +397,17 @@ impl SqliteStoreInner {
         {
             let conn = self.conn.lock();
             let mut stmt = conn
-                .prepare_cached("SELECT key FROM data WHERE key >= ? AND key < ? ORDER BY key")
+                .prepare_cached(
+                    "SELECT key FROM data \
+                     WHERE key >= ?1 AND (?2 IS NULL OR key < ?2) ORDER BY key",
+                )
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
             let (low, high) = utils::key_range(prefix);
-            let range = format!("range: [{low}, {high})");
+            let range = utils::range_label(&low, &high);
             let rows = stmt
-                .query_map([low, high], |row| row.get::<_, String>(0))
+                .query_map(rusqlite::params![low, high], |row| row.get::<_, String>(0))
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))
@@ -413,9 +433,11 @@ impl SqliteStoreInner {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.pending.lock();
             lock.iter()
-                .filter(|(k, o)| o.is_data() && utils::is_under(k, prefix.as_str(), &bound))
-                .map(|(k, op)| Ok((utils::stored_path(k)?, op.value().map(|_| Vec::new()))))
-                .collect::<StorageResult<_>>()?
+                .filter(|(key, op)| {
+                    op.is_data() && utils::is_under(key.as_str(), prefix.as_str(), &bound)
+                })
+                .map(|(key, op)| (key.clone(), op.value().map(|_| Vec::new())))
+                .collect()
         };
         buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -427,7 +449,6 @@ impl SqliteStoreInner {
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
         self.check_debouncer()?;
-        let path_arc: Arc<str> = Arc::from(path.as_str());
 
         let old_bytes = self
             .committed_or_buffered(path)
@@ -440,13 +461,13 @@ impl SqliteStoreInner {
 
         {
             let mut lock = self.pending.lock();
-            lock.insert(path_arc.clone(), utils::PendingOp::Delete);
+            lock.insert(path.clone(), utils::PendingOp::Delete);
         }
 
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: path_arc,
+                path: path.joined_arc(),
                 op: StoreOp::Delete,
                 old: Some(old_bytes),
                 new: None,
@@ -469,7 +490,7 @@ impl SqliteStoreInner {
         {
             let mut lock = self.pending.lock();
             for (path, _) in keys {
-                lock.insert(Arc::from(path.as_str()), utils::PendingOp::Delete);
+                lock.insert(path, utils::PendingOp::Delete);
             }
         }
 
@@ -506,12 +527,12 @@ impl SqliteStoreInner {
         commit
     }
 
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
-        if self.initialized.lock().contains(namespace) {
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
+        if self.initialized.lock().contains(namespace.as_str()) {
             return Ok(true);
         }
 
-        let key = utils::init_key(namespace);
+        let key = utils::init_key(namespace.as_str());
         let found = {
             let conn = self.conn.lock();
             let mut stmt = conn
@@ -526,21 +547,21 @@ impl SqliteStoreInner {
         };
 
         if found {
-            self.initialized.lock().insert(Arc::from(namespace));
+            self.initialized.lock().insert(namespace.joined_arc());
         }
         Ok(found)
     }
 
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
-        if self.initialized.lock().contains(namespace) == state.is_seeded() {
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
+        if self.initialized.lock().contains(namespace.as_str()) == state.is_seeded() {
             return Ok(());
         }
 
         self.check_debouncer()?;
-        let key: Arc<str> = Arc::from(namespace);
+        let key = namespace.joined_arc();
         self.pending
             .lock()
-            .insert(Arc::clone(&key), utils::PendingOp::Init(state.is_seeded()));
+            .insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
 
         let mut initialized = self.initialized.lock();
         if state.is_seeded() {
@@ -782,11 +803,11 @@ impl StoreBackend for SqliteStore {
         self.inner.flush_async()
     }
 
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
         self.inner.is_initialized(namespace)
     }
 
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         self.inner.set_initialized(namespace, state)
     }
 }

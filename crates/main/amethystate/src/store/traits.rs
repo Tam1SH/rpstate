@@ -185,7 +185,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// of them cost one commit rather than one each.
     fn flush_async(&self) -> crate::store::durable::Commit;
 
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool>;
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool>;
 
     /// Records whether `namespace` has been seeded.
     ///
@@ -196,9 +196,9 @@ pub trait StoreBackend: Send + Sync + 'static {
     ///
     /// Setting a namespace [`Fresh`](InitState::Fresh) that was never seeded is
     /// not an error.
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()>;
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()>;
 
-    fn mark_initialized(&self, namespace: &str) -> StorageResult<()> {
+    fn mark_initialized(&self, namespace: &StorePath) -> StorageResult<()> {
         self.set_initialized(namespace, InitState::Seeded)
     }
 }

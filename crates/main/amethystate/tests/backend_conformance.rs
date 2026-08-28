@@ -105,6 +105,12 @@ use amethystate::store::{
 };
 use amethystate_core::test_utils::TempPath;
 use proptest::prelude::*;
+
+/// A namespace named the way a key on disk spells it.
+fn ns(joined: &str) -> StorePath {
+    StorePath::parse_joined(joined).expect("a namespace the test wrote itself")
+}
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -916,7 +922,10 @@ fn an_empty_store_lists_nothing(backend: Backend) {
             Vec::<StorePath>::new()
         );
         assert_eq!(store.scan_prefix(StorePath::root()).unwrap(), Vec::new());
-        assert_eq!(store.scan_keys(["nothing"]).unwrap(), Vec::<StorePath>::new());
+        assert_eq!(
+            store.scan_keys(["nothing"]).unwrap(),
+            Vec::<StorePath>::new()
+        );
         assert_eq!(store.get::<u32>(["nothing"]).unwrap(), None);
 
         store.delete_prefix(StorePath::root()).unwrap();
@@ -983,14 +992,14 @@ fn a_namespace_is_uninitialized_until_it_is_marked(backend: Backend) {
     let file = TempPath::new("conf_initialized");
     let store = open(backend, &file);
 
-    assert!(!store.is_initialized("settings").unwrap());
-    assert!(!store.is_initialized("ui").unwrap());
+    assert!(!store.is_initialized(&ns("settings")).unwrap());
+    assert!(!store.is_initialized(&ns("ui")).unwrap());
 
-    store.mark_initialized("settings").unwrap();
+    store.mark_initialized(&ns("settings")).unwrap();
 
-    assert!(store.is_initialized("settings").unwrap());
+    assert!(store.is_initialized(&ns("settings")).unwrap());
     assert!(
-        !store.is_initialized("ui").unwrap(),
+        !store.is_initialized(&ns("ui")).unwrap(),
         "marking one namespace marked another"
     );
 }
@@ -1157,7 +1166,7 @@ fn the_initialization_marker_is_not_listed_as_data(backend: Backend) {
     let file = TempPath::new("conf_init_marker");
     let store = open(backend, &file);
 
-    store.mark_initialized("settings").unwrap();
+    store.mark_initialized(&ns("settings")).unwrap();
     store
         .set(["settings", "host"], &"localhost".to_string())
         .unwrap();

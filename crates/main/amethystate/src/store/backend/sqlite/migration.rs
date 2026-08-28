@@ -142,12 +142,17 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
 
         let mut stmt = self
             .txn
-            .prepare_cached("SELECT key, value FROM data WHERE key >= ? AND key < ? ORDER BY key")
+            .prepare_cached(
+                "SELECT key, value FROM data \
+                 WHERE key >= ?1 AND (?2 IS NULL OR key < ?2) ORDER BY key",
+            )
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Scan)
             .attach_with(|| format!("prefix: {prefix}"))?;
         let rows = stmt
-            .query_map([&low, &high], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map(rusqlite::params![&low, &high], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Scan)
             .attach_with(|| format!("prefix: {prefix}"))?;

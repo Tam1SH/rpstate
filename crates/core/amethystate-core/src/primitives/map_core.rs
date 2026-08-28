@@ -8,7 +8,6 @@ use dashmap::DashMap;
 use error_stack::ResultExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 use std::panic::Location;
@@ -76,29 +75,23 @@ impl<K, V> Clone for ReactiveMapCore<K, V> {
     }
 }
 
-impl<K: Debug + Hash + Eq + Clone, V: Debug + Clone> Debug for ReactiveMapCore<K, V> {
+struct Counted<'a, T>(&'a Mutex<Vec<T>>);
+
+impl<T> Debug for Counted<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut d = f.debug_struct("ReactiveMapCore");
-        d.field(
-            "cache",
-            &self
-                .cache
-                .iter()
-                .map(|e| (e.key().clone(), e.value().clone()))
-                .collect::<HashMap<K, V>>(),
-        );
-        let interceptors_count = self
-            .interceptors_any
-            .try_lock()
-            .map(|l| l.len())
-            .unwrap_or(0);
-        let subscribers_count = self
-            .subscribers_any
-            .try_lock()
-            .map(|l| l.len())
-            .unwrap_or(0);
-        d.field("interceptors_any_count", &interceptors_count)
-            .field("subscribers_any_count", &subscribers_count)
+        match self.0.try_lock() {
+            Ok(list) => write!(f, "{}", list.len()),
+            Err(_) => f.write_str("<locked>"),
+        }
+    }
+}
+
+impl<K: Debug + Hash + Eq, V: Debug> Debug for ReactiveMapCore<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReactiveMapCore")
+            .field("cache", &self.cache)
+            .field("interceptors_any", &Counted(&self.interceptors_any))
+            .field("subscribers_any", &Counted(&self.subscribers_any))
             .finish()
     }
 }

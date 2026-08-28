@@ -6,6 +6,7 @@ use amethystate::store::IntoStorageReport;
 use amethystate::store::StorageError;
 use amethystate::store::SubscriptionKind;
 use amethystate::store::config::StoreConfig;
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -120,29 +121,34 @@ fn test_close_saves_pending_data() {
     assert_eq!(store.get::<bool>(["urgent", "data"]).unwrap(), Some(true));
 }
 
+/// A namespace named the way a key on disk spells it.
+fn ns(joined: &str) -> StorePath {
+    StorePath::parse_joined(joined).expect("a namespace the test wrote itself")
+}
+
 #[test]
 fn test_is_initialized_false_on_fresh_store() {
     let path = unique_path("init_fresh");
     let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
-    assert!(!store.is_initialized("settings").unwrap());
+    assert!(!store.is_initialized(&ns("settings")).unwrap());
 }
 
 #[test]
 fn test_mark_and_is_initialized() {
     let path = unique_path("init_mark");
     let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
-    assert!(!store.is_initialized("settings").unwrap());
-    store.mark_initialized("settings").unwrap();
-    assert!(store.is_initialized("settings").unwrap());
+    assert!(!store.is_initialized(&ns("settings")).unwrap());
+    store.mark_initialized(&ns("settings")).unwrap();
+    assert!(store.is_initialized(&ns("settings")).unwrap());
 }
 
 #[test]
 fn test_initialized_namespaces_are_independent() {
     let path = unique_path("init_namespaces");
     let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
-    store.mark_initialized("settings").unwrap();
-    assert!(store.is_initialized("settings").unwrap());
-    assert!(!store.is_initialized("other").unwrap());
+    store.mark_initialized(&ns("settings")).unwrap();
+    assert!(store.is_initialized(&ns("settings")).unwrap());
+    assert!(!store.is_initialized(&ns("other")).unwrap());
 }
 
 #[test]

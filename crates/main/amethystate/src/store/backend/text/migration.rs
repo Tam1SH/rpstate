@@ -1,14 +1,15 @@
 use crate::migration::AppliedStep;
-use std::borrow::Cow;
 use crate::store::CodecFormat;
 use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::backend::text::document::TextDocument;
 use crate::store::backend::text::store;
+use crate::store::depth::Depth;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
+use std::borrow::Cow;
 
 fn migration_path(key: &str) -> StorageResult<StorePath> {
     StorePath::parse_joined(key)
@@ -93,7 +94,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
         let key = store::meta_key("meta", prefix);
         let parts = [key.as_str()];
-        let node = D::serialize_node(meta)
+        let node = D::serialize_node(meta, &Depth::unlimited())
             .change_context(StorageError::Meta)
             .attach_with(|| format!("meta node: meta.{prefix}"))?;
         self.meta_doc
@@ -123,7 +124,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     ) -> StorageResult<()> {
         let key = store::meta_key("schema", prefix);
         let parts = [key.as_str()];
-        let node = D::serialize_node(snapshot)
+        let node = D::serialize_node(snapshot, &Depth::unlimited())
             .change_context(StorageError::Meta)
             .attach_with(|| format!("meta node: schema.{prefix}"))?;
         self.meta_doc
@@ -149,7 +150,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
         let key = store::meta_key("log", prefix);
         let parts = [key.as_str()];
-        let node = D::serialize_node(&log)
+        let node = D::serialize_node(&log, &Depth::unlimited())
             .change_context(StorageError::Meta)
             .attach_with(|| format!("meta node: log.{prefix}"))?;
         self.meta_doc

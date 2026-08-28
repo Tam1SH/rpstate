@@ -31,7 +31,9 @@ use amethystate_core::test_utils::TempPath;
 /// `"ui." + U+10FFFF`, so a name whose third character sorts below `.` (U+002E)
 /// falls inside that range while belonging to nobody. The whole class is
 /// U+0000 through U+002D; these are the printable ones a person might type.
-const SIBLINGS: &[&str] = &["ui x", "ui!x", "ui\"x", "ui#x", "ui%x", "ui'x", "ui-x", "ui,x"];
+const SIBLINGS: &[&str] = &[
+    "ui x", "ui!x", "ui\"x", "ui#x", "ui%x", "ui'x", "ui-x", "ui,x",
+];
 
 /// A name above the range's upper bound, which is the same defect from the
 /// other end: a scan of `ui` cannot reach it, so it survives a delete of its

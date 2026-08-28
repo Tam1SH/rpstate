@@ -45,8 +45,7 @@ pub(super) type OpenDatabase = Arc<arc_swap::ArcSwapOption<Database>>;
 /// the flag lives in its `CachedFile` and only its own I/O sets it - so the
 /// hook belongs here rather than in the test.
 #[cfg(test)]
-static FAILING_DISK: parking_lot::Mutex<Option<std::path::PathBuf>> =
-    parking_lot::Mutex::new(None);
+static FAILING_DISK: parking_lot::Mutex<Option<std::path::PathBuf>> = parking_lot::Mutex::new(None);
 
 /// How many more writes that disk accepts, read live on every one - so a test
 /// can take the disk away and give it back while the store is running, which
@@ -176,9 +175,9 @@ pub(super) fn is_previous_io(report: &error_stack::Report<StorageError>) -> bool
                     matches!(
                         e,
                         error::RedbStoreError::Storage(PreviousIo)
-                            | error::RedbStoreError::Transaction(
-                                redb::TransactionError::Storage(PreviousIo)
-                            )
+                            | error::RedbStoreError::Transaction(redb::TransactionError::Storage(
+                                PreviousIo
+                            ))
                             | error::RedbStoreError::Commit(redb::CommitError::Storage(PreviousIo))
                             | error::RedbStoreError::Table(redb::TableError::Storage(PreviousIo))
                     )
@@ -216,10 +215,10 @@ pub(super) fn reopen(db: &OpenDatabase, path: &Path) -> StorageResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StoreBackend;
     use crate::migration::set::MigrationSet;
     use crate::store::StoreExt;
     use crate::store::config::StoreConfig;
-    use crate::StoreBackend;
     use crate::stores::RedbStore;
     use amethystate_core::path::StorePath;
     use amethystate_core::test_utils::unique_path;

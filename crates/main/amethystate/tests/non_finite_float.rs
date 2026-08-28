@@ -12,8 +12,8 @@
 //! So it is a property of the format rather than of the file, and the tests
 //! below say which engines have it.
 
-use amethystate::store::builder::StoreBuilder;
 use amethystate::amethystate;
+use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 

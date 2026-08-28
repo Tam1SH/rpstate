@@ -3,9 +3,9 @@ use super::tables::{
 };
 use crate::migration::AppliedStep;
 use crate::store::CodecFormat;
+use crate::store::backend::utils;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
-use crate::store::backend::utils;
 use crate::store::traits::MigrationBackendAdapter;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;

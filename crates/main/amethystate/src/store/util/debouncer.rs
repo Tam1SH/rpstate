@@ -36,9 +36,17 @@ pub struct FlushPolicy {
 }
 
 impl Debouncer {
-    pub fn new<F>(interval: Duration, mut op: F) -> Self
+    /// The thread both constructors run: wait out the quiet period, then hand
+    /// the receiver to `run`, which is the only thing that differs between
+    /// them.
+    ///
+    /// The thread holds `guard` for its whole life, so a panic inside the work
+    /// poisons the mutex on the way out and [`Debouncer::is_poisoned`] can see
+    /// it. `run` is given the receiver because a retrying flush keeps reading
+    /// it while it retries.
+    fn spawn<F>(interval: Duration, mut run: F) -> Self
     where
-        F: FnMut() + Send + 'static,
+        F: FnMut(&mpsc::Receiver<Trigger>) + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<Trigger>();
         let guard = Arc::new(Mutex::new(()));
@@ -47,30 +55,25 @@ impl Debouncer {
         let dead_inner = dead.clone();
 
         let handle = thread::spawn(move || {
-            // Hold the lock for the entire lifetime of the thread.
-            // If op() panics, the guard is dropped and the mutex becomes
-            // poisoned, which is detected in schedule() via is_poisoned().
             let _notify = DeadNotifier(dead_inner);
             let _hold = guard_inner.lock().unwrap();
 
             while let Ok(first) = rx.recv() {
                 if first == Trigger::Now {
                     debug!("debouncer trigger: asked for immediately");
-                    op();
-                    continue;
-                }
-
-                loop {
-                    match rx.recv_timeout(interval) {
-                        Ok(Trigger::Schedule) => continue,
-                        Ok(Trigger::Now) => break,
-                        Err(RecvTimeoutError::Timeout) => break,
-                        Err(RecvTimeoutError::Disconnected) => break,
+                } else {
+                    loop {
+                        match rx.recv_timeout(interval) {
+                            Ok(Trigger::Schedule) => continue,
+                            Ok(Trigger::Now)
+                            | Err(RecvTimeoutError::Timeout)
+                            | Err(RecvTimeoutError::Disconnected) => break,
+                        }
                     }
+                    debug!("debouncer trigger: interval elapsed");
                 }
 
-                debug!("debouncer trigger: interval elapsed");
-                op();
+                run(&rx);
             }
 
             debug!("debouncer thread exiting (channel closed)");
@@ -83,6 +86,13 @@ impl Debouncer {
             #[cfg(test)]
             dead,
         }
+    }
+
+    pub fn new<F>(interval: Duration, mut op: F) -> Self
+    where
+        F: FnMut() + Send + 'static,
+    {
+        Self::spawn(interval, move |_| op())
     }
 
     /// Like [`Debouncer::new`], for a flush that has to report whether it
@@ -100,42 +110,7 @@ impl Debouncer {
     where
         F: FnMut() -> StorageResult<()> + Send + 'static,
     {
-        let (tx, rx) = mpsc::channel::<Trigger>();
-        let guard = Arc::new(Mutex::new(()));
-        let dead = Arc::new((Mutex::new(false), Condvar::new()));
-        let guard_inner = guard.clone();
-        let dead_inner = dead.clone();
-
-        let handle = thread::spawn(move || {
-            let _notify = DeadNotifier(dead_inner);
-            let _hold = guard_inner.lock().unwrap();
-
-            while let Ok(first) = rx.recv() {
-                if first != Trigger::Now {
-                    loop {
-                        match rx.recv_timeout(interval) {
-                            Ok(Trigger::Schedule) => continue,
-                            Ok(Trigger::Now)
-                            | Err(RecvTimeoutError::Timeout)
-                            | Err(RecvTimeoutError::Disconnected) => break,
-                        }
-                    }
-                }
-
-                debug!("debouncer trigger: running the flush");
-                run_with_retry(&mut op, &policy, &rx);
-            }
-
-            debug!("debouncer thread exiting (channel closed)");
-        });
-
-        Self {
-            tx: Some(tx),
-            handle: Some(handle),
-            guard,
-            #[cfg(test)]
-            dead,
-        }
+        Self::spawn(interval, move |rx| run_with_retry(&mut op, &policy, rx))
     }
 
     pub fn schedule(&self) {
@@ -162,12 +137,6 @@ impl Debouncer {
         self.guard.is_poisoned()
     }
 
-    #[cfg(test)]
-    pub fn wait_dead(&self) {
-        let (lock, cvar) = &*self.dead;
-        let _unused = cvar.wait_while(lock.lock().unwrap(), |dead| !*dead);
-    }
-
     fn shutdown(&mut self) {
         self.tx.take();
         if let Some(handle) = self.handle.take() {
@@ -176,9 +145,69 @@ impl Debouncer {
     }
 }
 
+#[cfg(test)]
+impl Debouncer {
+    /// Blocks until the thread is gone, however it went.
+    pub fn wait_dead(&self) {
+        let (lock, cvar) = &*self.dead;
+        let _unused = cvar.wait_while(lock.lock().unwrap(), |dead| !*dead);
+    }
+}
+
 impl Drop for Debouncer {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// How the current run of failures is doing - the only thing an attempt
+/// carries into the next one.
+///
+/// The pair it replaces was an `Option<Instant>` and a `bool`, which spelled
+/// four combinations for three states: "escalated, but no streak to have
+/// escalated from" was reachable in the types and not in the code, and the
+/// difference lived in the order of two conditions.
+enum Streak {
+    /// Nothing has failed yet, so the next failure starts the clock.
+    Fresh,
+    /// Failing since, and still inside the budget: each attempt warns.
+    Failing { since: Instant },
+    /// Past the budget and escalated once. It keeps retrying and stays quiet;
+    /// only landing ends it.
+    GaveUp,
+}
+
+/// Escalates a streak that outlived its budget: wakes whoever awaited this
+/// flush with a failure, then asks the policy what writers should be told.
+fn give_up(
+    reason: &Arc<error_stack::Report<crate::store::StorageError>>,
+    elapsed: Duration,
+    policy: &FlushPolicy,
+) {
+    policy.commits.finished(false);
+
+    let decision = policy
+        .on_giveup
+        .as_ref()
+        .map_or(AfterGivingUp::Fail, |callback| callback(reason));
+
+    error!(
+        target: "amethystate",
+        reason = %format!("{reason:#}"),
+        kind = ?reason.current_context(),
+        elapsed_ms = elapsed.as_millis() as u64,
+        budget_ms = policy.retry.budget.as_millis() as u64,
+        decision = ?decision,
+        "background flush has been failing longer than its retry budget",
+    );
+
+    match decision {
+        AfterGivingUp::Fail => policy.health.give_up(reason.clone()),
+        AfterGivingUp::Ignore => {}
+        AfterGivingUp::Poison => panic!(
+            "background flush failed for {elapsed:?} (budget {:?}): {reason:#}",
+            policy.retry.budget
+        ),
     }
 }
 
@@ -196,14 +225,18 @@ impl Drop for Debouncer {
 /// Only [`AfterGivingUp::Poison`] ends the thread, by panicking: `Drop`'s own
 /// guard poisons on the way down, which is the same mechanism a panic inside
 /// `op` itself already relies on.
+///
+/// A trigger arriving mid-streak just retries sooner, and its identity is
+/// discarded. A disconnect is the store being dropped, and is the one way out
+/// of a streak that never lands - without it, `shutdown` would join a thread
+/// still politely waiting for a disk that is never coming back.
 fn run_with_retry(
     op: &mut dyn FnMut() -> StorageResult<()>,
     policy: &FlushPolicy,
     rx: &mpsc::Receiver<Trigger>,
 ) {
     let retry = &policy.retry;
-    let mut streak_start: Option<Instant> = None;
-    let mut escalated = false;
+    let mut streak = Streak::Fresh;
 
     loop {
         let reason = match op() {
@@ -215,50 +248,30 @@ fn run_with_retry(
             Err(why) => Arc::new(why),
         };
 
-        let since = *streak_start.get_or_insert_with(Instant::now);
-        let elapsed = since.elapsed();
+        streak = match streak {
+            Streak::Fresh => Streak::Failing {
+                since: Instant::now(),
+            },
+            carried => carried,
+        };
 
-        if elapsed >= retry.budget && !escalated {
-            escalated = true;
-            policy.commits.finished(false);
+        if let Streak::Failing { since } = streak {
+            let elapsed = since.elapsed();
 
-            let decision = policy
-                .on_giveup
-                .as_ref()
-                .map_or(AfterGivingUp::Fail, |callback| callback(&reason));
-
-            error!(
-                target: "amethystate",
-                reason = %format!("{reason:#}"),
-                kind = ?reason.current_context(),
-                elapsed_ms = elapsed.as_millis() as u64,
-                budget_ms = retry.budget.as_millis() as u64,
-                decision = ?decision,
-                "background flush has been failing longer than its retry budget",
-            );
-
-            match decision {
-                AfterGivingUp::Fail => policy.health.give_up(reason),
-                AfterGivingUp::Ignore => {}
-                AfterGivingUp::Poison => panic!(
-                    "background flush failed for {elapsed:?} (budget {:?}): {reason:#}",
-                    retry.budget
-                ),
+            if elapsed >= retry.budget {
+                give_up(&reason, elapsed, policy);
+                streak = Streak::GaveUp;
+            } else {
+                warn!(
+                    target: "amethystate",
+                    kind = ?reason.current_context(),
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    budget_ms = retry.budget.as_millis() as u64,
+                    "background flush failed, retrying",
+                );
             }
-        } else if !escalated {
-            warn!(
-                target: "amethystate",
-                kind = ?reason.current_context(),
-                elapsed_ms = elapsed.as_millis() as u64,
-                budget_ms = retry.budget.as_millis() as u64,
-                "background flush failed, retrying",
-            );
         }
 
-        // A trigger arriving mid-streak just retries sooner. A disconnect is
-        // the store being dropped, and is the one way out of a streak that
-        // never lands - without it, `shutdown` would join a thread that is
-        // still politely waiting for a disk that is never coming back.
         if let Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(retry.interval) {
             debug!("debouncer thread leaving a failing flush: the store is gone");
             return;

@@ -59,11 +59,12 @@ impl InspectorBackend for RedbStore {
 
     fn set_raw(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
         self.inner.check_debouncer()?;
+        let path = utils::stored_path(key)?;
         utils::set_raw_pending(
             &self.inner.pending,
             &self.inner.subscriptions,
             &self.inner.debouncer,
-            key,
+            &path,
             value,
         )
         .attach_with(|| format!("store: {}", self.inner.path.display()))

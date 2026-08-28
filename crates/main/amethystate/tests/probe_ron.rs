@@ -136,7 +136,13 @@ where
     let path = match StorePath::try_from_segments(segments) {
         Ok(path) => path,
         Err(e) => {
-            return Row::new(label, wrote, &format!("n/a: {e}"), "n/a".into(), Class::NoPath);
+            return Row::new(
+                label,
+                wrote,
+                &format!("n/a: {e}"),
+                "n/a".into(),
+                Class::NoPath,
+            );
         }
     };
 
@@ -146,24 +152,49 @@ where
         let store = match open(file.path()) {
             Ok(store) => store,
             Err(e) => {
-                return Row::new(label, wrote, "n/a", format!("fresh store: {e}"), Class::Opaque);
+                return Row::new(
+                    label,
+                    wrote,
+                    "n/a",
+                    format!("fresh store: {e}"),
+                    Class::Opaque,
+                );
             }
         };
         if let Err(e) = store.set(&path, value) {
-            return Row::new(label, wrote, &format!("Err: {}", why(&e)), "n/a".into(), Class::Refused);
+            return Row::new(
+                label,
+                wrote,
+                &format!("Err: {}", why(&e)),
+                "n/a".into(),
+                Class::Refused,
+            );
         }
         if let Err(e) = store.save_now() {
-            return Row::new(label, wrote, &format!("Ok, flush Err: {}", why(&e)), "n/a".into(), Class::Refused);
+            return Row::new(
+                label,
+                wrote,
+                &format!("Ok, flush Err: {}", why(&e)),
+                "n/a".into(),
+                Class::Refused,
+            );
         }
     }
 
-    let on_disk = std::fs::read_to_string(file.path()).unwrap_or_else(|e| format!("<unreadable: {e}>"));
+    let on_disk =
+        std::fs::read_to_string(file.path()).unwrap_or_else(|e| format!("<unreadable: {e}>"));
 
     let store = match open(file.path()) {
         Ok(store) => store,
         Err(e) => {
-            return Row::new(label, wrote, "Ok", format!("reopen failed: {e}"), Class::Opaque)
-                .noting(format!("file: {}", cut(&on_disk, 200)));
+            return Row::new(
+                label,
+                wrote,
+                "Ok",
+                format!("reopen failed: {e}"),
+                Class::Opaque,
+            )
+            .noting(format!("file: {}", cut(&on_disk, 200)));
         }
     };
 
@@ -178,7 +209,10 @@ where
 
     let siblings = match path.parent() {
         Some(parent) => match store.scan_keys(&parent) {
-            Ok(keys) => keys.iter().map(|k| k.as_str().to_string()).collect::<Vec<_>>(),
+            Ok(keys) => keys
+                .iter()
+                .map(|k| k.as_str().to_string())
+                .collect::<Vec<_>>(),
             Err(e) => vec![format!("<scan failed: {}>", why(&e))],
         },
         None => Vec::new(),
@@ -187,17 +221,33 @@ where
     let stray = !siblings.is_empty() && !siblings.iter().any(|k| k == path.as_str());
 
     match store.get::<T>(&path) {
-        Err(e) => Row::new(label, wrote, "Ok", format!("read Err: {}", why(&e)), Class::Altered)
-            .noting(format!("file: {}", cut(&on_disk, 200))),
-        Ok(None) => Row::new(label, wrote, "Ok", "nothing at the path".into(), Class::Altered)
-            .noting(format!("file: {}, level holds: {siblings:?}", cut(&on_disk, 200))),
+        Err(e) => Row::new(
+            label,
+            wrote,
+            "Ok",
+            format!("read Err: {}", why(&e)),
+            Class::Altered,
+        )
+        .noting(format!("file: {}", cut(&on_disk, 200))),
+        Ok(None) => Row::new(
+            label,
+            wrote,
+            "Ok",
+            "nothing at the path".into(),
+            Class::Altered,
+        )
+        .noting(format!(
+            "file: {}, level holds: {siblings:?}",
+            cut(&on_disk, 200)
+        )),
         Ok(Some(back)) if back == *value => {
             if !children.is_empty() {
                 Row::new(label, wrote, "Ok", "equal".into(), Class::Residue)
                     .noting(format!("readable under it: {children:?}"))
             } else if stray {
-                Row::new(label, wrote, "Ok", "equal".into(), Class::Residue)
-                    .noting(format!("the level holds {siblings:?}, not the path written"))
+                Row::new(label, wrote, "Ok", "equal".into(), Class::Residue).noting(format!(
+                    "the level holds {siblings:?}, not the path written"
+                ))
             } else {
                 Row::new(label, wrote, "Ok", "equal".into(), Class::Kept)
             }
@@ -373,20 +423,34 @@ impl<'de> Deserialize<'de> for Deep {
 fn enums() {
     let rows = vec![
         probe("unit variant", &at("unit_variant"), &Mode::On),
-        probe("unit variant (the default one)", &at("unit_default"), &Mode::Off),
+        probe(
+            "unit variant (the default one)",
+            &at("unit_default"),
+            &Mode::Off,
+        ),
         probe("newtype variant", &at("newtype_variant"), &Mode::Level(3)),
         probe("tuple variant", &at("tuple_variant"), &Mode::Pair(1, 2)),
         probe(
             "struct variant",
             &at("struct_variant"),
-            &Mode::Named { a: 1, b: "x".into() },
+            &Mode::Named {
+                a: 1,
+                b: "x".into(),
+            },
         ),
         probe(
             "enum in a struct field",
             &at("enum_in_struct"),
-            &Holder { mode: Mode::On, n: 4 },
+            &Holder {
+                mode: Mode::On,
+                n: 4,
+            },
         ),
-        probe("enum in a Vec", &at("enum_in_vec"), &vec![Mode::On, Mode::Level(2)]),
+        probe(
+            "enum in a Vec",
+            &at("enum_in_vec"),
+            &vec![Mode::On, Mode::Level(2)],
+        ),
         probe(
             "enum as a map value",
             &at("enum_in_map"),
@@ -396,12 +460,32 @@ fn enums() {
         probe("enum in a tuple", &at("enum_in_tuple"), &(1u8, Mode::On)),
         probe("Option<Mode>::None", &at("enum_none"), &None::<Mode>),
         probe("std Result::Ok", &at("result_ok"), &Ok::<u8, String>(1)),
-        probe("std Result::Err", &at("result_err"), &Err::<u8, String>("no".into())),
+        probe(
+            "std Result::Err",
+            &at("result_err"),
+            &Err::<u8, String>("no".into()),
+        ),
         probe("untagged enum", &at("untagged"), &Untagged::Number(5)),
-        probe("untagged enum, string arm", &at("untagged_s"), &Untagged::Text("hi".into())),
-        probe("internally tagged enum", &at("tagged"), &Tagged::First { a: 9 }),
-        probe("adjacently tagged, unit arm", &at("adjacent_unit"), &Adjacent::Unit),
-        probe("adjacently tagged, tuple arm", &at("adjacent_pair"), &Adjacent::Pair(1, 2)),
+        probe(
+            "untagged enum, string arm",
+            &at("untagged_s"),
+            &Untagged::Text("hi".into()),
+        ),
+        probe(
+            "internally tagged enum",
+            &at("tagged"),
+            &Tagged::First { a: 9 },
+        ),
+        probe(
+            "adjacently tagged, unit arm",
+            &at("adjacent_unit"),
+            &Adjacent::Unit,
+        ),
+        probe(
+            "adjacently tagged, tuple arm",
+            &at("adjacent_pair"),
+            &Adjacent::Pair(1, 2),
+        ),
     ];
     table("enums", &rows);
 }
@@ -411,18 +495,31 @@ fn structs_and_tuples() {
     let rows = vec![
         probe("unit struct", &at("unit_struct"), &UnitStruct),
         probe("newtype struct", &at("newtype_struct"), &Newtype(7)),
-        probe("tuple struct", &at("tuple_struct"), &TupleStruct(7, "x".into())),
+        probe(
+            "tuple struct",
+            &at("tuple_struct"),
+            &TupleStruct(7, "x".into()),
+        ),
         probe("empty struct", &at("empty_struct"), &EmptyStruct {}),
         probe(
             "five structs deep",
             &at("nested_struct"),
-            &Level5 { a: Level4 { b: Level3 { c: Level2 { d: Level1 { e: 1 } } } } },
+            &Level5 {
+                a: Level4 {
+                    b: Level3 {
+                        c: Level2 { d: Level1 { e: 1 } },
+                    },
+                },
+            },
         ),
         probe("plain struct", &at("plain_struct"), &Inner { x: 1, y: 2 }),
         probe(
             "flattened map in a struct",
             &at("flatten"),
-            &Flat { top: 1, rest: BTreeMap::from([("a".to_string(), 2u8)]) },
+            &Flat {
+                top: 1,
+                rest: BTreeMap::from([("a".to_string(), 2u8)]),
+            },
         ),
         probe("unit ()", &at("unit"), &()),
         probe("one-element tuple", &at("tuple1"), &(7u8,)),
@@ -430,11 +527,21 @@ fn structs_and_tuples() {
         probe(
             "twelve-element tuple",
             &at("tuple12"),
-            &(1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8),
+            &(
+                1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8,
+            ),
         ),
-        probe("tuples in a Vec", &at("tuple_vec"), &vec![(1u8, 2u8), (3, 4)]),
+        probe(
+            "tuples in a Vec",
+            &at("tuple_vec"),
+            &vec![(1u8, 2u8), (3, 4)],
+        ),
         probe("empty Vec", &at("empty_vec"), &Vec::<u8>::new()),
-        probe("empty map", &at("empty_map"), &BTreeMap::<String, u8>::new()),
+        probe(
+            "empty map",
+            &at("empty_map"),
+            &BTreeMap::<String, u8>::new(),
+        ),
         probe(
             "map with numeric keys",
             &at("numeric_keys"),
@@ -450,7 +557,11 @@ fn structs_and_tuples() {
             &at("empty_map_key"),
             &BTreeMap::from([(String::new(), 1u8)]),
         ),
-        probe("struct in a Vec", &at("struct_vec"), &vec![Inner { x: 1, y: 2 }]),
+        probe(
+            "struct in a Vec",
+            &at("struct_vec"),
+            &vec![Inner { x: 1, y: 2 }],
+        ),
     ];
     table("structs, tuples, collections", &rows);
 }
@@ -461,12 +572,20 @@ fn numbers() {
         probe("f64::NAN", &at("nan"), &Bits(f64::NAN)),
         probe("-f64::NAN", &at("neg_nan"), &Bits(-f64::NAN)),
         probe("f64::INFINITY", &at("inf"), &Bits(f64::INFINITY)),
-        probe("f64::NEG_INFINITY", &at("neg_inf"), &Bits(f64::NEG_INFINITY)),
+        probe(
+            "f64::NEG_INFINITY",
+            &at("neg_inf"),
+            &Bits(f64::NEG_INFINITY),
+        ),
         probe("-0.0", &at("neg_zero"), &Bits(-0.0)),
         probe("0.0", &at("zero"), &Bits(0.0)),
         probe("1.0", &at("one_point_zero"), &Bits(1.0)),
         probe("0.1 + 0.2", &at("precision"), &Bits(0.1 + 0.2)),
-        probe("f64::MIN_POSITIVE", &at("min_positive"), &Bits(f64::MIN_POSITIVE)),
+        probe(
+            "f64::MIN_POSITIVE",
+            &at("min_positive"),
+            &Bits(f64::MIN_POSITIVE),
+        ),
         probe("f64::MAX", &at("f64_max"), &Bits(f64::MAX)),
         probe("5e-324 (subnormal)", &at("subnormal"), &Bits(5e-324)),
         probe("f32::NAN", &at("f32_nan"), &f32::NAN.to_bits()),
@@ -495,15 +614,47 @@ fn strings() {
         probe("CRLF", &at("crlf"), &"a\r\nb".to_string()),
         probe("lone CR", &at("cr"), &"a\rb".to_string()),
         probe("200k characters", &at("long_string"), &long),
-        probe("unicode", &at("unicode"), &"日本語 🎉 \u{202e}rtl".to_string()),
+        probe(
+            "unicode",
+            &at("unicode"),
+            &"日本語 🎉 \u{202e}rtl".to_string(),
+        ),
         probe("ron enum syntax", &at("ron_enum"), &"Some(1)".to_string()),
-        probe("ron struct syntax", &at("ron_struct"), &"(a: 1)".to_string()),
-        probe("ron line comment", &at("ron_line_comment"), &"// nope".to_string()),
-        probe("ron block comment", &at("ron_block_comment"), &"/* nope */".to_string()),
-        probe("quotes and backslashes", &at("quotes"), &"he said \"hi\" \\ end".to_string()),
-        probe("raw string terminator", &at("raw_terminator"), &"\"#".to_string()),
-        probe("a string that reads as a number", &at("numeric_string"), &"1".to_string()),
-        probe("a string that reads as a keyword", &at("keyword_string"), &"true".to_string()),
+        probe(
+            "ron struct syntax",
+            &at("ron_struct"),
+            &"(a: 1)".to_string(),
+        ),
+        probe(
+            "ron line comment",
+            &at("ron_line_comment"),
+            &"// nope".to_string(),
+        ),
+        probe(
+            "ron block comment",
+            &at("ron_block_comment"),
+            &"/* nope */".to_string(),
+        ),
+        probe(
+            "quotes and backslashes",
+            &at("quotes"),
+            &"he said \"hi\" \\ end".to_string(),
+        ),
+        probe(
+            "raw string terminator",
+            &at("raw_terminator"),
+            &"\"#".to_string(),
+        ),
+        probe(
+            "a string that reads as a number",
+            &at("numeric_string"),
+            &"1".to_string(),
+        ),
+        probe(
+            "a string that reads as a keyword",
+            &at("keyword_string"),
+            &"true".to_string(),
+        ),
         probe("a lone quote", &at("lone_quote"), &"\"".to_string()),
     ];
     table("strings", &rows);
@@ -541,7 +692,11 @@ fn options() {
         probe("Some(5u8)", &at("some_u8"), &Some(5u8)),
         probe("Some(None::<u8>)", &at("some_none"), &Some(None::<u8>)),
         probe("Some(Some(5u8))", &at("some_some"), &Some(Some(5u8))),
-        probe("None::<Option<u8>>", &at("none_option"), &None::<Option<u8>>),
+        probe(
+            "None::<Option<u8>>",
+            &at("none_option"),
+            &None::<Option<u8>>,
+        ),
         probe("None::<String>", &at("none_string"), &None::<String>),
         probe("Vec of Options", &at("vec_option"), &vec![Some(1u8), None]),
         probe(
@@ -596,7 +751,10 @@ fn handles() {
             println!(
                 "declaring a Mode field: Err: {}, and the file holds {}",
                 why(&e),
-                cut(&std::fs::read_to_string(file.path()).unwrap_or_default(), 200)
+                cut(
+                    &std::fs::read_to_string(file.path()).unwrap_or_default(),
+                    200
+                )
             );
         }
         Ok(field) => {
@@ -609,7 +767,10 @@ fn handles() {
                 set.map_err(|e| why(&e)),
                 field.get(),
                 store.get::<Mode>(["probe", "mode"]).map_err(|e| why(&e)),
-                cut(&std::fs::read_to_string(file.path()).unwrap_or_default(), 200)
+                cut(
+                    &std::fs::read_to_string(file.path()).unwrap_or_default(),
+                    200
+                )
             );
         }
     }
@@ -638,7 +799,10 @@ fn contrast_with_json() {
             }
             store.save_now().unwrap();
         }
-        let store = match StoreBuilder::new(file.path()).backend(Backend::Json).build() {
+        let store = match StoreBuilder::new(file.path())
+            .backend(Backend::Json)
+            .build()
+        {
             Ok(store) => store,
             Err(e) => return format!("{label}: reopen Err: {}", why(&e)),
         };
@@ -652,15 +816,31 @@ fn contrast_with_json() {
 
     println!("\n=== the same values on json ===");
     println!("{}", json_probe("unit variant", "unit", &Mode::On));
-    println!("{}", json_probe("newtype variant", "newtype", &Mode::Level(3)));
-    println!("{}", json_probe("tuple variant", "tuple", &Mode::Pair(1, 2)));
     println!(
         "{}",
-        json_probe("struct variant", "structv", &Mode::Named { a: 1, b: "x".into() })
+        json_probe("newtype variant", "newtype", &Mode::Level(3))
+    );
+    println!(
+        "{}",
+        json_probe("tuple variant", "tuple", &Mode::Pair(1, 2))
+    );
+    println!(
+        "{}",
+        json_probe(
+            "struct variant",
+            "structv",
+            &Mode::Named {
+                a: 1,
+                b: "x".into()
+            }
+        )
     );
     println!("{}", json_probe("empty struct", "empty", &EmptyStruct {}));
     println!("{}", json_probe("unit struct", "unitstruct", &UnitStruct));
-    println!("{}", json_probe("std Result", "result", &Ok::<u8, String>(1)));
+    println!(
+        "{}",
+        json_probe("std Result", "result", &Ok::<u8, String>(1))
+    );
 }
 
 /// Where the round trip stops working as the value or the path gets deeper.

@@ -1,0 +1,133 @@
+//! How deep a value is, learned while the codec writes it.
+//!
+//! Every codec here reads less deeply than it writes. `serde_json` stops at
+//! 128 on the way in and has no limit on the way out; `ron` stops at 64;
+//! `rmp_serde` has no limit at all and the stack runs out around three
+//! thousand instead, which kills the process rather than returning an error -
+//! and does so on every later start, because the value is already committed.
+//!
+//! So a write past the reader's ceiling is accepted and cannot be read back,
+//! which is the worst shape a defect can have: no error anywhere, and the file
+//! is gone.
+//!
+//! The value cannot be inspected to find out - by the time it reaches a store
+//! it is a `&dyn erased_serde::Serialize`, and a five-level struct is
+//! indistinguishable from a five-level tree. Nor can it be built and walked:
+//! building is the dangerous act, and on redb it is what overflows the stack.
+//!
+//! Serde is a push protocol and the store is on the receiving end, so it counts
+//! what goes past - during the codec's own pass, by [`counting`], rather than
+//! in a pass of its own. `serde_json` does exactly this on the read side; this
+//! is the same thing on the write side, where nobody had put it.
+
+mod counting;
+
+pub use counting::{Counted, Counting, Depth};
+
+use crate::store::builder::Backend;
+use crate::store::config::WriteLimits;
+use crate::store::{CodecFormat, StorageError, StorageResult};
+use amethystate_core::path::StorePath;
+use error_stack::Report;
+
+/// What one store may spend, worked out once when it opens.
+///
+/// The ceiling is the running codec's, lowered by anything the store promised
+/// to stay readable on. `key_depth` is the store's own cap on paths, which is a
+/// setting rather than a fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DepthBudget {
+    pub ceiling: usize,
+    pub key_depth: Option<usize>,
+}
+
+impl DepthBudget {
+    /// The budget for a store running on `engine` under `limits`.
+    pub fn resolve(limits: &WriteLimits, engine: Backend) -> Self {
+        Self {
+            ceiling: limits.ceiling(engine),
+            key_depth: limits.key_depth,
+        }
+    }
+
+    /// The same for an engine known only by the codec it runs, which is how a
+    /// text store knows itself - it is generic over the document, not over the
+    /// backend that chose it.
+    pub fn for_codec(limits: &WriteLimits, codec: CodecFormat) -> Self {
+        let engine = match codec {
+            #[cfg(feature = "redb")]
+            CodecFormat::MessagePack => Backend::Redb,
+            #[cfg(feature = "json")]
+            CodecFormat::Json => Backend::Json,
+            #[cfg(feature = "sqlite")]
+            CodecFormat::SonicJson => Backend::Sqlite,
+            #[cfg(feature = "toml")]
+            CodecFormat::Toml => Backend::Toml,
+            #[cfg(feature = "ron")]
+            CodecFormat::Ron => Backend::Ron,
+            #[cfg(test)]
+            CodecFormat::Default => {
+                return Self {
+                    ceiling: usize::MAX,
+                    key_depth: limits.key_depth,
+                };
+            }
+        };
+        Self::resolve(limits, engine)
+    }
+
+    /// Whether a path is within the store's own cap on how deep a key may go.
+    pub fn check_path(&self, path: &StorePath) -> StorageResult<()> {
+        let levels = path.segments().count();
+
+        if let Some(cap) = self.key_depth
+            && levels > cap
+        {
+            return Err(Report::new(StorageError::Path)
+                .attach(format!("path: {path}"))
+                .attach(format!("levels: {levels}, and the limit is {cap}"))
+                .attach("set by: limits(|l| l.key_depth(..))")
+                .attach(format!(
+                    "what is stored here spends the same budget - this store reads {} levels in all",
+                    self.ceiling
+                )));
+        }
+
+        Ok(())
+    }
+
+    /// What a value at `path` has left to spend, to be carried through the
+    /// codec's own pass.
+    ///
+    /// The path is counted with the value because the budget is shared: on
+    /// every text engine the path's levels become the document's, so a shallow
+    /// value at a deep path is exactly as unreadable as the reverse. sqlite is
+    /// the exception - its path is a `TEXT` key - and paying the path there
+    /// costs a few levels out of 254, which is not worth a second rule.
+    pub fn for_value(&self, path: &StorePath) -> Depth {
+        Depth::new(self.ceiling.saturating_sub(path.segments().count()))
+    }
+
+    /// Says what went wrong, once a codec's error turns out to have been the
+    /// count's.
+    ///
+    /// A `Serializer` may only return its own error type, so the refusal
+    /// reaches the caller wearing the codec's clothes and cannot be recognised
+    /// by its type - [`Depth::overflowed`] is how the caller asks whether it
+    /// was this.
+    pub fn too_deep(&self, path: &StorePath) -> Report<StorageError> {
+        let levels = path.segments().count();
+        let left = self.ceiling.saturating_sub(levels);
+
+        Report::new(StorageError::Codec)
+            .attach(format!("path: {path}"))
+            .attach(format!(
+                "the path spends {levels} levels and the value goes past the {left} that are left"
+            ))
+            .attach(format!("this store reads at most {} levels", self.ceiling))
+            .attach(
+                "a value deeper than the reader accepts is written without complaint and \
+                 cannot be read back",
+            )
+    }
+}

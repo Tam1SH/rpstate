@@ -21,8 +21,9 @@ pub use uuid;
 pub use reactive::{
     AmeState, AmeStateNode, Change, Field, InterceptDisposer, IntoPipeline, LocalScope, MapChange,
     Pipeline, Reactive, ReactiveCell, ReactiveMap, ReactiveMapKey, ReactiveMapValue, ReactiveScope,
-    SignalSubscription, StoreSubscription,
+    SignalSubscription,
 };
+pub use store::StoreSubscription;
 
 pub mod errors {
     pub use crate::codec::CodecError;

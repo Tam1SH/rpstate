@@ -159,7 +159,7 @@ pub(crate) fn constructor(
                     ::std::any::type_name::<Self>(),
                 );
                 let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
-                store.mark_initialized(<Self as #crate_name::StateScope>::PATH.as_str())?;
+                store.mark_initialized(&<Self as #crate_name::StateScope>::PATH)?;
                 Ok(result)
             }
         }
@@ -184,7 +184,7 @@ pub(crate) fn constructor(
                     ::std::any::type_name::<Self>(),
                 );
                 let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
-                store.mark_initialized(namespace.as_str())?;
+                store.mark_initialized(&namespace)?;
                 Ok(result)
             }
         }

@@ -37,10 +37,7 @@ fn test_map_defaults_applied_only_on_first_init() {
             env.get("HTTP_PROXY"),
             Some("http://127.0.0.1:8080".to_string())
         );
-        assert_eq!(
-            env.get("NO_PROXY"),
-            Some("localhost".to_string())
-        );
+        assert_eq!(env.get("NO_PROXY"), Some("localhost".to_string()));
     }
 
     {
@@ -52,10 +49,7 @@ fn test_map_defaults_applied_only_on_first_init() {
             env.get("HTTP_PROXY"),
             Some("http://127.0.0.1:8080".to_string())
         );
-        assert_eq!(
-            env.get("NO_PROXY"),
-            Some("localhost".to_string())
-        );
+        assert_eq!(env.get("NO_PROXY"), Some("localhost".to_string()));
     }
 }
 

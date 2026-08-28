@@ -1,7 +1,8 @@
+use crate::Store;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::store::StoreSubscription;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Durable, StoreBackend};
-use crate::{Store, StoreSubscription};
 use amethystate_core::path::{StorePath, cmp_names};
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::{Report, ResultExt};
@@ -104,8 +105,10 @@ where
     }
 
     /// Where the map lives in the store.
-    pub fn path(&self) -> StorePath {
-        self.inner.path.clone()
+    ///
+    /// Lent, not handed over - see [`Field::path`](crate::Field::path).
+    pub fn path(&self) -> &StorePath {
+        &self.inner.path
     }
 
     /// [`ReactiveMap::fork`] with the instance id chosen rather than
@@ -978,11 +981,11 @@ mod tests {
             .unwrap();
 
         map.insert("a".into(), &10).unwrap();
-        assert_eq!(map.get("a"),Some(10));
-        assert_eq!(map.len(),1);
+        assert_eq!(map.get("a"), Some(10));
+        assert_eq!(map.len(), 1);
 
         map.update("a", &20).unwrap();
-        assert_eq!(map.get("a"),Some(20));
+        assert_eq!(map.get("a"), Some(20));
 
         let res = map.update("missing", &30);
         assert!(matches!(
@@ -996,10 +999,10 @@ mod tests {
 
         let removed = map.remove("a").unwrap();
         assert_eq!(removed, Some(20));
-        assert_eq!(map.len(),1);
+        assert_eq!(map.len(), 1);
 
         store.save_now().unwrap();
-        assert_eq!(map.get("a"),None);
+        assert_eq!(map.get("a"), None);
     }
 
     #[test]
@@ -1029,10 +1032,10 @@ mod tests {
         ));
 
         store.save_now().unwrap();
-        assert_eq!(map.get("val"),None);
+        assert_eq!(map.get("val"), None);
 
         map.insert("val".into(), &10).unwrap();
-        assert_eq!(map.get("val"),Some(10));
+        assert_eq!(map.get("val"), Some(10));
     }
 
     #[test]
@@ -1129,7 +1132,7 @@ mod tests {
         map.insert("a".into(), &1).unwrap();
         map.update("a", &2).unwrap();
 
-        assert_eq!(map.get("a"),Some(2));
+        assert_eq!(map.get("a"), Some(2));
     }
 
     #[test]
@@ -1147,7 +1150,7 @@ mod tests {
         map.insert("k1".into(), &1).unwrap();
         map.insert("k2".into(), &2).unwrap();
 
-        assert_eq!(map.len(),2);
+        assert_eq!(map.len(), 2);
 
         let clear_events_count = Arc::new(AtomicUsize::new(0));
         let clear_events_count_clone = clear_events_count.clone();
@@ -1161,7 +1164,7 @@ mod tests {
         map.clear().unwrap();
         store.save_now().unwrap();
 
-        assert_eq!(map.len(),0);
+        assert_eq!(map.len(), 0);
         assert!(map.is_empty());
 
         assert_eq!(clear_events_count.load(Ordering::SeqCst), 1);

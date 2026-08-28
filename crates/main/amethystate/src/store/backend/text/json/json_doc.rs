@@ -5,6 +5,7 @@ use crate::store::backend::text::document::{
     generic_set,
 };
 use crate::store::backend::text::error::TextStoreError;
+use crate::store::depth::Depth;
 use crate::store::{CodecFormat, StorageError};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
@@ -115,8 +116,11 @@ impl TextDocument for JsonDocument {
             .attach_with(|| format!("into: {}", std::any::type_name::<T>()))
     }
 
-    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node> {
-        serde_json::to_value(value)
+    fn serialize_node<T: Serialize + ?Sized>(
+        value: &T,
+        depth: &Depth,
+    ) -> StorageResult<Self::Node> {
+        serde_json::to_value(depth.count(value))
             .map_err(|e| TextStoreError::Codec(CodecError::Json(e)))
             .change_context(StorageError::Codec)
             .attach_with(|| format!("from: {}", std::any::type_name::<T>()))

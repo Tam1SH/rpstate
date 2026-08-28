@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -299,6 +299,19 @@ impl StorePath {
         match &self.joined {
             Joined::Static(s) => s,
             Joined::Owned(s) => s,
+        }
+    }
+
+    /// The same string as a shared handle, for the places that keep one.
+    ///
+    /// A path built at runtime already holds its joined form in an `Arc`, so
+    /// this is a refcount bump rather than a second copy of the bytes. A path
+    /// from the macro holds a `&'static str` and has to make one - which is
+    /// still the allocation a caller would otherwise have made every time.
+    pub fn joined_arc(&self) -> Arc<str> {
+        match &self.joined {
+            Joined::Static(s) => Arc::from(*s),
+            Joined::Owned(s) => s.clone(),
         }
     }
 
@@ -735,6 +748,17 @@ impl Hash for StorePath {
     }
 }
 
+/// Lets a collection keyed by `StorePath` be probed with the joined string.
+///
+/// [`Borrow`] asks that the borrowed form hash, compare and order exactly as
+/// the owned one does, which holds here by construction: all three delegate to
+/// [`StorePath::as_str`], so the string *is* what those impls look at.
+impl Borrow<str> for StorePath {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl fmt::Debug for StorePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "StorePath({:?})", self.as_str())
@@ -1089,8 +1113,23 @@ mod tests {
             derived.extend(pa.join(&pb).strip_prefix(&pa));
 
             for path in derived {
-                let rebuilt = StorePath::try_from_segments(path.segments())
-                    .expect("a derived path holds no empty level");
+                let rebuilt = match StorePath::try_from_segments(path.segments()) {
+                    Ok(rebuilt) => rebuilt,
+                    // The root has no levels at all, which is refused on
+                    // purpose: a list that came from data and turned out empty
+                    // is not something anyone said. Deriving one - a parent of
+                    // a single level, a prefix stripped from itself - is, and
+                    // `StorePath::root` is how it is spelled.
+                    Err(StorePathError::EmptyPath) => {
+                        prop_assert!(path.is_root());
+                        continue;
+                    }
+                    Err(other) => {
+                        return Err(TestCaseError::fail(format!(
+                            "a derived path holds an empty level: {other}"
+                        )));
+                    }
+                };
                 prop_assert_eq!(&rebuilt, &path);
                 prop_assert_eq!(rebuilt.as_str(), path.as_str());
             }

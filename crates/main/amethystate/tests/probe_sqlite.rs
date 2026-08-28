@@ -23,6 +23,11 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+/// A namespace named the way a key on disk spells it.
+fn ns(joined: &str) -> StorePath {
+    StorePath::parse_joined(joined).expect("a namespace the test wrote itself")
+}
+
 /// A sqlite store with the debouncer pushed out, so nothing lands except at a
 /// `save_now`.
 fn open(path: &Path) -> StorageResult<Store> {
@@ -114,7 +119,10 @@ fn infinity_reads_back() {
         "infinity raw bytes: {:?}",
         raw.as_deref().map(String::from_utf8_lossy)
     );
-    assert_eq!(store.get::<f64>(["probe", "v"]).unwrap(), Some(f64::INFINITY));
+    assert_eq!(
+        store.get::<f64>(["probe", "v"]).unwrap(),
+        Some(f64::INFINITY)
+    );
 }
 
 #[test]
@@ -230,7 +238,10 @@ fn value_depth_boundary() {
                 }
             }
             println!("value depth at a two-level path: last kept = {good}, first lost = {bad}");
-            println!("what {bad} does: {:?}", nest_roundtrip("sq_depth_edge", 1, bad));
+            println!(
+                "what {bad} does: {:?}",
+                nest_roundtrip("sq_depth_edge", 1, bad)
+            );
             panic!(
                 "a value nested {bad} deep is accepted by the write and does not read \
                  back; {good} does"
@@ -493,7 +504,11 @@ fn a_tricky_name_addresses_its_own_value() {
             broken.push(format!("{label} ({name:?}): {e}", name = truncate(&name)));
         }
     }
-    assert!(broken.is_empty(), "names that did not round trip:\n{}", broken.join("\n"));
+    assert!(
+        broken.is_empty(),
+        "names that did not round trip:\n{}",
+        broken.join("\n")
+    );
 }
 
 fn truncate(s: &str) -> String {
@@ -796,7 +811,7 @@ fn a_namespace_flag_and_a_value_at_its_name_coexist() {
     {
         let store = opened(file.path());
         store.set(["cfg"], &7u32).unwrap();
-        store.mark_initialized("cfg").unwrap();
+        store.mark_initialized(&ns("cfg")).unwrap();
         store.save_now().unwrap();
     }
     let store = opened(file.path());
@@ -806,7 +821,7 @@ fn a_namespace_flag_and_a_value_at_its_name_coexist() {
         "the value at `cfg` was lost to the namespace flag of the same name"
     );
     assert!(
-        store.is_initialized("cfg").unwrap(),
+        store.is_initialized(&ns("cfg")).unwrap(),
         "the namespace flag was lost to the value at the same path"
     );
 }
@@ -817,13 +832,13 @@ fn a_value_written_after_a_namespace_flag_survives() {
     let file = TempPath::new("sq_ns_collision2");
     {
         let store = opened(file.path());
-        store.mark_initialized("cfg").unwrap();
+        store.mark_initialized(&ns("cfg")).unwrap();
         store.set(["cfg"], &7u32).unwrap();
         store.save_now().unwrap();
     }
     let store = opened(file.path());
     assert_eq!(store.get::<u32>(["cfg"]).unwrap(), Some(7));
-    assert!(store.is_initialized("cfg").unwrap());
+    assert!(store.is_initialized(&ns("cfg")).unwrap());
 }
 
 // ---------------------------------------------------------------------------
@@ -871,7 +886,7 @@ fn an_empty_store_lists_nothing() {
     let file = TempPath::new("sq_empty_store");
     {
         let store = opened(file.path());
-        store.mark_initialized("probe").unwrap();
+        store.mark_initialized(&ns("probe")).unwrap();
         store.save_now().unwrap();
     }
     let store = opened(file.path());
@@ -1076,7 +1091,10 @@ fn a_write_at_the_root_is_refused_or_readable() {
 
     let written = store.set_owned(StorePath::root(), &7u32);
     if let Err(e) = &written {
-        println!("a write at the root is refused: {}", first_line(&format!("{e:?}")));
+        println!(
+            "a write at the root is refused: {}",
+            first_line(&format!("{e:?}"))
+        );
         return;
     }
     println!("a write at the root was accepted");
@@ -1106,17 +1124,19 @@ fn a_namespace_can_be_returned_to_fresh_after_a_reopen() {
     let file = TempPath::new("sq_ns_fresh");
     {
         let store = opened(file.path());
-        store.mark_initialized("cfg").unwrap();
+        store.mark_initialized(&ns("cfg")).unwrap();
         store.save_now().unwrap();
     }
     {
         let store = opened(file.path());
-        store.set_initialized("cfg", InitState::Fresh).unwrap();
+        store
+            .set_initialized(&ns("cfg"), InitState::Fresh)
+            .unwrap();
         store.save_now().unwrap();
     }
     let store = opened(file.path());
     assert!(
-        !store.is_initialized("cfg").unwrap(),
+        !store.is_initialized(&ns("cfg")).unwrap(),
         "the namespace was set back to fresh and still reads as seeded, so the \
          next construction will not put the defaults back"
     );

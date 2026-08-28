@@ -46,13 +46,8 @@ fn defaults() -> HashMap<String, u32> {
 }
 
 fn open_map(store: &amethystate::Store) -> amethystate::ReactiveMap<String, u32> {
-    reactive_map_with_path_only::<String, u32>(
-        store,
-        ["items"],
-        defaults(),
-        Uuid::new_v4(),
-    )
-    .unwrap()
+    reactive_map_with_path_only::<String, u32>(store, ["items"], defaults(), Uuid::new_v4())
+        .unwrap()
 }
 
 /// The store records "this namespace has been seeded" in the metadata file. If
@@ -65,9 +60,9 @@ fn losing_the_metadata_file_does_not_resurrect_removed_defaults() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         let map = open_map(&store);
         assert_eq!(map.get("shipped"), Some(1));
         map.remove("shipped").unwrap();
@@ -99,9 +94,9 @@ fn a_forged_marker_does_not_suppress_the_defaults() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["unrelated"], &1u32).unwrap();
         store.save_now().unwrap();
     }
@@ -144,9 +139,9 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         let doc = v1::Doc::new_with(&store).unwrap();
         doc.hits().set(21).unwrap();
         drop(doc);
@@ -156,9 +151,9 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
 
     {
         let (store, _) = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build_with_report()
-        .unwrap();
+            .backend(text_backend())
+            .build_with_report()
+            .unwrap();
         assert_eq!(
             store.get::<u32>(["replay", "hits"]).unwrap(),
             Some(42),

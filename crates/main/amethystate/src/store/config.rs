@@ -208,8 +208,7 @@ pub enum AfterGivingUp {
 /// every interval for the life of the process is not waiting for anything.
 /// `report.current_context()` says which, and `{report:#}` renders it when
 /// that is what is wanted.
-pub type PersistFailureCallback =
-    Arc<dyn Fn(&Report<StorageError>) -> AfterGivingUp + Send + Sync>;
+pub type PersistFailureCallback = Arc<dyn Fn(&Report<StorageError>) -> AfterGivingUp + Send + Sync>;
 
 pub struct StoreConfig {
     pub path: PathBuf,

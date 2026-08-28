@@ -5,6 +5,7 @@ use crate::store::backend::text::document::{
     generic_set,
 };
 use crate::store::backend::text::error::TextStoreError;
+use crate::store::depth::Depth;
 use crate::store::{CodecFormat, StorageError};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
@@ -130,8 +131,11 @@ impl TextDocument for RonDocument {
             .attach_with(|| format!("into: {}", std::any::type_name::<T>()))
     }
 
-    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node> {
-        let s = ::ron::ser::to_string(value)
+    fn serialize_node<T: Serialize + ?Sized>(
+        value: &T,
+        depth: &Depth,
+    ) -> StorageResult<Self::Node> {
+        let s = ::ron::ser::to_string(&depth.count(value))
             .map_err(|e| TextStoreError::Codec(CodecError::Ron(e)))
             .change_context(StorageError::Codec)
             .attach_with(|| format!("from: {}", std::any::type_name::<T>()))?;

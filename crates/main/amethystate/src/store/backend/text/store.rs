@@ -8,7 +8,7 @@ use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
-use crate::store::depth::DepthBudget;
+use crate::store::depth::{Depth, DepthBudget};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
@@ -508,11 +508,23 @@ impl<D: TextDocument> TextStoreInner<D> {
     ) -> StorageResult<()> {
         self.check_debouncer()?;
         self.budget
-            .check(path, value)
+            .check_path(path)
             .attach_with(|| format!("file: {}", self.files.data.path.display()))?;
-        let node = D::serialize_node(value)
-            .doing(StorageError::Write, &self.files.data.path)
-            .attach_with(|| format!("node: {path}"))?;
+
+        // One pass: the codec renders the value and the levels are counted on
+        // the way past. A refusal comes back as the codec's own error, so which
+        // it was has to be asked rather than matched.
+        let depth = self.budget.for_value(path);
+        let node = D::serialize_node(value, &depth).map_err(|e| {
+            if depth.overflowed() {
+                self.budget
+                    .too_deep(path)
+                    .attach(format!("file: {}", self.files.data.path.display()))
+            } else {
+                e.change_context(StorageError::Write)
+                    .attach(format!("node: {path}"))
+            }
+        })?;
         self.set_node(path.clone(), node, source)
     }
 
@@ -636,28 +648,25 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.subscriptions.write().retain(|s| s.id != id);
     }
 
-    fn init_key(&self, namespace: &str) -> StorageResult<StorePath> {
-        let path = StorePath::parse_joined(namespace)
-            .in_meta(StorageError::Meta, &self.files.meta.path)
-            .attach_with(|| format!("namespace: {namespace}"))?;
-        Ok(meta_key("__init", &path))
+    fn init_key(&self, namespace: &StorePath) -> StorePath {
+        meta_key("__init", namespace)
     }
 
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
-        let key = self.init_key(namespace)?;
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
+        let key = self.init_key(namespace);
         let guard = self.files.meta.doc.read();
         Ok(guard.get(&[key.as_str()]).is_some())
     }
 
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
-        let key = self.init_key(namespace)?;
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
+        let key = self.init_key(namespace);
         {
             let mut guard = self.files.meta.doc.write();
             let parts = [key.as_str()];
 
             match state {
                 InitState::Seeded => {
-                    let node = D::serialize_node(&true)
+                    let node = D::serialize_node(&true, &Depth::unlimited())
                         .in_meta(StorageError::Meta, &self.files.meta.path)
                         .attach_with(|| format!("namespace: {namespace}"))?;
                     guard.set(&parts, node)
@@ -841,11 +850,11 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         self.save_now().attach_with(|| format!("prefix: {prefix}"))
     }
 
-    fn is_initialized(&self, namespace: &str) -> StorageResult<bool> {
+    fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
         self.inner.is_initialized(namespace)
     }
 
-    fn set_initialized(&self, namespace: &str, state: InitState) -> StorageResult<()> {
+    fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         self.inner.set_initialized(namespace, state)
     }
 }

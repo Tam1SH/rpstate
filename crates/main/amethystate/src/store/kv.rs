@@ -272,14 +272,9 @@ impl Kv {
         let path = self.resolve(name)?;
         self.guard(&path)?;
 
-        let field = field_with_path::<T>(
-            &self.store,
-            path.clone(),
-            default,
-            self.instance_id,
-        )
-        .change_context(WriteError::Storage)
-        .attach_with(|| format!("kv cell: {path}"))?;
+        let field = field_with_path::<T>(&self.store, path.clone(), default, self.instance_id)
+            .change_context(WriteError::Storage)
+            .attach_with(|| format!("kv cell: {path}"))?;
 
         let cell = field.cell();
         Ok(cell.owning(Arc::new(field)))
@@ -407,7 +402,7 @@ impl Kv {
 
         for namespace in seeded_namespaces_under(&at) {
             self.store
-                .set_initialized(namespace.as_str(), InitState::Fresh)?;
+                .set_initialized(&namespace, InitState::Fresh)?;
         }
 
         self.reset_under(&at, &mut cleared)?;

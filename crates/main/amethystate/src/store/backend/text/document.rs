@@ -1,4 +1,5 @@
 use crate::store::CodecFormat;
+use crate::store::depth::Depth;
 use crate::store::{Occupied, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::Report;
@@ -19,7 +20,19 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     fn serialize(&self) -> StorageResult<String>;
     fn empty() -> Self;
     fn deserialize_node<T: DeserializeOwned>(node: &Self::Node) -> StorageResult<T>;
-    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node>;
+    /// Renders `value` into a node, counting the levels as they go past.
+    ///
+    /// `depth` is carried rather than measured beforehand: a pass of its own
+    /// would be the same work twice, and it would not be the same pass - a
+    /// `Serialize` that branches on `is_human_readable` shows one shape to a
+    /// counter that answers for itself and another to the codec. Wrapping the
+    /// value hands the question to whichever serializer really runs.
+    ///
+    /// A refusal comes back as this codec's own error, because that is all a
+    /// `Serializer` may return; [`Depth::overflowed`] is how a caller asks
+    /// whether the count was what stopped it.
+    fn serialize_node<T: Serialize + ?Sized>(value: &T, depth: &Depth)
+    -> StorageResult<Self::Node>;
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>>;
     fn bytes_to_node(bytes: &[u8]) -> StorageResult<Self::Node>;
 

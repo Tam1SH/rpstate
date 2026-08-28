@@ -140,9 +140,7 @@ fn walk(value: &serde_json::Value, at: &mut Vec<String>, out: &mut Vec<Vec<Strin
 fn stray(leaves: &[Vec<String>], written: &[&str]) -> Option<String> {
     let strays: Vec<String> = leaves
         .iter()
-        .filter(|leaf| {
-            leaf.len() < written.len() || !leaf.iter().zip(written).all(|(a, b)| a == b)
-        })
+        .filter(|leaf| leaf.len() < written.len() || !leaf.iter().zip(written).all(|(a, b)| a == b))
         .map(|leaf| format!("{leaf:?}"))
         .collect();
 
@@ -413,11 +411,7 @@ fn numbers() {
         round_trip("f64::EPSILON", &at, &f64::EPSILON)
     );
     probe!(rows, "f32 0.1", round_trip("f32 0.1", &at, &0.1f32));
-    probe!(
-        rows,
-        "f32 read as f64",
-        f32_widened()
-    );
+    probe!(rows, "f32 read as f64", f32_widened());
 
     table("Numbers", &rows);
 }
@@ -477,7 +471,11 @@ fn non_finite_floats() {
     probe!(
         rows,
         "NaN inside a vec of 4",
-        round_trip("NaN inside a vec of 4", &at, &vec![1.0f64, 2.0, f64::NAN, 4.0])
+        round_trip(
+            "NaN inside a vec of 4",
+            &at,
+            &vec![1.0f64, 2.0, f64::NAN, 4.0]
+        )
     );
     probe!(
         rows,
@@ -596,7 +594,11 @@ fn joined_alike() -> Row {
         let first = store.set(&one, &1u32);
         let second = store.set(&two, &2u32);
         let _ = store.save_now();
-        format!("{:?} then {:?}", first.map_err(|e| brief(&format!("{e:#}"))), second.map_err(|e| brief(&format!("{e:#}"))))
+        format!(
+            "{:?} then {:?}",
+            first.map_err(|e| brief(&format!("{e:#}"))),
+            second.map_err(|e| brief(&format!("{e:#}")))
+        )
     };
 
     let text = std::fs::read_to_string(file.path()).unwrap_or_default();
@@ -709,7 +711,11 @@ fn structures() {
     let mut rows = Vec::new();
     let at = ["probe", "leaf"];
 
-    probe!(rows, "unit struct", round_trip("unit struct", &at, &UnitStruct));
+    probe!(
+        rows,
+        "unit struct",
+        round_trip("unit struct", &at, &UnitStruct)
+    );
     probe!(
         rows,
         "empty struct",
@@ -743,7 +749,11 @@ fn structures() {
     probe!(
         rows,
         "Option<Option<u32>> None",
-        round_trip("Option<Option<u32>> None", &at, &Option::<Option<u32>>::None)
+        round_trip(
+            "Option<Option<u32>> None",
+            &at,
+            &Option::<Option<u32>>::None
+        )
     );
     probe!(
         rows,
@@ -840,7 +850,11 @@ fn structures() {
     probe!(
         rows,
         "map with a numeric key",
-        round_trip("map with a numeric key", &at, &HashMap::from([(7u32, 1u32)]))
+        round_trip(
+            "map with a numeric key",
+            &at,
+            &HashMap::from([(7u32, 1u32)])
+        )
     );
     probe!(
         rows,
@@ -907,7 +921,9 @@ fn many_entries(n: usize) -> Row {
     .expect("the map was declared again");
 
     let len = map.len();
-    let missing: Vec<usize> = (0..n).filter(|i| map.get(&format!("k{i}")) != Some(*i as u32)).collect();
+    let missing: Vec<usize> = (0..n)
+        .filter(|i| map.get(&format!("k{i}")) != Some(*i as u32))
+        .collect();
 
     Row {
         probe: format!("a map of {n} entries"),
@@ -1057,7 +1073,9 @@ fn cleared_and_refilled() -> Row {
         verdict: match (map.len() == 3, ghost) {
             (true, false) => "ok".to_string(),
             (true, true) => "RESIDUE: an empty node is left where the map was".to_string(),
-            (false, _) => "SILENT ALTERATION: the refilled map is not what was put in it".to_string(),
+            (false, _) => {
+                "SILENT ALTERATION: the refilled map is not what was put in it".to_string()
+            }
         },
     }
 }
@@ -1090,7 +1108,12 @@ fn nan_in_a_map() -> Row {
 
     let (read, verdict) = match map {
         Ok(map) => (
-            format!("len={} good={:?} bad={:?}", map.len(), map.get("good"), map.get("bad")),
+            format!(
+                "len={} good={:?} bad={:?}",
+                map.len(),
+                map.get("good"),
+                map.get("bad")
+            ),
             if map.get("good") == Some(1.0) && map.get("bad").is_none() {
                 "SILENT ALTERATION: the entry is gone and the map loads without it".to_string()
             } else {
@@ -1099,8 +1122,7 @@ fn nan_in_a_map() -> Row {
         ),
         Err(e) => (
             format!("Err: {}", brief(&format!("{e:#}"))),
-            "OPAQUE FAILURE for the map: one bad entry and the whole map will not load"
-                .to_string(),
+            "OPAQUE FAILURE for the map: one bad entry and the whole map will not load".to_string(),
         ),
     };
 
@@ -1215,7 +1237,11 @@ fn depth() {
         }
     }
     println!("deepest path that survives: {good} levels");
-    println!("one level further ({}): {:?}", good + 1, deep_outcome(good + 1, 0));
+    println!(
+        "one level further ({}): {:?}",
+        good + 1,
+        deep_outcome(good + 1, 0)
+    );
 
     println!(
         "\nThe pair the two budgets share - value depth {} at path depth 2 and the same value at path depth 10:",
@@ -1230,16 +1256,32 @@ fn ancestry_and_residue() {
     let mut rows = Vec::new();
 
     probe!(rows, "a struct field is a path", struct_field_is_a_path());
-    probe!(rows, "a path overwrites a struct field", path_writes_into_a_struct());
-    probe!(rows, "an empty map over a branch", empty_map_over_a_branch());
+    probe!(
+        rows,
+        "a path overwrites a struct field",
+        path_writes_into_a_struct()
+    );
+    probe!(
+        rows,
+        "an empty map over a branch",
+        empty_map_over_a_branch()
+    );
     probe!(rows, "delete leaves the parent", delete_leaves_the_parent());
-    probe!(rows, "delete_prefix leaves the parent", delete_prefix_leaves_the_parent());
+    probe!(
+        rows,
+        "delete_prefix leaves the parent",
+        delete_prefix_leaves_the_parent()
+    );
     probe!(rows, "a scalar under a scalar", scalar_under_a_scalar());
     probe!(rows, "a map key no path can hold", unreachable_map_key());
     probe!(rows, "a write at the root", root_overwrite());
     probe!(rows, "delete takes the subtree", delete_takes_the_subtree());
     probe!(rows, "a field over a branch", field_over_a_branch());
-    probe!(rows, "siblings that differ by an escape", sibling_escaping());
+    probe!(
+        rows,
+        "siblings that differ by an escape",
+        sibling_escaping()
+    );
 
     table("Beyond the list", &rows);
 }
@@ -1270,11 +1312,9 @@ fn root_overwrite() -> Row {
         write: second,
         read: brief(&format!("kept={kept:?} file={text}")),
         verdict: match kept {
-            Ok(None) => {
-                "SILENT ALTERATION: one write at the root replaced the whole document and \
+            Ok(None) => "SILENT ALTERATION: one write at the root replaced the whole document and \
                  returned Ok"
-                    .to_string()
-            }
+                .to_string(),
             Ok(Some(1)) => "ok, the root write did not take the rest with it".to_string(),
             other => format!("{other:?}"),
         },
@@ -1328,18 +1368,18 @@ fn field_over_a_branch() -> Row {
     }
 
     let store = open(&file).expect("the file reopens");
-    let field = amethystate::store::field_with_path::<u32>(
-        &store,
-        ["probe", "cfg"],
-        0,
-        Uuid::new_v4(),
-    );
+    let field =
+        amethystate::store::field_with_path::<u32>(&store, ["probe", "cfg"], 0, Uuid::new_v4());
 
     let (read, verdict) = match field {
         Ok(field) => {
             let set = field.set(5);
             (
-                format!("get={} set={:?}", field.get(), set.map_err(|e| brief(&format!("{e:#}")))),
+                format!(
+                    "get={} set={:?}",
+                    field.get(),
+                    set.map_err(|e| brief(&format!("{e:#}")))
+                ),
                 "the field was declared; see whether its writes land".to_string(),
             )
         }
@@ -1498,11 +1538,9 @@ fn empty_map_over_a_branch() -> Row {
         write: second,
         read: brief(&format!("probe.cfg.leaf={leaf:?}")),
         verdict: match leaf {
-            Ok(None) => {
-                "SILENT ALTERATION: a write at probe.cfg deleted what was under it and \
+            Ok(None) => "SILENT ALTERATION: a write at probe.cfg deleted what was under it and \
                  returned Ok"
-                    .to_string()
-            }
+                .to_string(),
             Ok(Some(3)) => "ok, the write was refused or did not reach it".to_string(),
             other => format!("{other:?}"),
         },
@@ -1517,7 +1555,8 @@ fn delete_leaves_the_parent() -> Row {
         let store = open(&file).expect("a fresh store opens");
         store.set(["probe", "cfg", "leaf"], &3u32).expect("written");
         store.save_now().expect("flushed");
-        store.delete(&StorePath::from_segments(["probe", "cfg", "leaf"]))
+        store
+            .delete(&StorePath::from_segments(["probe", "cfg", "leaf"]))
             .expect("deleted");
         store.save_now().expect("flushed again");
     }
@@ -1644,7 +1683,6 @@ fn unreachable_map_key() -> Row {
         read: brief(&format!(
             "whole={whole:?} scan={keys:?} ReactiveMap len={map_len} file={text}"
         )),
-        verdict: "see the reading: the empty key is in the file and no path reaches it"
-            .to_string(),
+        verdict: "see the reading: the empty key is in the file and no path reaches it".to_string(),
     }
 }

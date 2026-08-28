@@ -98,9 +98,11 @@ fn why<T: Debug>(err: &T) -> String {
     let head: Vec<String> = text
         .lines()
         .map(|l| {
-            l.trim_start_matches(['\u{2502}', '\u{251c}', '\u{2570}', '\u{2574}', '\u{2500}', '\u{25b6}', ' '])
-                .trim()
-                .to_string()
+            l.trim_start_matches([
+                '\u{2502}', '\u{251c}', '\u{2570}', '\u{2574}', '\u{2500}', '\u{25b6}', ' ',
+            ])
+            .trim()
+            .to_string()
         })
         .filter(|l| !l.is_empty() && !l.starts_with("at ") && !l.starts_with("backtrace"))
         .take_while(|l| !l.starts_with('\u{2501}'))
@@ -170,7 +172,11 @@ fn every_key(store: &Store) -> Vec<String> {
     }
 
     let mut out = Vec::new();
-    walk(store, amethystate_core::path::StorePath::from_segments(Vec::<String>::new()), &mut out);
+    walk(
+        store,
+        amethystate_core::path::StorePath::from_segments(Vec::<String>::new()),
+        &mut out,
+    );
     out
 }
 
@@ -182,8 +188,7 @@ where
     let wrote = brief(&format!("{value:?}"), 70);
     let segs: Vec<String> = segments.iter().map(|s| (*s).to_string()).collect();
 
-    let caught =
-        std::panic::catch_unwind(AssertUnwindSafe(|| run(label, &segs, &value)));
+    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| run(label, &segs, &value)));
 
     match caught {
         Ok(mut row) => {
@@ -295,13 +300,13 @@ fn options() {
             &["lonely", "only"],
             Option::<u32>::None,
         ),
-        probe(
-            "Some(Some)",
-            &["opt", "ss"],
-            Some(Some(7u32)),
-        ),
+        probe("Some(Some)", &["opt", "ss"], Some(Some(7u32))),
         probe("Some(None)", &["opt", "sn"], Some(Option::<u32>::None)),
-        probe("None nested twice", &["opt", "nn"], Option::<Option<u32>>::None),
+        probe(
+            "None nested twice",
+            &["opt", "nn"],
+            Option::<Option<u32>>::None,
+        ),
         probe(
             "struct with a None field",
             &["opt", "struct"],
@@ -316,7 +321,11 @@ fn options() {
             OnlyOption { gone: None },
         ),
         probe("Some(\"\")", &["opt", "empty"], Some(String::new())),
-        probe("Vec of Options", &["opt", "vec"], vec![Some(1u32), None, Some(3)]),
+        probe(
+            "Vec of Options",
+            &["opt", "vec"],
+            vec![Some(1u32), None, Some(3)],
+        ),
     ];
     table("1. Option", &rows);
 }
@@ -340,8 +349,11 @@ fn non_finite_floats() {
         probe("f32::INFINITY", &["f", "inf32"], f32::INFINITY),
     ];
 
-    let nan = run_raw("probe_nan", &["f", "nan"], &f64::NAN, |store, segs| {
-        match store.get::<f64>(segs.to_vec()) {
+    let nan = run_raw(
+        "probe_nan",
+        &["f", "nan"],
+        &f64::NAN,
+        |store, segs| match store.get::<f64>(segs.to_vec()) {
             Ok(Some(v)) => (
                 format!("{v} (is_nan {}, sign {})", v.is_nan(), v.is_sign_negative()),
                 if v.is_nan() && !v.is_sign_negative() {
@@ -352,8 +364,8 @@ fn non_finite_floats() {
             ),
             Ok(None) => ("nothing".into(), Verdict::Absent),
             Err(e) => (format!("Err: {}", why(&e)), Verdict::SilentAlteration),
-        }
-    });
+        },
+    );
     rows.push(nan);
 
     let neg_nan = run_raw(
@@ -438,7 +450,11 @@ fn numbers() {
         probe("u64::MAX", &["n", "u64max"], u64::MAX),
         probe("i64::MAX", &["n", "i64max"], i64::MAX),
         probe("i64::MIN", &["n", "i64min"], i64::MIN),
-        probe("u64 just past i64::MAX", &["n", "past"], i64::MAX as u64 + 1),
+        probe(
+            "u64 just past i64::MAX",
+            &["n", "past"],
+            i64::MAX as u64 + 1,
+        ),
         probe("u128::MAX", &["n", "u128max"], u128::MAX),
         probe("i128::MIN", &["n", "i128min"], i128::MIN),
         probe("usize::MAX", &["n", "usizemax"], usize::MAX),
@@ -460,22 +476,42 @@ fn strings() {
     let rows = vec![
         probe("empty", &["s", "empty"], String::new()),
         probe("embedded NUL", &["s", "nul"], "a\0b".to_string()),
-        probe("control chars", &["s", "ctrl"], "a\u{1}\u{7}\u{1f}b".to_string()),
+        probe(
+            "control chars",
+            &["s", "ctrl"],
+            "a\u{1}\u{7}\u{1f}b".to_string(),
+        ),
         probe("CRLF", &["s", "crlf"], "a\r\nb".to_string()),
         probe("lone CR", &["s", "cr"], "a\rb".to_string()),
         probe("backslash", &["s", "bs"], "a\\b".to_string()),
         probe("triple quote", &["s", "triple"], "a\"\"\"b".to_string()),
-        probe("looks like a datetime", &["s", "dt"], "1979-05-27T07:32:00Z".to_string()),
-        probe("looks like a local date", &["s", "date"], "1979-05-27".to_string()),
+        probe(
+            "looks like a datetime",
+            &["s", "dt"],
+            "1979-05-27T07:32:00Z".to_string(),
+        ),
+        probe(
+            "looks like a local date",
+            &["s", "date"],
+            "1979-05-27".to_string(),
+        ),
         probe("looks like a number", &["s", "num"], "1234".to_string()),
         probe("looks like true", &["s", "bool"], "true".to_string()),
-        probe("unicode", &["s", "uni"], "\u{1f600} \u{4e2d}\u{6587} \u{0301}".to_string()),
+        probe(
+            "unicode",
+            &["s", "uni"],
+            "\u{1f600} \u{4e2d}\u{6587} \u{0301}".to_string(),
+        ),
         probe("very long", &["s", "long"], "x".repeat(200_000)),
         probe("bare newline", &["s", "nl"], "a\nb".to_string()),
         probe("trailing whitespace", &["s", "ws"], "a   ".to_string()),
         probe("delete char", &["s", "del"], "a\u{7f}b".to_string()),
         probe("BOM", &["s", "bom"], "\u{feff}a".to_string()),
-        probe("lone surrogate-ish escape", &["s", "esc"], "a\\u0041b".to_string()),
+        probe(
+            "lone surrogate-ish escape",
+            &["s", "esc"],
+            "a\\u0041b".to_string(),
+        ),
     ];
     table("4. strings", &rows);
 }
@@ -500,7 +536,11 @@ fn keys() {
         probe("segment that is only spaces", &["k", "   "], 42u32),
         probe("very long segment", &["k", &"s".repeat(20_000)], 42u32),
         probe("segment named like meta", &["__init", "ns"], 42u32),
-        probe("segment named amethystate", &["amethystate", "watch_interval_ms"], 42u32),
+        probe(
+            "segment named amethystate",
+            &["amethystate", "watch_interval_ms"],
+            42u32,
+        ),
         probe("segment that is a number", &["k", "1979"], 42u32),
         probe("segment with a leading dot", &["k", ".lead"], 42u32),
         probe("segment that is a single dot", &["k", "."], 42u32),
@@ -527,7 +567,10 @@ fn empty_segment_row() -> Row {
     match store.set(vec!["k".to_string(), String::new()], &42u32) {
         Ok(()) => {
             row.write = "Ok".into();
-            row.read = format!("{:?}", store.get::<u32>(vec!["k".to_string(), String::new()]));
+            row.read = format!(
+                "{:?}",
+                store.get::<u32>(vec!["k".to_string(), String::new()])
+            );
             row.verdict = Verdict::SilentAlteration;
         }
         Err(e) => {
@@ -581,30 +624,47 @@ fn structures() {
         probe("empty struct", &["st", "emptystruct"], Empty {}),
         probe("unit struct", &["st", "unit"], Unit),
         probe("unit value ()", &["st", "unitval"], ()),
-        probe("empty map", &["st", "emptymap"], BTreeMap::<String, u32>::new()),
+        probe(
+            "empty map",
+            &["st", "emptymap"],
+            BTreeMap::<String, u32>::new(),
+        ),
         probe("empty vec", &["st", "emptyvec"], Vec::<u32>::new()),
         probe("vec of scalars", &["st", "vec"], vec![1u32, 2, 3]),
         probe(
             "vec of tables",
             &["st", "aot"],
-            vec![
-                Server { name: "a".into() },
-                Server { name: "b".into() },
-            ],
+            vec![Server { name: "a".into() }, Server { name: "b".into() }],
         ),
-        probe("empty vec of tables", &["st", "aotempty"], Vec::<Server>::new()),
+        probe(
+            "empty vec of tables",
+            &["st", "aotempty"],
+            Vec::<Server>::new(),
+        ),
         probe("unit enum variant", &["st", "bare"], Choice::Bare),
-        probe("newtype enum variant", &["st", "payload"], Choice::Payload(3)),
+        probe(
+            "newtype enum variant",
+            &["st", "payload"],
+            Choice::Payload(3),
+        ),
         probe("tuple enum variant", &["st", "pair"], Choice::Pair(1, 2)),
-        probe("struct enum variant", &["st", "named"], Choice::Named { a: 5 }),
+        probe(
+            "struct enum variant",
+            &["st", "named"],
+            Choice::Named { a: 5 },
+        ),
         probe("newtype struct", &["st", "newtype"], NewType(9)),
         probe("tuple struct", &["st", "tuplestruct"], Tuple(9, "x".into())),
         probe("tuple", &["st", "tuple"], (1u32, "x".to_string())),
-        probe("scalar, then table, then scalar", &["st", "mixed"], Mixed {
-            scalar: 1,
-            table: Inner { x: 2 },
-            after: 3,
-        }),
+        probe(
+            "scalar, then table, then scalar",
+            &["st", "mixed"],
+            Mixed {
+                scalar: 1,
+                table: Inner { x: 2 },
+                after: 3,
+            },
+        ),
         probe(
             "map with an awkward key",
             &["st", "mapkey"],
@@ -615,7 +675,11 @@ fn structures() {
             &["st", "mapempty"],
             BTreeMap::from([(String::new(), 1u32)]),
         ),
-        probe("nested vec", &["st", "nestvec"], vec![vec![1u32], vec![2, 3]]),
+        probe(
+            "nested vec",
+            &["st", "nestvec"],
+            vec![vec![1u32], vec![2, 3]],
+        ),
         probe("bytes", &["st", "bytes"], vec![0u8, 1, 255]),
     ];
     table("6. structures", &rows);
@@ -689,7 +753,11 @@ fn expect<T: Debug + PartialEq>(
 ) -> String {
     match got {
         Ok(v) if v == want => format!("OK {label}"),
-        Ok(v) => format!("{label}: got {:?}, wanted {:?}", brief(&format!("{v:?}"), 40), want),
+        Ok(v) => format!(
+            "{label}: got {:?}, wanted {:?}",
+            brief(&format!("{v:?}"), 40),
+            want
+        ),
         Err(e) => format!("{label}: Err {}", why(&e)),
     }
 }
@@ -778,7 +846,11 @@ fn ordering_and_placement() {
             |store| {
                 join(&[
                     expect("scalar", store.get::<u32>(["cfg", "scalar"]), Some(1u32)),
-                    expect("table.x", store.get::<u32>(["cfg", "table", "x"]), Some(2u32)),
+                    expect(
+                        "table.x",
+                        store.get::<u32>(["cfg", "table", "x"]),
+                        Some(2u32),
+                    ),
                     expect("after", store.get::<u32>(["cfg", "after"]), Some(3u32)),
                     expect("extra", store.get::<u32>(["cfg", "extra"]), Some(9u32)),
                 ])
@@ -800,7 +872,10 @@ fn ordering_and_placement() {
                 expect(
                     "servers",
                     store.get::<Vec<Server>>(["servers"]),
-                    Some(vec![Server { name: "a".into() }, Server { name: "b".into() }]),
+                    Some(vec![
+                        Server { name: "a".into() },
+                        Server { name: "b".into() },
+                    ]),
                 )
             },
         ),
@@ -1098,7 +1173,6 @@ fn depth_boundaries() {
             )
         );
     }
-
 }
 
 /// What one path too deep costs the rest of the file.
@@ -1166,7 +1240,10 @@ fn reading_a_parent() {
             "parent written whole, read whole",
             |store| {
                 store
-                    .set(["cfg"], &BTreeMap::from([("a".to_string(), 1u32), ("b".into(), 2)]))
+                    .set(
+                        ["cfg"],
+                        &BTreeMap::from([("a".to_string(), 1u32), ("b".into(), 2)]),
+                    )
                     .unwrap();
                 "cfg={a=1,b=2} in one write".into()
             },
@@ -1253,7 +1330,9 @@ fn reading_a_parent() {
         scripted(
             "a one-key section read as the wrong scalar type",
             |store| {
-                store.set(["cfg", "width", "px"], &"eight".to_string()).unwrap();
+                store
+                    .set(["cfg", "width", "px"], &"eight".to_string())
+                    .unwrap();
                 "cfg.width.px=\"eight\"".into()
             },
             |store| expect("cfg.width", store.get::<String>(["cfg", "width"]), None),
@@ -1265,7 +1344,8 @@ fn reading_a_parent() {
                 "cfg.a=1".into()
             },
             |store| {
-                let read = store.get::<BTreeMap<String, BTreeMap<String, u32>>>(Vec::<String>::new());
+                let read =
+                    store.get::<BTreeMap<String, BTreeMap<String, u32>>>(Vec::<String>::new());
                 format!("root reads {:?}", read.map_err(|e| why(&e)))
             },
         ),
@@ -1391,62 +1471,56 @@ struct TableFirst {
 
 #[test]
 fn residue_and_neighbours() {
-    let rows = vec![
-        scripted(
-            "does a write leave keys nobody wrote",
-            |store| {
-                store.set(["only", "one"], &1u32).unwrap();
-                "only.one=1".into()
-            },
-            |store| {
-                let keys = every_key(store);
-                if keys == vec!["only.one".to_string()] {
-                    "OK just the one key".into()
-                } else {
-                    format!("keys are {keys:?}")
-                }
-            },
-        ),
-    ];
+    let rows = vec![scripted(
+        "does a write leave keys nobody wrote",
+        |store| {
+            store.set(["only", "one"], &1u32).unwrap();
+            "only.one=1".into()
+        },
+        |store| {
+            let keys = every_key(store);
+            if keys == vec!["only.one".to_string()] {
+                "OK just the one key".into()
+            } else {
+                format!("keys are {keys:?}")
+            }
+        },
+    )];
     table("10a. residue", &rows);
 }
 
 #[test]
 fn residue_of_a_dotted_segment() {
-    let rows = vec![
-        scripted(
-            "does an awkward segment come back as its own path",
-            |store| {
-                store.set(["out", "a.b"], &1u32).unwrap();
-                "out.'a.b'=1".into()
-            },
-            |store| {
-                let keys = every_key(store);
-                let direct = store.get::<u32>(["out", "a.b"]);
-                let split = store.get::<u32>(["out", "a", "b"]);
-                format!("keys {keys:?}; direct {direct:?}; split {split:?}")
-            },
-        ),
-    ];
+    let rows = vec![scripted(
+        "does an awkward segment come back as its own path",
+        |store| {
+            store.set(["out", "a.b"], &1u32).unwrap();
+            "out.'a.b'=1".into()
+        },
+        |store| {
+            let keys = every_key(store);
+            let direct = store.get::<u32>(["out", "a.b"]);
+            let split = store.get::<u32>(["out", "a", "b"]);
+            format!("keys {keys:?}; direct {direct:?}; split {split:?}")
+        },
+    )];
     table("10a2. residue", &rows);
 }
 
 #[test]
 fn residue_of_a_newline_segment() {
-    let rows = vec![
-        scripted(
-            "does a newline in a segment come back",
-            |store| {
-                store.set(["out", "a\nb"], &1u32).unwrap();
-                "out.'a\\nb'=1".into()
-            },
-            |store| {
-                let keys = every_key(store);
-                let direct = store.get::<u32>(["out", "a\nb"]);
-                format!("keys {keys:?}; direct {direct:?}")
-            },
-        ),
-    ];
+    let rows = vec![scripted(
+        "does a newline in a segment come back",
+        |store| {
+            store.set(["out", "a\nb"], &1u32).unwrap();
+            "out.'a\\nb'=1".into()
+        },
+        |store| {
+            let keys = every_key(store);
+            let direct = store.get::<u32>(["out", "a\nb"]);
+            format!("keys {keys:?}; direct {direct:?}")
+        },
+    )];
     table("10a. residue", &rows);
 }
 
@@ -1482,10 +1556,7 @@ fn residue_of_emptiness() {
                 store
                     .set(
                         ["holder"],
-                        &BTreeMap::from([
-                            (String::new(), 1u32),
-                            ("kept".to_string(), 2u32),
-                        ]),
+                        &BTreeMap::from([(String::new(), 1u32), ("kept".to_string(), 2u32)]),
                     )
                     .unwrap();
                 "holder={ ''=1, kept=2 }".into()
@@ -1505,22 +1576,20 @@ fn residue_of_emptiness() {
 
 #[test]
 fn residue_of_awkward_keys() {
-    let rows = vec![
-        scripted(
-            "a path written under a key holding a separator",
-            |store| {
-                store.set(["a.b"], &1u32).unwrap();
-                store.set(["a", "b"], &2u32).unwrap();
-                "'a.b'=1 then a.b=2".into()
-            },
-            |store| {
-                join(&[
-                    expect("'a.b'", store.get::<u32>(["a.b"]), Some(1u32)),
-                    expect("a.b", store.get::<u32>(["a", "b"]), Some(2u32)),
-                ])
-            },
-        ),
-    ];
+    let rows = vec![scripted(
+        "a path written under a key holding a separator",
+        |store| {
+            store.set(["a.b"], &1u32).unwrap();
+            store.set(["a", "b"], &2u32).unwrap();
+            "'a.b'=1 then a.b=2".into()
+        },
+        |store| {
+            join(&[
+                expect("'a.b'", store.get::<u32>(["a.b"]), Some(1u32)),
+                expect("a.b", store.get::<u32>(["a", "b"]), Some(2u32)),
+            ])
+        },
+    )];
     table("10c. residue", &rows);
 }
 
@@ -1543,7 +1612,9 @@ fn residue_of_deletes() {
             "an empty vec is not an empty table",
             |store| {
                 store.set(["e", "list"], &Vec::<u32>::new()).unwrap();
-                store.set(["e", "map"], &BTreeMap::<String, u32>::new()).unwrap();
+                store
+                    .set(["e", "map"], &BTreeMap::<String, u32>::new())
+                    .unwrap();
                 "e.list=[] and e.map={}".into()
             },
             |store| {

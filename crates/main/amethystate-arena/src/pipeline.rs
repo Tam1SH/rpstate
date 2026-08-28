@@ -66,8 +66,8 @@ where
 {
     fn pipe(self) -> Pipeline<T> {
         let initial = self.get();
-        let signal = Arc::new(Signal::new(initial));
-        let target = Arc::clone(&signal);
+        let signal = Signal::new(initial);
+        let target = signal.clone();
         let sub = self.subscribe_with_source(&pipeline_arena(), move |val, source| {
             target.set_forwarded(val.clone(), source);
         });
@@ -88,7 +88,7 @@ macro_rules! impl_tuple_pipeline {
             fn pipe(self) -> Pipeline<($($value_ty,)+)> {
                 let ($($source,)+) = self;
                 let initial = ($($source.get(),)+);
-                let signal = Arc::new(Signal::new(initial));
+                let signal = Signal::new(initial);
                 let mut source_subs = Vec::new();
 
                 let refresh: Arc<dyn Fn() -> ($($value_ty,)+) + Send + Sync> = {
@@ -98,7 +98,7 @@ macro_rules! impl_tuple_pipeline {
                 };
 
                 $(
-                    let target = Arc::clone(&signal);
+                    let target = signal.clone();
                     let refresh_cb = Arc::clone(&refresh);
                     source_subs.push($source.subscribe_with_source(&pipeline_arena(), move |_, src| {
                         target.set_forwarded(refresh_cb(), src);

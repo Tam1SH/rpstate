@@ -1,10 +1,8 @@
 use crate::observability::register_field;
 use crate::store::StorageError;
 use crate::store::StorageResult;
-use crate::{
-    Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, StoreSubscription,
-    SubscriptionKind,
-};
+use crate::store::StoreSubscription;
+use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::{IntoStorePath, StorePath};
 use amethystate_core::{FieldCore, MapChange, ReactiveMapCore, Signal};
@@ -98,10 +96,7 @@ where
             core: FieldCore::new_with_signal(signal),
             path,
             instance_id,
-            store_sub: Some(Arc::new(StoreSubscription {
-                store: store.clone(),
-                id,
-            })),
+            store_sub: Some(Arc::new(StoreSubscription::new(store.clone(), id))),
         }),
     })
 }
@@ -291,7 +286,7 @@ where
     //
     // Keys already on disk count as having been seeded, so upgrading does not
     // restore entries the user has since removed.
-    let seeded_before = store.is_initialized(path.as_str())? || !known_cache.is_empty();
+    let seeded_before = store.is_initialized(&path)? || !known_cache.is_empty();
 
     if !seeded_before {
         for (k, v) in defaults {
@@ -303,7 +298,7 @@ where
             known_cache.insert(k, v);
         }
     }
-    store.mark_initialized(path.as_str())?;
+    store.mark_initialized(&path)?;
 
     let core = ReactiveMapCore::with_capacity(known_cache.len());
     for (k, v) in known_cache {
@@ -432,10 +427,7 @@ where
             path,
             instance_id,
             store: store.clone(),
-            store_sub: Arc::new(StoreSubscription {
-                store: store.clone(),
-                id,
-            }),
+            store_sub: Arc::new(StoreSubscription::new(store.clone(), id)),
         }),
     })
 }

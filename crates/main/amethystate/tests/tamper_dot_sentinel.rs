@@ -108,9 +108,9 @@ fn a_write_at_a_level_named_dot_does_not_wipe_the_file() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         let mut payload: HashMap<String, u32> = HashMap::new();
         payload.insert("zzz".to_string(), 1);
@@ -170,9 +170,9 @@ fn a_hand_written_dot_key_reads_back_its_own_value() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.save_now().unwrap();
     }
@@ -203,9 +203,9 @@ fn scanning_over_a_hand_written_dot_key_does_not_yield_the_document() {
 
     {
         let store = StoreBuilder::new(path.path())
-        .backend(text_backend())
-        .build()
-        .unwrap();
+            .backend(text_backend())
+            .build()
+            .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.save_now().unwrap();
     }

@@ -150,8 +150,8 @@ fn a_reader_never_meets_a_half_written_file() {
                         continue;
                     };
 
-                    let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-                        .unwrap_or_else(|e| {
+                    let parsed: serde_json::Value =
+                        serde_json::from_slice(&bytes).unwrap_or_else(|e| {
                             panic!(
                                 "reader {reader} met a file no parser accepts, which is the \
                                  whole thing the temporary file exists to prevent: {e}\n\
@@ -368,8 +368,7 @@ fn a_holder_coming_and_going_never_leaves_a_broken_file() {
         .backend(common::text_backend())
         .build()
         .expect("a file written through a coming and going holder must open");
-    let recovered =
-        field_with_path::<u64>(&reopened, ["stress", "n"], 0, Uuid::new_v4()).unwrap();
+    let recovered = field_with_path::<u64>(&reopened, ["stress", "n"], 0, Uuid::new_v4()).unwrap();
     assert_eq!(
         recovered.get(),
         written,

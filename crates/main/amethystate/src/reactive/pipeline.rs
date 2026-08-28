@@ -4,7 +4,6 @@ pub use amethystate_core::primitives::pipeline::*;
 mod tests {
     use super::*;
     use crate::reactive::Field;
-    use amethystate_core::path::StorePath;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -12,7 +11,7 @@ mod tests {
     where
         T: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + Sync + 'static,
     {
-        Field::new_volatile(StorePath::from_segments(["pipeline", "test"]), value)
+        Field::new_volatile(["pipeline", "test"], value)
     }
 
     #[test]

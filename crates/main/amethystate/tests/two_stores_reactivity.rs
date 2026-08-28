@@ -48,7 +48,11 @@ fn a_pipeline_spans_two_stores() {
     let _sub = line.subscribe(move |v| seen_in.lock().unwrap().push(v.clone()));
 
     fast.ticks().set(1).unwrap();
-    assert_eq!(line.get(), "idle:1", "a write in one file moved the pipeline");
+    assert_eq!(
+        line.get(),
+        "idle:1",
+        "a write in one file moved the pipeline"
+    );
 
     slow.phase().set("busy".to_string()).unwrap();
     assert_eq!(

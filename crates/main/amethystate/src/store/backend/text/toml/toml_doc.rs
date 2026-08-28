@@ -5,6 +5,7 @@ use crate::store::backend::text::document::{
     Navigable, TextDocument, generic_delete, generic_delete_subtree, generic_get, generic_scan,
     generic_set,
 };
+use crate::store::depth::Depth;
 use crate::store::{CodecFormat, StorageError};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
@@ -127,17 +128,24 @@ impl TextDocument for TomlDocument {
         Ok(unwrapped.val)
     }
 
-    fn serialize_node<T: Serialize + ?Sized>(value: &T) -> StorageResult<Self::Node> {
+    fn serialize_node<T: Serialize + ?Sized>(
+        value: &T,
+        depth: &Depth,
+    ) -> StorageResult<Self::Node> {
         #[derive(serde::Serialize)]
         struct Wrap<'a, T: ?Sized> {
             val: &'a T,
         }
 
-        let s = toml_edit::ser::to_string(&Wrap { val: value })
-            .map_err(|e| CodecError::Toml(e.to_string()))
-            .map_err(TextStoreError::from)
-            .change_context(StorageError::Codec)
-            .attach_with(|| format!("from: {}", std::any::type_name::<T>()))?;
+        // The wrapper toml needs adds a level of its own, and it is not the
+        // application's - the budget is spent on `val`, inside it.
+        let s = toml_edit::ser::to_string(&Wrap {
+            val: &depth.count(value),
+        })
+        .map_err(|e| CodecError::Toml(e.to_string()))
+        .map_err(TextStoreError::from)
+        .change_context(StorageError::Codec)
+        .attach_with(|| format!("from: {}", std::any::type_name::<T>()))?;
 
         let doc = s
             .parse::<toml_edit::DocumentMut>()

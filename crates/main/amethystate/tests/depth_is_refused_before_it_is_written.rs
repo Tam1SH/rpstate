@@ -133,7 +133,9 @@ fn a_key_depth_cap_is_the_store_s_own(backend: Backend, label: &str) {
         .build()
         .unwrap();
 
-    store.set(["a", "b", "c"], &1u32).expect("three levels is the cap, not past it");
+    store
+        .set(["a", "b", "c"], &1u32)
+        .expect("three levels is the cap, not past it");
 
     let report = store
         .set(["a", "b", "c", "d"], &1u32)

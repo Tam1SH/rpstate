@@ -65,7 +65,8 @@ impl Provided {
 
     /// Every type provided, for a report that has to say what was on offer.
     pub(crate) fn type_names(&self) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = self.values.values().map(|held| held.type_name).collect();
+        let mut names: Vec<&'static str> =
+            self.values.values().map(|held| held.type_name).collect();
         names.sort_unstable();
         names
     }
