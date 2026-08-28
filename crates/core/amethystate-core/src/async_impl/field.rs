@@ -7,6 +7,7 @@ use crate::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -43,11 +44,11 @@ impl<T, B> PartialEq for Field<T, B> {
 
 impl<T, B> Eq for Field<T, B> {}
 
-impl<T, B> std::fmt::Debug for Field<T, B>
+impl<T, B> Debug for Field<T, B>
 where
-    T: std::fmt::Debug + Clone + 'static,
+    T: Debug + Clone + 'static,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Field")
             .field("path", &self.path)
             .field("value", &self.core.get())

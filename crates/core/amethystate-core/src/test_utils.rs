@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,20 +29,20 @@ impl TempPath {
         Self(unique_path(suffix))
     }
 
-    pub fn path(&self) -> &std::path::Path {
+    pub fn path(&self) -> &Path {
         &self.0
     }
 }
 
 impl std::ops::Deref for TempPath {
-    type Target = std::path::Path;
+    type Target = Path;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl AsRef<std::path::Path> for TempPath {
-    fn as_ref(&self) -> &std::path::Path {
+impl AsRef<Path> for TempPath {
+    fn as_ref(&self) -> &Path {
         &self.0
     }
 }

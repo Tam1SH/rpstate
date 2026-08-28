@@ -16,6 +16,10 @@ use amethystate::store::builder::StoreBuilder;
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use amethystate::store::config::{FileWritePolicy, WriteAttempts};
 use amethystate_core::test_utils::TempPath;
+#[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
+use std::fs::OpenOptions;
+#[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
+use std::time::Instant;
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 mod common;
@@ -167,7 +171,7 @@ fn a_file_held_by_someone_else_does_not_cost_the_old_contents() {
     // handle to permit deletion, so this blocks the replacement while still
     // letting the test read what survived.
     const FILE_SHARE_READ: u32 = 1;
-    let blocker = std::fs::OpenOptions::new()
+    let blocker = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ)
         .open(path.path())
@@ -221,7 +225,7 @@ fn a_holder_that_lets_go_mid_write_does_not_cost_the_write() {
     store.save_now().unwrap();
 
     const FILE_SHARE_READ: u32 = 1;
-    let blocker = std::fs::OpenOptions::new()
+    let blocker = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ)
         .open(path.path())
@@ -272,14 +276,14 @@ fn a_holder_that_never_lets_go_is_given_up_on() {
     store.save_now().unwrap();
 
     const FILE_SHARE_READ: u32 = 1;
-    let _blocker = std::fs::OpenOptions::new()
+    let _blocker = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ)
         .open(path.path())
         .expect("the store's own file must be openable");
 
     held.a().set(6).unwrap();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let report = store.save_now().unwrap_err();
     let elapsed = started.elapsed();
 
@@ -326,14 +330,14 @@ fn a_policy_that_says_not_to_retry_is_obeyed() {
     store.save_now().unwrap();
 
     const FILE_SHARE_READ: u32 = 1;
-    let _blocker = std::fs::OpenOptions::new()
+    let _blocker = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ)
         .open(path.path())
         .expect("the store's own file must be openable");
 
     held.a().set(6).unwrap();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     assert!(store.save_now().is_err());
     let elapsed = started.elapsed();
 

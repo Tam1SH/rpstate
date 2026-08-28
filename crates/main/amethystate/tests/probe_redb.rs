@@ -12,14 +12,14 @@
 
 #![cfg(feature = "redb")]
 
-use amethystate::Store;
-use amethystate::StorageResult;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::{StorageError, StorePath};
+use amethystate::{StorageResult, Store};
 use amethystate_core::test_utils::TempPath;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::time::Duration;
 
 /// A redb store with the debouncer and the watcher pushed out, so nothing
@@ -1257,7 +1257,7 @@ fn depth_store(depth: usize) {
 
 /// Writes a nested value into a named file and commits it, so another process
 /// can be the one that tries to read it.
-fn depth_write_into(file: &std::path::Path, depth: usize) {
+fn depth_write_into(file: &Path, depth: usize) {
     let store = StoreBuilder::new(file)
         .backend(Backend::Redb)
         .debounce(Duration::from_secs(60))
@@ -1269,7 +1269,7 @@ fn depth_write_into(file: &std::path::Path, depth: usize) {
     drop(store);
 }
 
-fn depth_read_from(file: &std::path::Path) {
+fn depth_read_from(file: &Path) {
     let store = StoreBuilder::new(file)
         .backend(Backend::Redb)
         .debounce(Duration::from_secs(60))
@@ -1281,7 +1281,7 @@ fn depth_read_from(file: &std::path::Path) {
     drop(store);
 }
 
-fn depth_child_at(mode: &str, depth: usize, file: Option<&std::path::Path>) -> (bool, String) {
+fn depth_child_at(mode: &str, depth: usize, file: Option<&Path>) -> (bool, String) {
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .arg("--exact")

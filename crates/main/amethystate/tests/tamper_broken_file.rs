@@ -2,6 +2,7 @@
 
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::TempPath;
+use std::path::{Path, PathBuf};
 
 mod common;
 use common::text_backend;
@@ -42,12 +43,12 @@ fn seeded(suffix: &str) -> TempPath {
     path
 }
 
-fn meta_path(path: &std::path::Path) -> std::path::PathBuf {
+fn meta_path(path: &Path) -> PathBuf {
     path.with_extension("meta")
 }
 
 /// Where the store keeps its copy: the whole name plus `.bak`.
-fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
+fn backup_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap().to_os_string();
     name.push(".bak");
     path.with_file_name(name)
@@ -55,7 +56,7 @@ fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
 
 /// What a person might plausibly have put beside the store themselves, which
 /// is what swapping the extension would have named.
-fn a_neighbours_file(path: &std::path::Path) -> std::path::PathBuf {
+fn a_neighbours_file(path: &Path) -> PathBuf {
     path.with_extension("bak")
 }
 

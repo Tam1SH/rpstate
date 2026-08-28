@@ -19,11 +19,13 @@ use amethystate_core::test_utils::TempPath;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::thread;
 use std::time::Duration;
 
 /// A sqlite store with the debouncer pushed out, so nothing lands except at a
 /// `save_now`.
-fn open(path: &std::path::Path) -> StorageResult<Store> {
+fn open(path: &Path) -> StorageResult<Store> {
     StoreBuilder::new(path)
         .backend(Backend::Sqlite)
         .debounce(Duration::from_secs(60))
@@ -31,7 +33,7 @@ fn open(path: &std::path::Path) -> StorageResult<Store> {
         .build()
 }
 
-fn opened(path: &std::path::Path) -> Store {
+fn opened(path: &Path) -> Store {
     open(path).expect("the store should open")
 }
 
@@ -204,7 +206,7 @@ fn nest_survives(label: &str, segments: usize, value: u32) -> bool {
 /// bisection.
 #[test]
 fn value_depth_boundary() {
-    std::thread::Builder::new()
+    thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(|| {
             let ceiling = 4096u32;
@@ -243,7 +245,7 @@ fn value_depth_boundary() {
 /// value.
 #[test]
 fn path_depth_does_not_spend_the_value_budget() {
-    std::thread::Builder::new()
+    thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(|| {
             let mut disagreed = Vec::new();
@@ -270,7 +272,7 @@ fn path_depth_does_not_spend_the_value_budget() {
 /// A store must still open after it has written a value itself.
 #[test]
 fn a_deeply_nested_value_leaves_a_store_that_opens() {
-    std::thread::Builder::new()
+    thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(|| {
             let file = TempPath::new("sq_depth_reopen");

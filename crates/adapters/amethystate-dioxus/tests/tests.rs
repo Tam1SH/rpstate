@@ -14,6 +14,7 @@ use amethystate_macros_arena::amethystate_framework_arena;
 use dioxus::core::NoOpMutations;
 use dioxus::prelude::*;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -319,7 +320,7 @@ async fn test_use_pipeline_requirements() {
     drop(vdom);
     handle_probe.clear();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         arena.get_pipeline(handle);
     }));
     assert!(result.is_err());
@@ -693,7 +694,7 @@ async fn test_all_primitives_simultaneous_lifecycle() {
     let _ = vdom.wait_for_work().await;
     vdom.render_immediate(&mut dioxus::core::NoOpMutations);
 
-    let result1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result1 = std::panic::catch_unwind(AssertUnwindSafe(|| {
         arena.get_pipeline(pipe_handle1);
     }));
     assert!(result1.is_err());
@@ -732,7 +733,7 @@ async fn test_all_primitives_simultaneous_lifecycle() {
     let _ = vdom.wait_for_work().await;
     vdom.render_immediate(&mut dioxus::core::NoOpMutations);
 
-    let result2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result2 = std::panic::catch_unwind(AssertUnwindSafe(|| {
         arena.get_pipeline(pipe_handle2);
     }));
     assert!(result2.is_err());

@@ -19,7 +19,9 @@ use std::sync::Arc;
 use tracing::warn;
 
 #[cfg(test)]
-use std::sync::atomic::Ordering;
+use std::io;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The open database, or nothing while it is being replaced.
 ///
@@ -50,8 +52,7 @@ static FAILING_DISK: parking_lot::Mutex<Option<std::path::PathBuf>> =
 /// can take the disk away and give it back while the store is running, which
 /// is the whole scenario.
 #[cfg(test)]
-pub(super) static WRITES_LEFT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(usize::MAX);
+pub(super) static WRITES_LEFT: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Holds the failing disk armed, and puts it away on the way out - including
 /// the way out through a panicking assertion, which a plain store-false at the
@@ -85,14 +86,14 @@ struct FailingBackend {
 
 #[cfg(test)]
 impl FailingBackend {
-    fn spend(&self) -> Result<(), std::io::Error> {
+    fn spend(&self) -> Result<(), io::Error> {
         if WRITES_LEFT
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_err()
         {
-            return Err(std::io::Error::other("simulated disk failure"));
+            return Err(io::Error::other("simulated disk failure"));
         }
         Ok(())
     }
@@ -100,24 +101,24 @@ impl FailingBackend {
 
 #[cfg(test)]
 impl redb::StorageBackend for FailingBackend {
-    fn len(&self) -> Result<u64, std::io::Error> {
+    fn len(&self) -> Result<u64, io::Error> {
         self.inner.len()
     }
 
-    fn read(&self, offset: u64, out: &mut [u8]) -> Result<(), std::io::Error> {
+    fn read(&self, offset: u64, out: &mut [u8]) -> Result<(), io::Error> {
         self.inner.read(offset, out)
     }
 
-    fn set_len(&self, len: u64) -> Result<(), std::io::Error> {
+    fn set_len(&self, len: u64) -> Result<(), io::Error> {
         self.inner.set_len(len)
     }
 
-    fn sync_data(&self) -> Result<(), std::io::Error> {
+    fn sync_data(&self) -> Result<(), io::Error> {
         self.spend()?;
         self.inner.sync_data()
     }
 
-    fn write(&self, offset: u64, data: &[u8]) -> Result<(), std::io::Error> {
+    fn write(&self, offset: u64, data: &[u8]) -> Result<(), io::Error> {
         self.spend()?;
         self.inner.write(offset, data)
     }

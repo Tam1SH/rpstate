@@ -1,6 +1,7 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -113,13 +114,13 @@ fn a_panicking_subscriber_does_not_disable_the_map() {
     let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let cap = seen.clone();
     let _sub = items.subscribe_any(move |_| {
-        cap.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        cap.fetch_add(1, Ordering::SeqCst);
     });
 
     items.insert("b".to_string(), &2).unwrap();
 
     assert_eq!(
-        seen.load(std::sync::atomic::Ordering::SeqCst),
+        seen.load(Ordering::SeqCst),
         1,
         "notifications must survive an earlier panicking subscriber"
     );

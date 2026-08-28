@@ -3,6 +3,7 @@ use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::Durable;
 use amethystate_core::{Signal, SignalSubscription};
 use error_stack::ResultExt;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -270,8 +271,8 @@ where
     }
 }
 
-impl<T: std::fmt::Debug + Clone + Send + Sync + 'static> std::fmt::Debug for ReactiveCell<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: Debug + Clone + Send + Sync + 'static> Debug for ReactiveCell<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReactiveCell")
             .field("value", &self.get())
             .finish_non_exhaustive()

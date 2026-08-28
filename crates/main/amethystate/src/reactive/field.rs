@@ -2,13 +2,13 @@ use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
 use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
-use crate::store::Durable;
 use crate::store::sync_backend::SyncBridge;
-use crate::store::{StoreBackend, SubscriptionId};
+use crate::store::{Commit, Durable, StoreBackend, SubscriptionId};
 use crate::Store;
 use amethystate_core::path::StorePath;
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
 use error_stack::{Report, ResultExt};
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -66,11 +66,11 @@ pub struct Field<TValue> {
     pub(crate) inner: Arc<FieldInner<TValue>>,
 }
 
-impl<TValue> std::fmt::Debug for Field<TValue>
+impl<TValue> Debug for Field<TValue>
 where
-    TValue: FieldValue + std::fmt::Debug,
+    TValue: FieldValue + Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Field")
             .field("path", &self.inner.path)
             .field("value", &self.get())
@@ -389,9 +389,9 @@ where
                 start: Arc::new(move || match start.upgrade() {
                     Some(inner) => match inner.store_sub.as_ref() {
                         Some(sub) => sub.store.flush_async(),
-                        None => crate::store::Commit::gone(),
+                        None => Commit::gone(),
                     },
-                    None => crate::store::Commit::gone(),
+                    None => Commit::gone(),
                 }),
             }
         });

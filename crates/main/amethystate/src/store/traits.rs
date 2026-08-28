@@ -1,10 +1,11 @@
+use crate::codec::CodecError;
 use crate::migration::AppliedStep;
 use crate::migration::set::MigrationSet;
 use crate::store::error::{StorageError, StorageResult};
 use amethystate_core::path::{IntoStorePath, StorePath};
 
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
-use crate::store::{CodecFormat, StoreCallback, SubscriptionId};
+use crate::store::{CodecFormat, Kv, StoreCallback, SubscriptionId};
 use crate::{MigrationReport, Store, SubscriptionKind};
 use error_stack::{Report, ResultExt};
 use serde::{Serialize, de::DeserializeOwned};
@@ -227,7 +228,7 @@ pub trait StoreExt: StoreBackend {
         let found = self.get_erased(&path, &mut |d| {
             out = Some(
                 erased_serde::deserialize::<T>(d)
-                    .map_err(crate::codec::CodecError::from)
+                    .map_err(CodecError::from)
                     .change_context(StorageError::Codec)
                     .attach_with(|| format!("path: {path}"))?,
             );
@@ -268,7 +269,7 @@ pub trait StoreExt: StoreBackend {
         self.decode_erased(bytes, &mut |d| {
             out = Some(
                 erased_serde::deserialize::<T>(d)
-                    .map_err(crate::codec::CodecError::from)
+                    .map_err(CodecError::from)
                     .change_context(StorageError::Codec)
                     .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
             );
@@ -287,7 +288,7 @@ impl<S: StoreBackend + ?Sized> StoreExt for S {}
 
 /// Reactive values addressed by path, without declaring a struct. See [`crate::store::Kv`].
 impl Store {
-    pub fn kv(&self) -> crate::store::Kv {
-        crate::store::Kv::new(self.clone())
+    pub fn kv(&self) -> Kv {
+        Kv::new(self.clone())
     }
 }

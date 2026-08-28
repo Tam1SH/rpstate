@@ -14,7 +14,9 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
+use std::collections::BTreeMap;
+use std::fmt::{self, Debug};
+use std::panic::AssertUnwindSafe;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
@@ -181,7 +183,7 @@ where
     let segs: Vec<String> = segments.iter().map(|s| (*s).to_string()).collect();
 
     let caught =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(label, &segs, &value)));
+        std::panic::catch_unwind(AssertUnwindSafe(|| run(label, &segs, &value)));
 
     match caught {
         Ok(mut row) => {
@@ -575,8 +577,6 @@ struct Inner {
 
 #[test]
 fn structures() {
-    use std::collections::BTreeMap;
-
     let rows = vec![
         probe("empty struct", &["st", "emptystruct"], Empty {}),
         probe("unit struct", &["st", "unit"], Unit),
@@ -629,7 +629,7 @@ fn scripted(
     read: impl FnOnce(&Store) -> String,
 ) -> Row {
     let mut row = Row::blank(label);
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let tmp = temp_for(label);
         let mut row = Row::blank(label);
         {
@@ -883,7 +883,7 @@ impl<'de> Deserialize<'de> for Nest {
         struct V;
         impl<'de> serde::de::Visitor<'de> for V {
             type Value = Nest;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("a nest of arrays around an integer")
             }
             fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Nest, E> {
@@ -987,7 +987,7 @@ impl<'de> Deserialize<'de> for NestTable {
         struct V;
         impl<'de> serde::de::Visitor<'de> for V {
             type Value = NestTable;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("a nest of tables around an integer")
             }
             fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<NestTable, E> {
@@ -1161,8 +1161,6 @@ fn a_deep_path_takes_the_whole_file_with_it() {
 /// at a time become a `[section]`. Nothing the caller does distinguishes them.
 #[test]
 fn reading_a_parent() {
-    use std::collections::BTreeMap;
-
     let rows = vec![
         scripted(
             "parent written whole, read whole",
@@ -1315,7 +1313,7 @@ fn beyond_the_list() {
         probe(
             "a map keyed by something not a string",
             &["x", "intmap"],
-            std::collections::BTreeMap::from([(1u32, "a".to_string()), (2, "b".into())]),
+            BTreeMap::from([(1u32, "a".to_string()), (2, "b".into())]),
         ),
         probe(
             "a struct field named like a toml keyword",
@@ -1365,12 +1363,12 @@ fn beyond_the_list() {
         probe(
             "a map whose key is a dotted path",
             &["x", "dotted_map"],
-            std::collections::BTreeMap::from([("a.b.c".to_string(), 1u32)]),
+            BTreeMap::from([("a.b.c".to_string(), 1u32)]),
         ),
         probe(
             "a deeply keyed map of tables",
             &["x", "map_of_tables"],
-            std::collections::BTreeMap::from([
+            BTreeMap::from([
                 ("one".to_string(), Inner { x: 1 }),
                 ("two".to_string(), Inner { x: 2 }),
             ]),
@@ -1484,7 +1482,7 @@ fn residue_of_emptiness() {
                 store
                     .set(
                         ["holder"],
-                        &std::collections::BTreeMap::from([
+                        &BTreeMap::from([
                             (String::new(), 1u32),
                             ("kept".to_string(), 2u32),
                         ]),
@@ -1495,7 +1493,7 @@ fn residue_of_emptiness() {
             |store| {
                 let keys = every_key(store);
                 let whole = store
-                    .get::<std::collections::BTreeMap<String, u32>>(["holder"])
+                    .get::<BTreeMap<String, u32>>(["holder"])
                     .map(|v| format!("{v:?}"))
                     .unwrap_or_else(|e| format!("Err {}", why(&e)));
                 format!("keys {keys:?}; whole {whole}")
@@ -1545,13 +1543,13 @@ fn residue_of_deletes() {
             "an empty vec is not an empty table",
             |store| {
                 store.set(["e", "list"], &Vec::<u32>::new()).unwrap();
-                store.set(["e", "map"], &std::collections::BTreeMap::<String, u32>::new()).unwrap();
+                store.set(["e", "map"], &BTreeMap::<String, u32>::new()).unwrap();
                 "e.list=[] and e.map={}".into()
             },
             |store| {
                 let keys = every_key(store);
                 let list = store.get::<Vec<u32>>(["e", "list"]);
-                let map = store.get::<std::collections::BTreeMap<String, u32>>(["e", "map"]);
+                let map = store.get::<BTreeMap<String, u32>>(["e", "map"]);
                 format!("keys {keys:?}; list {list:?}; map {map:?}")
             },
         ),

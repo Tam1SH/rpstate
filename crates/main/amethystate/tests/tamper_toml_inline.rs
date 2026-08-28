@@ -7,7 +7,7 @@ use amethystate_core::test_utils::TempPath;
 use std::time::Duration;
 
 fn settle() {
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    std::thread::sleep(Duration::from_millis(120));
 }
 
 fn seeded(suffix: &str, contents: &str) -> TempPath {
@@ -143,15 +143,15 @@ fn a_momentary_truncation_is_not_written_back_as_the_document() {
             .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();
         store.save_now().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(400));
 
         std::fs::write(path.path(), "").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(400));
 
         store.set(["other"], &1u32).unwrap();
         store.save_now().unwrap();
     }
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    std::thread::sleep(Duration::from_millis(400));
 
     let store = StoreBuilder::new(path.path())
         .backend(Backend::Toml)

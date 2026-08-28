@@ -5,7 +5,7 @@ pub use inspector_trait::*;
 pub use scheme::*;
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use uuid::Uuid;
 
 pub fn short_type_name(full: &str) -> &str {
@@ -22,11 +22,11 @@ pub struct FieldMeta {
     pub value_type_name: &'static str,
 }
 
-static INSTANCE_REGISTRY: std::sync::LazyLock<RwLock<HashMap<Uuid, &'static str>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static INSTANCE_REGISTRY: LazyLock<RwLock<HashMap<Uuid, &'static str>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
-static SCHEMA_REGISTRY: std::sync::LazyLock<RwLock<HashMap<Arc<str>, FieldMeta>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static SCHEMA_REGISTRY: LazyLock<RwLock<HashMap<Arc<str>, FieldMeta>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub fn register_instance(id: Uuid, struct_type_name: &'static str) {
     if let Ok(mut map) = INSTANCE_REGISTRY.write() {

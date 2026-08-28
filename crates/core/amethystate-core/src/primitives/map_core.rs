@@ -9,8 +9,9 @@ use error_stack::ResultExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
+use std::panic::Location;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -75,10 +76,8 @@ impl<K, V> Clone for ReactiveMapCore<K, V> {
     }
 }
 
-impl<K: std::fmt::Debug + Hash + Eq + Clone, V: std::fmt::Debug + Clone> std::fmt::Debug
-    for ReactiveMapCore<K, V>
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<K: Debug + Hash + Eq + Clone, V: Debug + Clone> Debug for ReactiveMapCore<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("ReactiveMapCore");
         d.field(
             "cache",
@@ -139,7 +138,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        let location = std::panic::Location::caller();
+        let location = Location::caller();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let meta = SubscriptionMeta {
             id,
@@ -178,7 +177,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
     where
         F: Fn(&MapChange<K, V>) + Send + Sync + 'static,
     {
-        let location = std::panic::Location::caller();
+        let location = Location::caller();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let meta = SubscriptionMeta {
             id,

@@ -1,4 +1,5 @@
 use crate::reactive::local::{LocalScope, Wake};
+use crate::reactive::map::KeyOf;
 use amethystate_core::SignalSubscription;
 use futures_core::Stream;
 use std::collections::VecDeque;
@@ -366,9 +367,9 @@ where
     V: crate::ReactiveMapValue,
 {
     /// Narrows to one key instead of every change in the map.
-    pub fn key(self, key: K) -> Watch<crate::reactive::map::KeyOf<K, V>, D> {
+    pub fn key(self, key: K) -> Watch<KeyOf<K, V>, D> {
         Watch {
-            source: crate::reactive::map::KeyOf::new(self.source, key),
+            source: KeyOf::new(self.source, key),
             external: self.external,
             delivery: self.delivery,
         }

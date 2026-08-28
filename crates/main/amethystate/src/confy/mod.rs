@@ -24,9 +24,11 @@ use etcetera::{
 };
 
 use serde::{Serialize, de::DeserializeOwned};
+use std::collections::HashMap;
 use std::fs::{self, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 
 use crate::codec::CodecError;
@@ -47,24 +49,22 @@ fn default_key() -> StorePath {
     StorePath::root()
 }
 
-static STRATEGY: std::sync::OnceLock<std::sync::Mutex<ConfigStrategy>> = std::sync::OnceLock::new();
-static STORES: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<Store>>>,
-> = std::sync::OnceLock::new();
+static STRATEGY: OnceLock<Mutex<ConfigStrategy>> = OnceLock::new();
+static STORES: OnceLock<Mutex<HashMap<PathBuf, Arc<Store>>>> = OnceLock::new();
 
-fn get_strategy() -> &'static std::sync::Mutex<ConfigStrategy> {
+fn get_strategy() -> &'static Mutex<ConfigStrategy> {
     STRATEGY.get_or_init(|| {
         #[cfg(feature = "confy-compat")]
         let default = ConfigStrategy::App;
         #[cfg(all(not(feature = "confy-compat"), feature = "confy-compat-0-6"))]
         let default = ConfigStrategy::Directories;
-        std::sync::Mutex::new(default)
+        Mutex::new(default)
     })
 }
 
-fn get_store(path: &Path) -> Result<std::sync::Arc<Store>, ConfyError> {
+fn get_store(path: &Path) -> Result<Arc<Store>, ConfyError> {
     let mut map = STORES
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .map_err(|e| ConfyError::GeneralLoadError(io::Error::other(e.to_string())))?;
 
@@ -77,7 +77,7 @@ fn get_store(path: &Path) -> Result<std::sync::Arc<Store>, ConfyError> {
     }
 
     let raw_store = StoreBuilder::new(path).build().map_err(ConfyError::from)?;
-    let store = std::sync::Arc::new(raw_store);
+    let store = Arc::new(raw_store);
     map.insert(path.to_path_buf(), store.clone());
 
     Ok(store)
@@ -99,10 +99,10 @@ pub enum ConfyError {
     BadRonData(#[source] ron::error::Error),
 
     #[error("Failed to create directory")]
-    DirectoryCreationFailed(#[source] std::io::Error),
+    DirectoryCreationFailed(#[source] io::Error),
 
     #[error("Failed to load configuration file")]
-    GeneralLoadError(#[source] std::io::Error),
+    GeneralLoadError(#[source] io::Error),
 
     #[error("Bad configuration directory: {0}")]
     BadConfigDirectory(String),
@@ -120,16 +120,16 @@ pub enum ConfyError {
     SerializeRonError(#[source] ron::error::Error),
 
     #[error("Failed to write configuration file")]
-    WriteConfigurationFileError(#[source] std::io::Error),
+    WriteConfigurationFileError(#[source] io::Error),
 
     #[error("Failed to read configuration file")]
-    ReadConfigurationFileError(#[source] std::io::Error),
+    ReadConfigurationFileError(#[source] io::Error),
 
     #[error("Failed to open configuration file")]
-    OpenConfigurationFileError(#[source] std::io::Error),
+    OpenConfigurationFileError(#[source] io::Error),
 
     #[error("Failed to set configuration file permissions")]
-    SetPermissionsFileError(#[source] std::io::Error),
+    SetPermissionsFileError(#[source] io::Error),
 }
 
 /// Restates a store failure as the error confy's callers already handle.
@@ -151,7 +151,7 @@ impl From<Report<RpError>> for ConfyError {
                     // confy tells "no config yet" from "the disk said no" - so
                     // it is carried over even though the value cannot be.
                     TextStoreError::Io(io) => {
-                        return ConfyError::GeneralLoadError(std::io::Error::new(
+                        return ConfyError::GeneralLoadError(io::Error::new(
                             io.kind(),
                             format!("{report:?}"),
                         ));
@@ -187,7 +187,7 @@ impl From<Report<RpError>> for ConfyError {
             }
         }
 
-        ConfyError::GeneralLoadError(std::io::Error::other(format!("{report:?}")))
+        ConfyError::GeneralLoadError(io::Error::other(format!("{report:?}")))
     }
 }
 

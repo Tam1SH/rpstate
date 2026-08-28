@@ -207,7 +207,7 @@ mod buffered {
         }
     }
 
-    pub type Pending = std::collections::HashMap<std::sync::Arc<str>, PendingOp>;
+    pub type Pending = std::collections::HashMap<Arc<str>, PendingOp>;
 
     /// Everything buffered under `prefix`, left in place.
     ///

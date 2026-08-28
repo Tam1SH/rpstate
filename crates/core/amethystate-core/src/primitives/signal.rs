@@ -1,5 +1,6 @@
 use crate::ReactiveScope;
 use arc_swap::ArcSwap;
+use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -11,7 +12,7 @@ type SignalSubscribers<T> = Arc<Mutex<Vec<SubscriberEntry<T>>>>;
 #[derive(Clone, Copy)]
 pub struct SubscriptionMeta {
     pub id: u64,
-    pub location: &'static std::panic::Location<'static>,
+    pub location: &'static Location<'static>,
     pub name: Option<&'static str>,
 }
 
@@ -41,7 +42,7 @@ impl<T> Clone for Signal<T> {
 #[must_use = "dropping a subscription unsubscribes; bind it to keep it alive"]
 pub struct SignalSubscription {
     pub id: u64,
-    pub location: &'static std::panic::Location<'static>,
+    pub location: &'static Location<'static>,
     pub name: Option<&'static str>,
     pub set_name: Arc<dyn Fn(&'static str) + Send + Sync + 'static>,
     pub cleanup: Arc<dyn Fn(u64) + Send + Sync + 'static>,
@@ -141,7 +142,7 @@ impl<T: 'static> Signal<T> {
     where
         F: Fn(&T, Option<Uuid>) + Send + Sync + 'static,
     {
-        let location = std::panic::Location::caller();
+        let location = Location::caller();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let meta = SubscriptionMeta {
             id,
@@ -238,7 +239,7 @@ mod tests {
             // Every writer stamps the value with its own id, so the value and
             // the source must always agree on who wrote it.
             if Some(*stamp) != source {
-                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                seen.fetch_add(1, Ordering::Relaxed);
             }
         });
 
@@ -255,7 +256,7 @@ mod tests {
         });
 
         assert_eq!(
-            mismatches.load(std::sync::atomic::Ordering::Relaxed),
+            mismatches.load(Ordering::Relaxed),
             0,
             "value and source must describe the same write"
         );

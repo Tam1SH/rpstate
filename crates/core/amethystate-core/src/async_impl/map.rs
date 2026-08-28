@@ -6,6 +6,8 @@ use crate::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::Report;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fmt::{self, Debug};
+use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -42,12 +44,12 @@ impl<K, V, B> PartialEq for ReactiveMap<K, V, B> {
 
 impl<K, V, B> Eq for ReactiveMap<K, V, B> {}
 
-impl<K, V, B> std::fmt::Debug for ReactiveMap<K, V, B>
+impl<K, V, B> Debug for ReactiveMap<K, V, B>
 where
-    K: std::fmt::Debug + std::hash::Hash + Eq + Clone,
-    V: std::fmt::Debug + Clone,
+    K: Debug + Hash + Eq + Clone,
+    V: Debug + Clone,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("ReactiveMap");
         d.field("prefix", &self.prefix);
 

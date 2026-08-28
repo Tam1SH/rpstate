@@ -4,6 +4,7 @@ pub use backends::*;
 use amethystate_core::{FieldExportMeta, FieldKind, SchemaExportEntry};
 use heck::ToLowerCamelCase;
 use std::collections::BTreeMap;
+use std::io;
 use std::path::Path;
 
 pub trait FrameworkCodegen {
@@ -32,7 +33,7 @@ impl CodegenRegistry {
         Self { registry }
     }
 
-    pub fn export_ts(&self, out_path: impl AsRef<Path>) -> std::io::Result<()> {
+    pub fn export_ts(&self, out_path: impl AsRef<Path>) -> io::Result<()> {
         let mut ts = String::new();
         ts.push_str("/* eslint-disable */\n/* tslint:disable */\n// @ts-nocheck\n");
         ts.push_str(
@@ -280,7 +281,7 @@ import { ReactiveField, ReadonlyReactiveField, ReactiveMap } from "amethystate";
         &self,
         out_path: impl AsRef<Path>,
         fw: &dyn FrameworkCodegen,
-    ) -> std::io::Result<()> {
+    ) -> io::Result<()> {
         let mut code = String::new();
         code.push_str("// GENERATED AUTOMATICALLY. DO NOT EDIT.\n");
         code.push_str(fw.imports());

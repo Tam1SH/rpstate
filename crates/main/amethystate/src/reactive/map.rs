@@ -1,12 +1,12 @@
 use crate::reactive::watch::{Immediate, Watch, Watchable};
-use crate::store::Durable;
-use crate::store::StoreBackend;
 use crate::store::sync_backend::SyncBridge;
+use crate::store::{Durable, StoreBackend};
 use crate::{Store, StoreSubscription};
 use amethystate_core::path::{StorePath, cmp_names};
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::{Report, ResultExt};
 use std::borrow::Borrow;
+use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 
 use std::sync::Arc;
@@ -68,12 +68,12 @@ impl<K, V> Clone for ReactiveMap<K, V> {
     }
 }
 
-impl<K, V> std::fmt::Debug for ReactiveMap<K, V>
+impl<K, V> Debug for ReactiveMap<K, V>
 where
-    K: std::fmt::Debug + ReactiveMapKey,
-    V: std::fmt::Debug + ReactiveMapValue,
+    K: Debug + ReactiveMapKey,
+    V: Debug + ReactiveMapValue,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("ReactiveMap");
         d.field("path", &self.inner.path);
 
@@ -431,7 +431,7 @@ where
     pub fn update_with<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         if let Some(val) = self.get(key) {
@@ -449,7 +449,7 @@ where
     pub fn modify<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
         F: FnOnce(&mut V),
     {
         if let Some(mut val) = self.get(key) {
@@ -496,7 +496,7 @@ where
     pub fn update<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
     {
         // Strict, so the key is already here and its owned form with it. Only
         // `insert` has to be handed one.
@@ -680,7 +680,7 @@ where
     pub fn update<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
     {
         self.0.update(key, value)?;
         self.commit()
@@ -695,7 +695,7 @@ where
     pub async fn update_async<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
     {
         self.0.update(key, value)?;
         self.commit_async().await
@@ -771,7 +771,7 @@ where
     pub fn update_with<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         let value = self.0.update_with(key, f)?;
@@ -787,7 +787,7 @@ where
     pub async fn update_with_async<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         let value = self.0.update_with(key, f)?;
@@ -801,7 +801,7 @@ where
     pub fn modify<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;
@@ -813,7 +813,7 @@ where
     pub async fn modify_async<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + std::fmt::Display + ?Sized,
+        Q: Hash + Eq + Display + ?Sized,
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;

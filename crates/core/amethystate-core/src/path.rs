@@ -1,4 +1,7 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 const SEPARATOR: char = '.';
@@ -490,8 +493,8 @@ pub enum StorePathError {
     DanglingEscape,
 }
 
-impl std::fmt::Display for StorePathError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for StorePathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StorePathError::EmptySegment { at } => {
                 write!(f, "level {at} of the path has no name")
@@ -631,7 +634,7 @@ const fn joins_to(segments: &[&str], joined: &str) -> bool {
 /// store's order has to compare them as the store will.
 ///
 /// Compared without writing either escaped form out.
-pub fn cmp_names(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn cmp_names(a: &str, b: &str) -> Ordering {
     escaped(a).cmp(escaped(b))
 }
 
@@ -678,31 +681,31 @@ impl Eq for StorePath {}
 /// The flat engines range over that string, so anything sorting paths for
 /// itself has to agree with them or a listing changes order by engine.
 impl Ord for StorePath {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl PartialOrd for StorePath {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl std::hash::Hash for StorePath {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl Hash for StorePath {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
     }
 }
 
-impl std::fmt::Debug for StorePath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for StorePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "StorePath({:?})", self.as_str())
     }
 }
 
-impl std::fmt::Display for StorePath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for StorePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -763,9 +766,7 @@ mod tests {
         .prop_map(|chars| chars.into_iter().collect())
     }
 
-    fn hash_of(value: &impl std::hash::Hash) -> u64 {
-        use std::hash::Hasher;
-
+    fn hash_of(value: &impl Hash) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         value.hash(&mut hasher);
         hasher.finish()

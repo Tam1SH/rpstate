@@ -1,4 +1,5 @@
 use error_stack::Report;
+use std::error::Error;
 use std::fmt;
 
 /// What a store operation failed at.
@@ -63,7 +64,7 @@ impl fmt::Display for StorageError {
     }
 }
 
-impl std::error::Error for StorageError {}
+impl Error for StorageError {}
 
 pub type StorageResult<T> = Result<T, Report<StorageError>>;
 
@@ -108,7 +109,7 @@ impl fmt::Display for Occupied {
     }
 }
 
-impl std::error::Error for Occupied {}
+impl Error for Occupied {}
 
 /// A report's chain of contexts on one line, for a log record.
 ///
