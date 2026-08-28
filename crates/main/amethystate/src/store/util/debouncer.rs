@@ -1,3 +1,4 @@
+use crate::store::StorageResult;
 use crate::store::config::{AfterGivingUp, PersistFailureCallback, RetryPolicy};
 use crate::store::durable::{CommitSignal, PersistHealth};
 use crate::store::util::DeadNotifier;
@@ -97,7 +98,7 @@ impl Debouncer {
     /// should be told from here.
     pub fn new_with_retry<F>(interval: Duration, policy: FlushPolicy, mut op: F) -> Self
     where
-        F: FnMut() -> Result<(), String> + Send + 'static,
+        F: FnMut() -> StorageResult<()> + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<Trigger>();
         let guard = Arc::new(Mutex::new(()));
@@ -196,7 +197,7 @@ impl Drop for Debouncer {
 /// guard poisons on the way down, which is the same mechanism a panic inside
 /// `op` itself already relies on.
 fn run_with_retry(
-    op: &mut dyn FnMut() -> Result<(), String>,
+    op: &mut dyn FnMut() -> StorageResult<()>,
     policy: &FlushPolicy,
     rx: &mpsc::Receiver<Trigger>,
 ) {
@@ -211,7 +212,7 @@ fn run_with_retry(
                 policy.commits.finished(true);
                 return;
             }
-            Err(why) => why,
+            Err(why) => Arc::new(why),
         };
 
         let since = *streak_start.get_or_insert_with(Instant::now);
@@ -228,7 +229,8 @@ fn run_with_retry(
 
             error!(
                 target: "amethystate",
-                reason = %reason,
+                reason = %format!("{reason:#}"),
+                kind = ?reason.current_context(),
                 elapsed_ms = elapsed.as_millis() as u64,
                 budget_ms = retry.budget.as_millis() as u64,
                 decision = ?decision,
@@ -236,17 +238,17 @@ fn run_with_retry(
             );
 
             match decision {
-                AfterGivingUp::Fail => policy.health.give_up(&reason),
+                AfterGivingUp::Fail => policy.health.give_up(reason),
                 AfterGivingUp::Ignore => {}
                 AfterGivingUp::Poison => panic!(
-                    "background flush failed for {elapsed:?} (budget {:?}): {reason}",
+                    "background flush failed for {elapsed:?} (budget {:?}): {reason:#}",
                     retry.budget
                 ),
             }
         } else if !escalated {
             warn!(
                 target: "amethystate",
-                reason = %reason,
+                kind = ?reason.current_context(),
                 elapsed_ms = elapsed.as_millis() as u64,
                 budget_ms = retry.budget.as_millis() as u64,
                 "background flush failed, retrying",

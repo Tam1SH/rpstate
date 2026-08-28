@@ -2,18 +2,17 @@ use crate::MigrationReport;
 use crate::codec::CodecError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
-use crate::store::InitState;
-use crate::store::StorageResult;
 use crate::store::backend::sqlite::migration::SqliteMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::config::StoreConfig;
+use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
-    SubscriptionId, SubscriptionKind,
+    InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
+    SubscriptionEntry, SubscriptionId, SubscriptionKind,
 };
 use amethystate_core::path::StorePath;
 use error::SqliteStoreError;
@@ -98,8 +97,8 @@ struct SqliteStoreInner {
     path: PathBuf,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
-    commits: Arc<crate::store::durable::CommitSignal>,
-    health: Arc<crate::store::durable::PersistHealth>,
+    commits: Arc<CommitSignal>,
+    health: Arc<PersistHealth>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -153,7 +152,7 @@ impl SqliteStoreInner {
     fn check_debouncer(&self) -> StorageResult<()> {
         if let Some(reason) = self.health.failure() {
             return Err(error_stack::Report::new(StorageError::CommitFailed)
-                .attach(format!("the background flush is not landing: {reason}"))
+                .attach(format!("the background flush is not landing: {reason:#}"))
                 .attach(
                     "what is already buffered is still being retried, and reads are unaffected",
                 ));
@@ -476,8 +475,8 @@ impl SqliteStoreInner {
         self.subscriptions.write().retain(|s| s.id != id);
     }
 
-    fn flush_async(&self) -> crate::store::durable::Commit {
-        let commit = crate::store::durable::Commit::awaiting(self.commits.clone());
+    fn flush_async(&self) -> Commit {
+        let commit = Commit::awaiting(self.commits.clone());
         self.debouncer.flush_now();
         commit
     }
@@ -580,7 +579,7 @@ impl SqliteStore {
         let conn_arc = Arc::new(Mutex::new(conn));
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
         let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
-        let commits = Arc::new(crate::store::durable::CommitSignal::default());
+        let commits = Arc::new(CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
         let next_sub_id = Arc::new(AtomicU64::new(1));
         let write_lock = Arc::new(Mutex::new(()));
@@ -590,7 +589,7 @@ impl SqliteStore {
         let write_lock_save = write_lock.clone();
         let path_save = config.path.clone();
 
-        let health = Arc::new(crate::store::durable::PersistHealth::default());
+        let health = Arc::new(PersistHealth::default());
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
@@ -600,7 +599,7 @@ impl SqliteStore {
                 health: health.clone(),
                 on_giveup: config.on_persist_failure.clone(),
             },
-            move || -> Result<(), String> {
+            move || -> StorageResult<()> {
                 let _write_guard = write_lock_save.lock();
 
                 let changes = {
@@ -624,13 +623,9 @@ impl SqliteStore {
                         .attach_with(|| format!("buffered changes: {}", changes.len()))
                 })();
 
-                match landed {
-                    Ok(()) => {
-                        utils::clear_committed(&mut pending_save.lock(), &changes);
-                        Ok(())
-                    }
-                    Err(report) => Err(format!("{report:#}")),
-                }
+                landed?;
+                utils::clear_committed(&mut pending_save.lock(), &changes);
+                Ok(())
             },
         );
 
@@ -757,7 +752,7 @@ impl StoreBackend for SqliteStore {
         self.inner.flush_prefix(prefix)
     }
 
-    fn flush_async(&self) -> crate::store::durable::Commit {
+    fn flush_async(&self) -> Commit {
         self.inner.flush_async()
     }
 

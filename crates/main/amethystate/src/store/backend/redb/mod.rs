@@ -22,11 +22,15 @@ use crate::migration::set::MigrationSet;
 use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
+use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
 use rmp_serde::config::BytesMode;
+use std::cell::RefCell;
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
@@ -43,12 +47,11 @@ use recovery::{OpenDatabase, create_database, is_previous_io, reopen};
 const BUF_SIZE: usize = 64 * 1024;
 
 #[cfg(test)]
-static SIMULATE_WRITE_FAILURE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static SIMULATE_WRITE_FAILURE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    static SERIALIZATION_BUFFER: std::cell::RefCell<Vec<u8>> =
-        std::cell::RefCell::new(Vec::with_capacity(BUF_SIZE));
+    static SERIALIZATION_BUFFER: RefCell<Vec<u8>> =
+        RefCell::new(Vec::with_capacity(BUF_SIZE));
 }
 
 /// Writes every buffered change into `txn`'s tables. Committing `txn` is the
@@ -109,8 +112,8 @@ struct RedbStoreInner {
     path: Arc<Path>,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<Arc<str>>>>,
-    commits: Arc<crate::store::durable::CommitSignal>,
-    health: Arc<crate::store::durable::PersistHealth>,
+    commits: Arc<CommitSignal>,
+    health: Arc<PersistHealth>,
     debouncer: Arc<Debouncer>,
     subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     next_sub_id: Arc<AtomicU64>,
@@ -204,7 +207,7 @@ impl RedbStoreInner {
     fn check_debouncer(&self) -> StorageResult<()> {
         if let Some(reason) = self.health.failure() {
             return Err(error_stack::Report::new(StorageError::CommitFailed)
-                .attach(format!("the background flush is not landing: {reason}"))
+                .attach(format!("the background flush is not landing: {reason:#}"))
                 .attach("what is already buffered is still being retried, and reads are unaffected"));
         }
         if self.debouncer.is_poisoned() {
@@ -266,10 +269,10 @@ impl RedbStore {
 
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
         let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
-        let commits = Arc::new(crate::store::durable::CommitSignal::default());
+        let commits = Arc::new(CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
 
-        let db: OpenDatabase = Arc::new(arc_swap::ArcSwapOption::from(Some(opened)));
+        let db = Arc::new(arc_swap::ArcSwapOption::from(Some(opened)));
 
         // The swap, not the database: a clone of the `Database` here would
         // hold redb's file lock for the life of this thread, and a reopen
@@ -281,7 +284,7 @@ impl RedbStore {
         let write_lock = Arc::new(Mutex::new(()));
         let write_lock_save = write_lock.clone();
 
-        let health = Arc::new(crate::store::durable::PersistHealth::default());
+        let health = Arc::new(PersistHealth::default());
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
@@ -291,7 +294,7 @@ impl RedbStore {
                 health: health.clone(),
                 on_giveup: config.on_persist_failure.clone(),
             },
-            move || -> Result<(), String> {
+            move || -> StorageResult<()> {
                 let _write_guard = write_lock_save.lock();
 
                 let changes = {
@@ -304,7 +307,8 @@ impl RedbStore {
 
                 #[cfg(test)]
                 if SIMULATE_WRITE_FAILURE.load(Ordering::Relaxed) {
-                    return Err("simulated write failure".to_string());
+                    return Err(error_stack::Report::new(StorageError::Flush)
+                        .attach("simulated write failure"));
                 }
 
                 let landed: StorageResult<()> = (|| {
@@ -337,9 +341,11 @@ impl RedbStore {
                         if is_previous_io(&report)
                             && let Err(failed) = reopen(&db_save, &path_save)
                         {
-                            return Err(format!("{report:#}; and {failed:#}"));
+                            return Err(report
+                                .attach("reopening the database after it stopped reaching the disk failed too")
+                                .attach(format!("{failed:#}")));
                         }
-                        Err(format!("{report:#}"))
+                        Err(report)
                     }
                 }
             },
@@ -873,8 +879,8 @@ impl StoreBackend for RedbStore {
         self.inner.flush_prefix(prefix)
     }
 
-    fn flush_async(&self) -> crate::store::durable::Commit {
-        let commit = crate::store::durable::Commit::awaiting(self.inner.commits.clone());
+    fn flush_async(&self) -> Commit {
+        let commit = Commit::awaiting(self.inner.commits.clone());
         self.inner.debouncer.flush_now();
         commit
     }
@@ -1209,10 +1215,12 @@ mod tests {
 
         let heard: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let heard_write = heard.clone();
-        config.on_persist_failure = Some(Arc::new(move |reason: &str| {
-            heard_write.lock().push(reason.to_string());
-            decision
-        }));
+        config.on_persist_failure = Some(Arc::new(
+            move |reason: &error_stack::Report<StorageError>| {
+                heard_write.lock().push(format!("{reason:#}"));
+                decision
+            },
+        ));
 
         let (store, _) = RedbStore::open(config, MigrationSet::default()).unwrap();
         (store, heard)

@@ -1,3 +1,5 @@
+use crate::store::StorageError;
+use error_stack::Report;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,8 +115,6 @@ pub enum AfterGivingUp {
     /// the reason, until a flush lands again. Reads carry on and what is
     /// buffered stays buffered, so a disk that frees up heals the store
     /// without a restart.
-    ///
-    /// [`StorageError::CommitFailed`]: crate::store::StorageError::CommitFailed
     Fail,
 
     /// Say nothing to writers. The retry loop carries on and the buffer is
@@ -129,11 +129,19 @@ pub enum AfterGivingUp {
 }
 
 /// Runs when a flush has been failing for longer than the retry budget -
-/// once per streak, with the rendered reason, after anyone awaiting that
-/// flush has already been told it failed. What it returns decides what
-/// writers see next; without one the store defaults to
-/// [`AfterGivingUp::Fail`].
-pub type PersistFailureCallback = Arc<dyn Fn(&str) -> AfterGivingUp + Send + Sync>;
+/// once per streak, after anyone awaiting that flush has already been told it
+/// failed. What it returns decides what writers see next; without one the
+/// store defaults to [`AfterGivingUp::Fail`].
+///
+/// It is handed the failure itself rather than a rendering of it, because the
+/// decision usually turns on which failure it is. A full disk is someone
+/// deleting something in a minute, and [`AfterGivingUp::Ignore`] rides it out;
+/// a value the format cannot hold will never be writable, and retrying it
+/// every interval for the life of the process is not waiting for anything.
+/// `report.current_context()` says which, and `{report:#}` renders it when
+/// that is what is wanted.
+pub type PersistFailureCallback =
+    Arc<dyn Fn(&Report<StorageError>) -> AfterGivingUp + Send + Sync>;
 
 pub struct StoreConfig {
     pub path: PathBuf,

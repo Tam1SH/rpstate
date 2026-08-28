@@ -1,8 +1,8 @@
 use crate::store::error::{StorageError, StorageResult};
+use error_stack::Report;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 
@@ -60,17 +60,22 @@ impl CommitSignal {
 /// disk is still readable, and what is buffered is still buffered.
 #[derive(Default)]
 pub struct PersistHealth {
-    given_up: Mutex<Option<Arc<str>>>,
+    given_up: Mutex<Option<Arc<Report<StorageError>>>>,
 }
 
 impl PersistHealth {
-    /// The reason writes are failing, if they are.
-    pub fn failure(&self) -> Option<Arc<str>> {
+    /// Why writes are failing, if they are.
+    ///
+    /// The failure itself rather than a rendering of it: a caller deciding what
+    /// to do about it wants `current_context()`, and one reporting it renders
+    /// with `{:#}`. Behind an `Arc` because a `Report` is not `Clone` and this
+    /// is read by every writer while the streak lasts.
+    pub fn failure(&self) -> Option<Arc<Report<StorageError>>> {
         self.given_up.lock().unwrap().clone()
     }
 
-    pub(crate) fn give_up(&self, reason: &str) {
-        *self.given_up.lock().unwrap() = Some(Arc::from(reason));
+    pub(crate) fn give_up(&self, reason: Arc<Report<StorageError>>) {
+        *self.given_up.lock().unwrap() = Some(reason);
     }
 
     pub(crate) fn landed(&self) {

@@ -4,25 +4,25 @@ use crate::MigrationReport;
 use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
-use crate::store::InitState;
-use crate::store::StorageResult;
 use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
+use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    SchemaAwareStore, StoreBackend, StoreCallback, StoreEvent, StoreOp, SubscriptionEntry,
-    SubscriptionId, SubscriptionKind,
+    InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
+    SubscriptionEntry, SubscriptionId, SubscriptionKind,
 };
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -195,8 +195,8 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     pub(crate) subscriptions: Arc<RwLock<Vec<SubscriptionEntry>>>,
     pub(crate) next_id: Arc<AtomicU64>,
     pub(crate) debouncer: Arc<Debouncer>,
-    pub(crate) commits: Arc<crate::store::durable::CommitSignal>,
-    pub(crate) health: Arc<crate::store::durable::PersistHealth>,
+    pub(crate) commits: Arc<CommitSignal>,
+    pub(crate) health: Arc<PersistHealth>,
     /// Bumped by every mutation, and compared against `persisted` to tell
     /// whether the document differs from the file. A flag could not do this:
     /// checking it and acting on it are two steps, and a write landing in
@@ -218,7 +218,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     pub(crate) fn check_debouncer(&self) -> StorageResult<()> {
         if let Some(reason) = self.health.failure() {
             return Err(error_stack::Report::new(StorageError::CommitFailed)
-                .attach(format!("the background flush is not landing: {reason}"))
+                .attach(format!("the background flush is not landing: {reason:#}"))
                 .attach(
                     "what is already buffered is still being retried, and reads are unaffected",
                 ));
@@ -317,9 +317,9 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let files_debounce = files.clone();
         let writes_debounce = writes.clone();
         let persisted_debounce = persisted.clone();
-        let commits = Arc::new(crate::store::durable::CommitSignal::default());
+        let commits = Arc::new(CommitSignal::default());
 
-        let health = Arc::new(crate::store::durable::PersistHealth::default());
+        let health = Arc::new(PersistHealth::default());
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
@@ -329,18 +329,14 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                 health: health.clone(),
                 on_giveup: config.on_persist_failure.clone(),
             },
-            move || -> Result<(), String> {
+            move || -> StorageResult<()> {
                 // Read the generation before serializing. A write landing during
                 // the persist bumps it past this, so it stays pending instead of
                 // being marked saved without having been written.
                 let saving = writes_debounce.load(Ordering::Acquire);
-                match files_debounce.persist() {
-                    Err(e) => Err(format!("{e:#}")),
-                    Ok(()) => {
-                        persisted_debounce.store(saving, Ordering::Release);
-                        Ok(())
-                    }
-                }
+                files_debounce.persist()?;
+                persisted_debounce.store(saving, Ordering::Release);
+                Ok(())
             },
         );
 
@@ -808,8 +804,8 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         self.inner.unsubscribe(id)
     }
 
-    fn flush_async(&self) -> crate::store::durable::Commit {
-        let commit = crate::store::durable::Commit::awaiting(self.inner.commits.clone());
+    fn flush_async(&self) -> Commit {
+        let commit = Commit::awaiting(self.inner.commits.clone());
         self.inner.debouncer.flush_now();
         commit
     }
@@ -843,7 +839,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
 ///
 /// How long each of the two steps is worth is [`FileWritePolicy`], because what
 /// is holding the file is the application's business and not this function's.
-fn persist_atomic(path: &Path, content: &str, policy: FileWritePolicy) -> std::io::Result<()> {
+fn persist_atomic(path: &Path, content: &str, policy: FileWritePolicy) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -878,7 +874,7 @@ fn persist_atomic(path: &Path, content: &str, policy: FileWritePolicy) -> std::i
 
 /// The contents in a file of their own, beside the target and already on the
 /// disk.
-fn write_temp(dir: &Path, content: &str) -> std::io::Result<NamedTempFile> {
+fn write_temp(dir: &Path, content: &str) -> io::Result<NamedTempFile> {
     let mut tmp = NamedTempFile::new_in(dir)?;
     tmp.write_all(content.as_bytes())?;
     tmp.as_file().sync_all()?;
@@ -1021,12 +1017,12 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
     let mut old_nodes = Vec::new();
     scan_prefix_recursive(old, &[], "", &mut old_nodes, None)
         .attach("reading the document as it was before the edit")?;
-    let old_map: std::collections::HashMap<String, D::Node> = old_nodes.into_iter().collect();
+    let old_map: HashMap<String, D::Node> = old_nodes.into_iter().collect();
 
     let mut new_nodes = Vec::new();
     scan_prefix_recursive(new, &[], "", &mut new_nodes, None)
         .attach("reading the document as it is on disk")?;
-    let new_map: std::collections::HashMap<String, D::Node> = new_nodes.into_iter().collect();
+    let new_map: HashMap<String, D::Node> = new_nodes.into_iter().collect();
 
     let mut events = Vec::new();
 

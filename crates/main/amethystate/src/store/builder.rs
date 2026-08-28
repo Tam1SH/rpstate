@@ -190,8 +190,9 @@ pub enum Layout {
 }
 
 impl Layout {
-    /// What [`Location::app`] picks: [`Layout::ProjectDirs`] where the
-    /// compatibility feature is on, and [`Layout::App`] otherwise.
+    /// What [`Location::app`] picks: `ProjectDirs` where the compatibility
+    /// feature is on - it exists only there, so this cannot be a link - and
+    /// [`Layout::App`] otherwise.
     pub const fn default_for_build() -> Self {
         #[cfg(feature = "confy-compat-0-6")]
         {
@@ -439,17 +440,33 @@ impl StoreBuilder {
         self
     }
 
-    /// Runs once per failing streak, with a rendered reason, when a flush
-    /// has been failing for longer than the retry budget - after any write
-    /// awaiting that flush has been told it failed.
+    /// Runs once per failing streak, with the failure, when a flush has been
+    /// failing for longer than the retry budget - after any write awaiting
+    /// that flush has been told it failed.
     ///
     /// What it returns decides what writers see from then until a flush
     /// lands: an error each ([`AfterGivingUp::Fail`], the default without a
     /// callback), nothing at all ([`AfterGivingUp::Ignore`]), or a panic
     /// ([`AfterGivingUp::Poison`]).
+    ///
+    /// ```no_run
+    /// # use amethystate::store::builder::StoreBuilder;
+    /// # use amethystate::store::config::AfterGivingUp;
+    /// # use amethystate::store::StorageError;
+    /// let store = StoreBuilder::new("./settings")
+    ///     .on_persist_failure(|failure| match failure.current_context() {
+    ///         // A value this format cannot hold will not become writable by
+    ///         // being tried again in five seconds.
+    ///         StorageError::Codec => AfterGivingUp::Poison,
+    ///         // A full disk is usually someone deleting something.
+    ///         _ => AfterGivingUp::Ignore,
+    ///     })
+    ///     .build()?;
+    /// # Ok::<(), error_stack::Report<StorageError>>(())
+    /// ```
     pub fn on_persist_failure<F>(mut self, callback: F) -> Self
     where
-        F: Fn(&str) -> AfterGivingUp + Send + Sync + 'static,
+        F: Fn(&Report<StorageError>) -> AfterGivingUp + Send + Sync + 'static,
     {
         self.config.on_persist_failure = Some(Arc::new(callback));
         self
