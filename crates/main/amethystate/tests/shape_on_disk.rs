@@ -6,9 +6,12 @@
 //! was built from the same source knows the shape, which is the thing the
 //! migration track is trying to stop being true.
 
+#[cfg(feature = "redb")]
 use amethystate::migration::fields::Role;
+#[cfg(feature = "redb")]
 use amethystate::observability::InspectorBackend;
 use amethystate::store::builder::StoreBuilder;
+#[cfg(feature = "redb")]
 use amethystate::store::meta::{SchemaSnapshot, StoredFieldEntry};
 use amethystate::{ReactiveMap, amethystate};
 use amethystate_core::test_utils::TempPath;
@@ -37,8 +40,31 @@ pub struct NetPart {
     pub proxy: Option<String>,
 }
 
+/// Recording the shape reads the file's own snapshot back and writes it again,
+/// so an engine whose codec cannot carry some part of it fails on the second
+/// open - which is how a `Role` that serialises as a variant took `ron` out
+/// entirely, since a `ron::value::Value` has nowhere to put one.
+///
+/// This is the half that runs on every engine. Reading the recorded shape apart
+/// needs the inspector, and that is redb-only below.
+#[test]
+fn the_recorded_shape_survives_this_engines_codec() {
+    let path = TempPath::new("shape_codec");
+
+    {
+        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let _state = Recorded::new_with(&store).unwrap();
+        store.save_now().unwrap();
+    }
+
+    StoreBuilder::new(path.path())
+        .build()
+        .expect("the shape this engine wrote must read back through the same codec");
+}
+
 /// Written by one store, read by another that only has the file - which is the
 /// claim being tested.
+#[cfg(feature = "redb")]
 fn snapshot_of(path: &TempPath) -> SchemaSnapshot {
     {
         let store = StoreBuilder::new(path.path()).build().unwrap();
@@ -62,6 +88,7 @@ fn snapshot_of(path: &TempPath) -> SchemaSnapshot {
         .expect("no snapshot was written for the declared prefix")
 }
 
+#[cfg(feature = "redb")]
 fn field<'a>(fields: &'a [StoredFieldEntry], name: &str) -> &'a StoredFieldEntry {
     fields
         .iter()
@@ -69,6 +96,7 @@ fn field<'a>(fields: &'a [StoredFieldEntry], name: &str) -> &'a StoredFieldEntry
         .unwrap_or_else(|| panic!("no field named {name} in the snapshot"))
 }
 
+#[cfg(feature = "redb")]
 #[test]
 fn the_snapshot_records_what_each_path_is() {
     let path = TempPath::new("shape_on_disk");
@@ -85,6 +113,7 @@ fn the_snapshot_records_what_each_path_is() {
     assert_eq!(field(&snapshot.fields, "widths").shape.role, Role::Map);
 }
 
+#[cfg(feature = "redb")]
 #[test]
 fn a_level_records_what_lives_under_it() {
     let path = TempPath::new("shape_on_disk_nested");
@@ -103,6 +132,7 @@ fn a_level_records_what_lives_under_it() {
 
 /// A leaf writes no `children` key, because most paths are leaves and a
 /// document a person reads should not carry an empty list on every one.
+#[cfg(feature = "redb")]
 #[test]
 fn a_leaf_does_not_write_an_empty_list_of_children() {
     let path = TempPath::new("shape_on_disk_leaf");
@@ -111,6 +141,6 @@ fn a_leaf_does_not_write_an_empty_list_of_children() {
     let rendered = serde_json::to_string(&field(&snapshot.fields, "port")).unwrap();
     assert_eq!(
         rendered,
-        r#"{"name":"port","type_name":"u16","shape":{"role":"Field","optional":false}}"#
+        r#"{"name":"port","type_name":"u16","shape":{"role":"field","optional":false}}"#
     );
 }

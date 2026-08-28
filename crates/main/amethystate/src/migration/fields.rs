@@ -6,7 +6,10 @@ use crate::store::StorageResult;
 /// Not what the value is - that is the value's business and the disk's. This
 /// says whether the path holds one value, or is the level a map's entries sit
 /// under, or is only a level on the way to other declared paths.
+/// Written as a string rather than as a variant, because a `ron::value::Value`
+/// has nowhere to put a unit variant and refuses to read one back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(into = "&'static str", try_from = "String")]
 pub enum Role {
     /// One value lives here. Anything under it in a document is the inside of
     /// that value, not a path.
@@ -25,6 +28,33 @@ impl Role {
     /// answer.
     pub const fn same(self, other: Self) -> bool {
         self as u8 == other as u8
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Role::Field => "field",
+            Role::Map => "map",
+            Role::Node => "node",
+        }
+    }
+}
+
+impl From<Role> for &'static str {
+    fn from(role: Role) -> Self {
+        role.as_str()
+    }
+}
+
+impl TryFrom<String> for Role {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        match name.as_str() {
+            "field" => Ok(Role::Field),
+            "map" => Ok(Role::Map),
+            "node" => Ok(Role::Node),
+            other => Err(format!("no such role: {other}")),
+        }
     }
 }
 
