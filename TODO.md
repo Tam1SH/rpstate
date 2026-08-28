@@ -1832,6 +1832,63 @@ power cut, so it covers only the case an application can already handle with
 one line, and none of the cases where data is actually lost. Other threads keep
 running while its handlers do.
 
+## The debouncer is an event loop, and is not written as one
+
+It has a thread, a channel, a typed event (`Trigger::{Schedule, Now}`), timers,
+a lifecycle (shutdown by channel close, join on drop, liveness by condvar,
+failure by mutex poisoning), and injected policy. That is not a debouncer with
+extras; debouncing is one of its features.
+
+The structure that gives it away: **three loops read the same channel and read
+the same event differently.**
+
+- `rx.recv()` - the outer loop. `Now` means run immediately; `Schedule` means
+  enter the quiet period.
+- `rx.recv_timeout(interval)` - the quiet period. `Schedule` means start over;
+  `Now` means stop waiting.
+- `rx.recv_timeout(retry.interval)` inside `run_with_retry` - the failing
+  streak. Here the event's identity is **thrown away**: the code matches only
+  `Err(Disconnected)` and ignores what a delivered trigger was.
+
+So a `flush_now()` arriving while a flush is failing is consumed and lost. It
+does not queue, and it does not mean "run now" - it shortens one sleep, and the
+caller's request no longer exists. Same for a `schedule()` during a streak.
+
+Two variants stopped being enough some time ago, and the shape hides it: an
+event whose meaning depends on which nested loop happens to be running is a
+state machine with the states left implicit. Written as what it is - one loop,
+one place that reads the channel, an explicit state enum, timers as part of the
+state - the swallowed trigger stops being possible to write.
+
+This is the same subject as the entry above on shutdown states, from the other
+end: that one says the lifecycle needs states it does not have, this one says
+the loop already has states it does not name.
+
+## `set_owned` takes ownership nothing wants, and costs a clone to say so
+
+`set_owned`, `set_owned_with_source` and `set_owned_erased` take
+`path: StorePath` by value. Every implementation of them borrows it and no more:
+the default is `self.set(&path, value)`, `text/store.rs:803` is
+`self.inner.set_erased_inner(&path, ..)`, and the two engine implementations
+that do real work use `&path` throughout. The ownership dies at the boundary
+below them anyway - `set_raw_pending` takes `key: &str` and rebuilds an
+`Arc<str>` from it.
+
+The by-reference API then delegates to the by-value one by cloning:
+`redb/mod.rs:549` and `sqlite/mod.rs:265` are `self.set_owned_erased(path.clone(),
+..)`, and so are `field_ops.rs:26` and `field_ops_async.rs:29`. So the variant
+that exists to avoid a clone is reached by making one, to be borrowed at the
+other end.
+
+`StorePath::clone` is a refcount bump, so this costs nothing measurable. It
+costs a second spelling of every write entry point, and it points the wrong way:
+the reader of the two signatures concludes ownership is used somewhere.
+
+Delete the `_owned` family; everything takes `&StorePath`. It becomes worth
+having again the moment something downstream can accept ownership - which is
+exactly what `Pending` keyed by `StorePath` would be, in the entry above on the
+write buffer. Reintroduce it then, with a consumer.
+
 ## `.pipe()` keeps its sources alive with two of them and drops them with one
 
 `IntoPipeline for R: Reactive<T>` (`core/primitives/pipeline.rs:250`) subscribes
@@ -1873,6 +1930,35 @@ the value it started with.
 
 That a bare `SignalSubscription` does not keep its source alive is still a real
 choice and still undocumented.
+
+## `fork` is documented as a moment, and it is not one
+
+`reactive/field.rs:100` says provenance travels with the id, that "a fork is how
+you deliberately look like someone else", and that `Clone` keeps the id so a
+clone stays the same actor. Two things are wrong with that.
+
+**It puts the event in the wrong place.** Nothing happens at `fork()` beyond
+minting a `Uuid`. The id is stamped on *every write* as its source and compared
+*at every delivery* by `Watch::external`. Neither the original nor the fork
+changes at the moment of forking - the doc reads as though the distinction is
+created there, and a reader looking for where the filtering lives will not find
+it in `fork_with_id`.
+
+**It is asymmetric about a symmetric thing.** "Look like someone else" makes the
+fork sound like a disguise the original wears. A subscription on the fork
+equally does not hear the fork's own writes and does hear the original's.
+Neither is the real one.
+
+What is actually wanted, in the owner's words, is that **writes are ignored by
+the handle that made them** - self-echo suppression. That is `external()`, and
+it works. `fork` is the odd half: it exists so a handle's writes *do* come back
+to another handle watching the same path, which is a real need when two widgets
+sit on one field, but "make a second identity" is a roundabout way to spell it.
+
+To rework, not to patch: whether the API should say the thing directly rather
+than through minting ids, and whether the pair `clone`/`fork` is the right shape
+for it at all. The documentation should not be corrected in place before that is
+decided, or it will be written twice.
 
 ## `SignalSubscription` is `Clone`, and dropping any clone cancels the original
 
@@ -2032,6 +2118,427 @@ at 364 ms. The async twins are live; the sync four are not.
   `KeyNotFound` is in the same enum.
 - The README's headline example does not compile: `amethystate::Result` does not
   exist.
+
+## Measured: one `Arc` around many is a win, one `Arc` around one is a loss
+
+Two handles had the same shape - a struct behind an `Arc` - and the same
+question: does the wrapper earn the allocation and the pointer hop it charges on
+every access? The answer came out opposite for the two, and the reason is only
+visible once you count what is inside.
+
+`PipelineInner` held `signal: Arc<Signal<T>>`. `Signal` is already
+`Arc<ArcSwap<T>>` plus `Arc<subscribers>` - so the inner `Arc` bought a bump
+instead of two, and charged an allocation per pipeline and a hop on every read.
+Removed: `signal: Signal<T>`.
+
+`ReactiveMap` is `Arc<MapInner>`, and `MapInner` is a seven-`Arc` core, a
+`StorePath`, a `Uuid`, a `Store`, and a subscription (144 bytes). `StorePath`
+does not allocate on clone - `Segments` is a `&'static` slice or an
+`Arc<[Arc<str>]>` - so every field is cheap, which is what made the question
+worth asking. But cheap ten times is not cheap once.
+
+The first measurement was worthless and said so: one handle in a loop put both
+shapes in L1, and the hop came out at 0.62 ns against 0.67 ns. Two cycles either
+way. A pointer you just dereferenced is free to dereference again, so that
+number was about the L1 latency and not about the wrapper.
+
+So `map_handle_shape_cold`: 200 000 distinct handles, a 28 MiB working set, a
+fixed random permutation. Per handle:
+
+| | wrapped | flat | the wrapper's share |
+| --- | --- | --- | --- |
+| clone | **58.9 ns** | 229.1 ns | -170.2 ns |
+| read a field, independent | 17.5 ns | 15.2 ns | +2.3 ns |
+| read a field, dependent chase | 136.6 ns | 93.7 ns | +42.9 ns |
+
+The two read rows are the same access with the memory parallelism taken away.
+Walking a permutation leaves the iterations independent, so the processor has
+many misses in flight and the second load hides behind them: +2.3 ns. Taking the
+next index out of the field just read serialises everything, and the hop pays
+full dependent latency: +42.9 ns, a 1.46x read.
+
+The clone row is the largest number in the table and it decides nothing, because
+a handle is not cloned on any hot path. Inside the library the only clone is
+`Watch::new(self.clone())`, once per watch; the rest are tests. In an
+application a handle is cloned into a closure or a widget at setup and then read
+for the life of the program. Amortised over that, 170 ns is not a quantity.
+
+The cold rows are the real ones, and the hot row is the fiction. Nothing reads a
+handle in a tight loop: an application reads it, lays out, draws, allocates, and
+comes back a frame later, by which time everything else has been through the
+cache. And the access it makes is a dependent chain of exactly this shape -
+walk the widget tree, load the pointer, load `Parts`, load the field. So the
+honest figure is not +2.3 ns but something approaching +42.9.
+
+Which settles it by being small. A hundred handles, first-touched once each per
+frame, is 4 us out of 16 ms - 0.025% of the budget.
+
+And the other side of the ledger is the same size with the opposite sign: 8
+bytes against 144, at rest. A handle is rarely copied but constantly *held* - in
+every closure that captures one, every `Vec` of widgets, every struct with a
+field - and 144-byte handles evict whatever else wanted those lines, including
+code. A closure capturing the flat shape is boxed under `Arc<dyn Fn>` anyway:
+the same allocation and the same hop as the wrapper, one per closure instead of
+one per map.
+
+Two effects of the same order, pointing opposite ways, both under a tenth of a
+percent of a frame. **It is a tie, and there is nothing further to measure
+here.** Keep the `Arc`, because changing the shape buys none of this and costs
+the churn. `Field`'s `Arc<FieldInner>` stays for the same non-reason.
+
+The rule worth keeping is the one about the other case: one `Arc` in front of
+one `Arc` holds nothing extra and replaces no refcount, so it is a loss with no
+compensating side - which is why `PipelineInner` lost its and this one keeps
+its.
+
+## Measured: the projection is a hash map, and every ordered question pays for it
+
+`ReactiveMapCore::cache` is a `DashMap`, so `keys()` and `entries()` have to
+build the order before they can answer. Per call, at any size: a `to_string()`
+for every entry, then a sort whose comparator is `cmp_names`, which escapes both
+sides again on every comparison. Nothing is memoised, so two identical calls
+with no write between them do all of it twice.
+
+`benches/map_cache_shape.rs` puts the same questions to four shapes: the
+`DashMap` as it stands; a `BTreeMap` keyed by the name with `Ord` delegating to
+`cmp_names`; a `BTreeMap` keyed by the *escaped* name, where the tree's order is
+the contract's order by construction; and that last one under a `Mutex` instead
+of an `RwLock`. The order in the contract is not `K: Ord` - it is the order of
+the escaped name, so that a map lists its entries the way a scan lists the keys
+they become. A tree keyed by `K` would still have to sort.
+
+Point operations, per operation:
+
+| | get 10 | get 1k | get 100k | update 100k | len |
+| --- | --- | --- | --- | --- | --- |
+| `DashMap` | **38 ns** | **37 ns** | **91 ns** | **164 ns** | 597 ns |
+| escaped tree, `RwLock` | 64 ns | 157 ns | 759 ns | 1116 ns | 13.6 ns |
+| escaped tree, `Mutex` | 64 ns | 160 ns | 633 ns | 971 ns | **9.3 ns** |
+| name tree, `Ord = cmp_names` | 568 ns | 1438 ns | 3079 ns | 2939 ns | 13.6 ns |
+
+Ordered operations, per call:
+
+| | keys 100k | entries 100k | 50 of 1k | 50 of 100k |
+| --- | --- | --- | --- | --- |
+| `DashMap` | 175.8 ms | 184.5 ms | 1.03 ms | 186.7 ms |
+| escaped tree | 11.0 ms | 10.8 ms | **3.1 us** | **3.0 us** |
+
+Four threads, per operation:
+
+| | readers 1k | readers 100k | 3 readers + 1 writer, 100k |
+| --- | --- | --- | --- |
+| `DashMap` | **24 ns** | **46 ns** | **58 ns** |
+| escaped tree, `RwLock` | 106 ns | 182 ns | 591 ns |
+| escaped tree, `Mutex` | 379 ns | 1232 ns | 1231 ns |
+
+What the numbers say:
+
+- **A window costs the whole map.** Fifty rows out of a hundred thousand:
+  186.7 ms against 3.0 us, five orders of magnitude, because the hash map has to
+  sort everything to know which fifty come first. And there is no windowed API
+  to make it otherwise - `entries()` returns an iterator, so a table draws its
+  fifty rows with `entries().take(50)` and pays for all hundred thousand. Eleven
+  frames for one scroll.
+- **`len()` is not what its doc says.** "Answered from the map's projection, so
+  it is a counter read rather than a scan" - it is a scan: `DashMap::len` sums
+  every shard and locks each one, 597 ns against 9 ns for a tree.
+- **`DashMap` has a floor no small map can get under.** Any ordered call
+  iterates all shards rather than all entries, so `keys()` on a *ten*-entry map
+  costs 8.7 us against 0.63 us. The common size is where the ratio is 14x.
+- **Keying a tree by the name is dead on arrival.** 568 ns for a `get` at ten
+  entries, because every comparison in every descent escapes both sides. If a
+  tree, then keyed by the escaped form; the other fork is closed.
+- **The lock flips with concurrency.** Single-threaded the `Mutex` is slightly
+  ahead (633 ns against 759); at four readers the `RwLock` is 6.8x ahead. Any
+  tree here wants the `RwLock`.
+
+The point-operation column looks like the argument against a swap, and it is
+not, because the two columns are not in the same unit. The regression is
+nanoseconds on an operation; the win is milliseconds on a call. Priced against
+each other - how many point reads must a frame make before the slower `get`
+costs back one ordered call:
+
+| entries | `get` regression | one ordered call wins back | break-even |
+| --- | --- | --- | --- |
+| 100k | +668 ns | 186.7 ms | **279 000 gets/frame** |
+| 1k | +120 ns | 1.03 ms | **8 600 gets/frame** |
+| 10 | +26 ns | 8.1 us | 312 gets/frame |
+
+At a hundred thousand entries an application would have to read every key three
+times per frame before the trade turned. Under four threads it is the same
+answer: +533 ns against 186.7 ms, 350 000 operations. The tree wins, and not
+narrowly.
+
+So: **`RwLock<BTreeMap<Escaped, (K, V)>>`.** One structure, with the order as
+its invariant rather than as something maintained beside it.
+
+The hybrid - `DashMap` for values, `RwLock<BTreeSet<Arc<str>>>` of escaped names
+for the order - keeps the 91 ns read as well. That is not a reason to build it.
+Six hundred and sixty-eight nanoseconds is not a quantity this library can spend
+complexity on when the number next to it is three orders of magnitude larger;
+the two do not belong on the same page. What it would cost is a second source of
+truth about which keys exist, agreeing with the first on every insert, remove,
+clear and rollback - which is the failure this project keeps finding by other
+routes. Not a design, and not a deferred optimisation either.
+
+Two things are worth doing whichever structure wins:
+
+- **Sorting by a precomputed key.** Most of the 175.8 ms is `cmp_names`
+  re-escaping 1.7 million times. `Vec<(escaped, k)>` sorted on `memcmp` is
+  roughly 10x, needs no structural change, and is the right stopgap if the swap
+  is not next.
+- **A windowed read on `ReactiveMap`.** There is none, so a table draws fifty
+  rows with `entries().take(50)` and materialises everything - the iterator
+  cannot know it will be truncated. The tree makes a window cheap; only an API
+  that expresses one lets anybody have it.
+
+## The write buffer takes a `&str`, and pays for it three times
+
+`pending_prefix` open-codes a predicate that is already written twice in the
+same file:
+
+```rust
+let prefix_dot = format!("{}.", prefix);
+pending.iter().filter(|(k, _)| k.starts_with(&prefix_dot) || &***k == prefix)
+```
+
+`subtree_bound` is `format!("{}.", prefix.as_str())` under an `is_root` guard,
+and `is_under` is `key == prefix || key.starts_with(bound)`. This is both of
+them again, with `is_root` replaced by `prefix.is_empty()`.
+
+It agrees with them today, so nothing is wrong on disk. What is wrong is that it
+cannot be *kept* agreeing: the fixes to `is_under` and to the upper bound this
+release went to the callers that call those functions, and went past this one,
+which calls neither. A third copy of a subtree predicate in a library whose
+subtree predicate has already been wrong twice.
+
+The `&str` parameter is the cause of all of it, not a detail of it:
+
+- Rootness has to be recovered from an empty string, so the code depends on
+  `StorePath::root().as_str()` being empty - true, and written down nowhere.
+- The bound has to be rebuilt, because a `&str` cannot be asked for one.
+- `set_raw_pending` does `Arc::from(key)` on **every write**: an allocation and
+  a copy of a string the caller already holds inside a `StorePath`, whose
+  `Joined::Owned` is an `Arc<str>` of exactly those bytes. The `Arc` in
+  `Pending`'s key is not sharing anything - it is a second copy of what was
+  discarded at the parameter.
+
+`StorePath` already has `Hash`, `Eq` and `Ord`, so `Pending` can be
+`HashMap<StorePath, PendingOp>` and all three go at once: no re-derived
+predicate, no rebuilt bound, no allocation per write, and `is_root` asked of the
+thing that knows.
+
+## 401 attachments, and the same fact spelled four ways
+
+Audited every `.attach` / `.attach_with` in the workspace: **401 sites across 35
+files**, led by `redb/mod.rs` (68), `text/store.rs` (49) and `sqlite/mod.rs`
+(41).
+
+The pattern is not missing - it is written three times and shared none of them.
+`Attempted::doing` (`store/backend/utils.rs:14`) is the one real extension
+trait; `Bookkeeping` (`redb/migration.rs:38`) is a second, used in that file and
+nowhere else; `store()` (`redb/migration.rs:25`) and `at()` (`sqlite/mod.rs:34`)
+are free functions doing a third of the same job.
+
+### The drift
+
+**The store's own path has four labels for one value, across ~46 sites.**
+`doing` stamps `file:`. `store()`, `at()` and `Bookkeeping` all stamp `store:`.
+`text/store.rs` also has `meta file:`, `backup:`, `watching:`. This is not
+cosmetic: a report crossing both - a `redb/mod.rs:378` frame wrapping a
+migration that went through `redb/migration.rs:58` - carries **the same path
+twice under two names**, which reads as two different files. `redb/mod.rs:202`
+is the lone `file:` in a file that says `store:` twelve times.
+
+**The key has five**: `key:` (36 sites), `node:` (14), `meta node:` (9),
+`stored key:` (9), `path:` (7), `field:` (6). `node:` for a text document is
+defensible; `path:` at `traits.rs:233` and `key:` at `redb/mod.rs:404` are the
+same `StorePath` on the same read path.
+
+**A scan's progress has six**: `buffered entries:` / `buffered changes:` /
+`entries read so far:` / `keys read so far:` / `rows read:` / `keys read:`. The
+redb and sqlite pairs differ only by ` so far`.
+
+Bytes have three wordings, type names three labels (`as:` / `into:` / `from:`,
+where `as:` and `into:` name the same thing), and `kv.rs` disagrees with itself
+about the article: `"committing kv write"` at `:578` against `"committing a kv
+write"` at `:595` - the sync and async twins of one method.
+
+Only `prefix:` is clean: 32 sites, one spelling.
+
+### Wrong as written
+
+- **`sqlite/inspector.rs:28,37,44,49` hardcode `"table: schema_snapshot"`** as a
+  string literal. The redb sibling derives it from `TABLE_SCHEMA_SNAPSHOT.name()`
+  (`redb/inspector.rs:35,42`). Rename the table and these four attachments
+  become false with nothing to catch it - and they are the only `table:` in the
+  workspace not derived from the definition. The same four sites **never attach
+  the store path at all**, where redb attaches it on all six equivalents.
+- **`sqlite/mod.rs:343` builds `range` eagerly**, on the success path, then
+  passes it as `.attach_with(|| range.clone())` four times. The laziness buys
+  nothing, one `format!` runs per scan whether or not anything fails, and each
+  use adds a clone. It is also the only attachment carrying its own label inside
+  a pre-built string, so it is invisible to a grep for any of the shapes above.
+- **`redb/mod.rs:352` does `.attach(format!("{failed:#}"))`** on a
+  `Report<StorageError>`, flattening its frames, attachments and backtrace into
+  one unlabelled string. `error_stack` can carry it as a nested frame instead.
+- **A label carrying two facts**: `redb/mod.rs:499` `"key: {path} (unflushed)"`,
+  `context.rs:322` `"stored key: {scoped}, {n} bytes"` (whose own sibling eleven
+  lines up attaches the key alone), `traits.rs:31` `"map: {path}, key: {key}"`.
+- **`error.rs:70` `.attach(why)`** - a bare unlabelled `String`, in a workspace
+  where every other attachment is `label: value`, and the doc above it says this
+  sentence is the only thing separating a filter's refusal from an interceptor
+  recursion bug.
+- **`text/store.rs:853`** attaches `prefix:` to `save_now`, which renders and
+  replaces the whole document. The prefix took no part in what failed.
+- **`json_doc.rs:69`, `ron_doc.rs:83`, `toml_doc.rs:71`** attach
+  `"node: the document root"`, where `node:` carries a path at all fourteen
+  other sites - so it reads as a node literally named that.
+
+### Missing next to its own siblings
+
+`redb/mod.rs:736` is the one of three sibling scan loops with no progress
+counter. `sqlite/mod.rs:135` attaches `prefix:` where the commit seven lines
+below adds the buffered count too. `text/store.rs:576,580` omit the old-value
+sentence both other engines attach on delete. `cell.rs:359` is the only
+`committing a … write` in its family with no path. And
+`map_ops_async.rs:284`'s `"clearing map entry: {key}"` has no sync counterpart -
+which may be a missing attachment or may be the async clear iterating entries
+the sync one does not; worth settling either way.
+
+### The structural fault, of which the drift is a symptom
+
+All 401 attachments are `String`. `error-stack` is 0.8 here, which has
+`request_ref::<T>()`, `request_value::<T>()` and `downcast_ref::<T>()`, and
+whose `Attachment` bound is only `Display + Debug + Send + Sync + 'static`. So
+every fact this library knows about a failure is flattened into the one type
+that cannot be asked anything: `downcast_ref::<String>()` cannot tell a key from
+a table name from a byte count.
+
+That is why it is unclear what context an error carries. Two frames saying
+`key:` are two strings - the same key attached twice by two layers that each
+thought it was theirs, or two different keys at two levels, and nothing
+distinguishes those. Duplicates are not merely possible along the flow; they are
+indistinguishable from non-duplicates.
+
+Type the facts instead of formatting them:
+
+```rust
+struct StoreFile(PathBuf);
+struct Key(StorePath);
+struct Prefix(StorePath);
+struct Table(&'static str);
+```
+
+- The label lives in one `Display` per fact, so `file:` against `store:` stops
+  being a choice anybody can make twice. The naming question does not get
+  settled, it stops existing.
+- `request_ref::<Key>()` enumerates every `Key` in the stack, so a duplicate
+  becomes something to count, collapse at render, or **assert in a test** -
+  "a report off this path carries exactly one `StoreFile` and one `Key`" is
+  currently not expressible.
+- Ownership of a fact becomes sayable: `StoreFile` is the engine's, `Key` and
+  `Prefix` are the store's, `Map` and `Entry` are the map layer's. Today every
+  layer attaches whatever is in scope, because nothing says whose it is.
+
+Nothing is lost in print: 0.8's `attach` is the printable one - `attach_opaque`
+is the silent variant - so typed attachments render as they do now.
+
+### The shape to add
+
+The same change as the helpers, not a second one: chainable methods beside
+`doing` in `store/backend/utils.rs` that construct those types rather than
+`format!` strings - `.key()`, `.prefix()`, `.table()`, `.bytes()`,
+`.read_so_far()`, `.buffered()`. Then C1, the write loop's `doing` + table + key
++ bytes (nine sites in `redb/mod.rs:83-104` and `sqlite/migration.rs`), is one
+line, and the six counter wordings become one type. A second trait over
+`Result<T, Report<C>>` that attaches without changing context covers the map and
+type facts outside the storage crate.
+
+Promote `Bookkeeping` out of `redb/migration.rs` and fold `store()` and `at()`
+into it; with the label on the type, that fold is what removes the ~46-site
+drift, and no word has to be chosen for it.
+
+Two duplications no helper fixes, found on the way:
+
+- `primitives_factory.rs:225-266` and `context.rs:358-382` are **the same
+  function written twice**, attachments included. Extract the body.
+- `text/store.rs:985` and `:1168` hand-write what `utils::stored_path` already
+  does - and the same file calls `stored_path` correctly at `:946` and `:987`.
+- `check_debouncer`'s refusal is three byte-identical bodies (`redb/mod.rs:216`,
+  `sqlite/mod.rs:161`, `text/store.rs:244`).
+
+## Measured: the scan's allocation is not what a scan costs
+
+A scan builds two sorted lists - what the engine holds and what the write
+buffer has over it - and `merge_buffered` asked the allocator for a third the
+size of both. At a hundred thousand entries that is megabytes on every call,
+and a table scans per frame, so it looked like the thing to remove.
+
+`benches/scan_merge_bench.rs` times the merge on its own, both ways, on the
+states a store is actually in. At a hundred thousand entries:
+
+| buffer | allocating | merged in place |
+| --- | --- | --- |
+| empty | 12.70 ms | 8.96 ms |
+| 32 entries | 14.35 ms | **12.86 ms** |
+| 32, half of them deletes | 14.50 ms | **12.88 ms** |
+| half the map | 23.06 ms | 24.57 ms |
+| the whole map | 12.59 ms | 15.78 ms |
+
+Two things had to be got right before those numbers meant anything, and the
+first attempt got neither:
+
+- The room has to be reserved by the caller. A `resize` inside the merge
+  reallocates and copies, which is the allocation it was avoiding - measured
+  as 9.6% *worse*, and read as "the idea does not work" until the reserve moved
+  to where it belonged and the same case came out 10.4% better.
+- The engine side being empty needs its own line. The backwards walk fills the
+  list with placeholders and overwrites them immediately, writing every entry
+  twice: 25% worse than collecting the buffer.
+
+**Decided: keep the allocation, keep the early return.** The in-place merge is
+about 10% of the merge, which is 4% of a scan. It buys that with a backwards
+walk whose correctness is the write head never overtaking the read head, a
+shift of the whole list at the end, two special cases, and an obligation on
+every caller to reserve first - and a caller that forgets makes it slower than
+what it replaced, silently, with the tests still green. The empty-buffer line
+is worth more than all of it (12.7 ms to 9.0) and costs one `if`.
+
+The bench keeps both algorithms so the figures stay checkable; the library
+keeps the simple one.
+
+### What the profile says, and what the arithmetic said wrongly
+
+Everything above is a difference between two rows of a criterion report. That
+is not evidence about where time goes, and a profile of the same benchmark
+(`samply record -- scan_merge_bench --bench --profile-time 10 "…/32 buffered/100000"`,
+47 000 samples) says the differences were being read out of a run that mostly
+does something else:
+
+| module | share | what is in it |
+| --- | --- | --- |
+| the bench itself | 48.8% | criterion's `iter_batched` 21.5, cloning the input in setup 16.5, **the merge 6.5**, path comparisons 1.2 |
+| `ntdll.dll` | 26.2% | `RtlFreeHeap` 10.3, heap internals 13.1, `RtlAllocateHeap` 1.2 |
+| `vcruntime140.dll` | 16.6% | `memcpy` / `memmove` |
+| `ntoskrnl.exe` | 7.8% | the kernel |
+
+**The heap is 26% and `memcpy` is 17%; the merge's own code is 6.5%.** Another
+38% is scaffolding - criterion's harness and the setup clone - which the
+reported figures exclude but which shows how much of the run is not the subject.
+
+So the earlier readings here - "9 ms of a scan is freeing the answer", "the
+merge is 14% of a scan" - are withdrawn. They were subtraction over totals from
+a benchmark whose totals are mostly its own setup and the allocator.
+
+What the profile does support is the reason the container allocation could not
+have mattered: the time is in the heap and in `memcpy`, **per element**. Every
+pair owns memory - a `Vec<u8>` for the value, an `Arc<[Arc<str>]>` inside the
+path - so a hundred thousand entries is hundreds of thousands of allocations
+and frees. One allocation for the list they sit in is not in that league. That
+is also the shape of the answer for the map's missing window, one layer down:
+the cost is that a scan hands back every key and every value, each owning its
+own storage.
 
 ## Errors that reach nobody
 
@@ -2305,6 +2812,32 @@ writes for cost cannot tell which they have.
 
 Distinct from the `flush_prefix` entry at the top, which is about how much rides
 along with a prefix flush.
+
+### The two are not the same verb, which is why the pair cannot just be evened up
+
+`Durable::commit` and `commit_async` sit next to each other and read as one
+operation in two flavours:
+
+```rust
+sub.store().flush_prefix(&path)   // commit
+sub.store().flush_async()         // commit_async
+```
+
+They are not. `flush_prefix` **causes** a flush of one subtree. `flush_async`
+takes no prefix at all and, by its own documentation, rides on the flush the
+store was going to do anyway - it **waits for** a flush of everything. One
+commands and the other subscribes, and `StoreBackend` has no async door that
+takes a prefix, so the asymmetry cannot be removed by picking the other call.
+
+Which also means the fix is not "add `flush_prefix_async`" on its own: waiting
+for a flush that covers a particular prefix means either forcing one for that
+prefix (losing the batching the async form exists for) or tracking which prefixes
+the next flush will carry. That choice is the entry, not the missing method.
+
+Invisible on the text engines, where `flush_prefix` ignores its prefix and calls
+`save_now`, so both halves commit everything and agree by accident. It shows on
+redb and sqlite - the two engines where `Durable` means anything in the first
+place.
 
 ## Two flushes racing leave the older document on disk
 
