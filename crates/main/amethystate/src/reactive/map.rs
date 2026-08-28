@@ -852,6 +852,7 @@ mod tests {
 
     use super::*;
 
+    use crate::store::StorageError;
     use crate::test_utils::unique_store;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -1278,10 +1279,26 @@ mod tests {
         )
         .unwrap_err();
 
+        assert_eq!(
+            err.current_context(),
+            &StorageError::Codec,
+            "a key that is not an `i32` and a value that is not one are both the \
+             codec's refusal, not a read or an open failure"
+        );
+
+        // Two entries are unreadable at the new type - one by its key, one by
+        // its value - and which is met first is the scan's order, so either
+        // name will do. What must not do is a bare substring: `123` alone is
+        // satisfied by a line number or by the nanosecond stamp in the temp
+        // path, which is what this assertion used to accept.
         let report = format!("{err:?}");
         assert!(
-            report.contains("not_int_key") || report.contains("123"),
+            report.contains("entry: 123") || report.contains("entry: not_int_key"),
             "the report names the entry it could not read: {report}"
+        );
+        assert!(
+            report.contains("map: test.parse"),
+            "the report names the map the entry is in: {report}"
         );
     }
 

@@ -64,10 +64,18 @@ fn a_pipeline_spans_two_stores() {
     );
 }
 
-/// Dropping one store must not silence a pipeline that also reads the other -
-/// and must not silence the half that is still alive.
+/// A pipeline keeps every source it was built from, so one whose store the
+/// caller no longer holds is still read on the next recompute.
+///
+/// Nothing is dropped here, and the name used to say otherwise: the tuple
+/// `pipe` clones each source into its `refresh` closure and collects a
+/// keepalive besides, so the slow store outlives the block by construction and
+/// only the local binding goes. That is the behaviour worth pinning, and the
+/// assertion reaches it because a change on *any* source re-runs `refresh`,
+/// which calls `get` on *every* source - so `busy` in the result is the slow
+/// half being read after its binding is gone, not a cached string.
 #[test]
-fn dropping_one_store_leaves_the_other_half_alive() {
+fn a_pipeline_reads_a_source_whose_store_the_caller_dropped() {
     let fast_path = TempPath::new("two_stores_drop_fast");
     let slow_path = TempPath::new("two_stores_drop_slow");
 
@@ -99,6 +107,46 @@ fn dropping_one_store_leaves_the_other_half_alive() {
         "the surviving store's writes still reach the pipeline"
     );
     assert_eq!(line.get(), "busy:7");
+}
+
+/// The other half of the same claim, and the one the test above cannot make:
+/// the store whose binding went out of scope is not merely readable, it is
+/// still *live* - a write to it reaches the pipeline like any other.
+///
+/// The handle is kept and the store's own binding is not, which is how an
+/// application ends up here: a state struct built in a setup function, its
+/// fields handed out, the `Store` never held again.
+#[test]
+fn a_write_to_the_dropped_store_still_reaches_the_pipeline() {
+    let fast_path = TempPath::new("two_stores_live_fast");
+    let slow_path = TempPath::new("two_stores_live_slow");
+
+    let fast_store = StoreBuilder::new(fast_path.path()).build().unwrap();
+    let fast = Fast::new_with(&fast_store).unwrap();
+    let ticks = fast.ticks();
+
+    let (line, phase) = {
+        let slow_store = StoreBuilder::new(slow_path.path()).build().unwrap();
+        let slow = Slow::new_with(&slow_store).unwrap();
+        let phase = slow.phase();
+        let line = (ticks.clone(), phase.clone())
+            .pipe()
+            .map(|(ticks, phase)| format!("{phase}:{ticks}"));
+        (line, phase)
+    };
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = seen.clone();
+    let _sub = line.subscribe(move |v| seen_in.lock().unwrap().push(v.clone()));
+
+    phase.set("busy".to_string()).unwrap();
+    ticks.set(3).unwrap();
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec!["busy:0".to_string(), "busy:3".to_string()],
+        "a write to the store nobody holds any more was not delivered"
+    );
 }
 
 /// Composing is one half; not leaking into each other is the other. A

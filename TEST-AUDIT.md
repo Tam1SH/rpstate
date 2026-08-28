@@ -20,6 +20,40 @@ nothing the code could contradict.
 Marked `[verified]` where the claim was checked against the source or a run
 rather than taken from a report.
 
+## Fixed so far
+
+The entries below stay as written, because the reasoning is what makes each one
+checkable. This is what has been done about them.
+
+- **The scan boundary now has named tests.**
+  `tests/scan_stops_at_the_level_boundary.rs` - every engine by name, the
+  sibling characters listed rather than generated, and a flush before the scan
+  so it reaches the committed path. redb, json, toml and ron pass; the sqlite
+  module is `#[ignore]`d with the finding. The flush in conformance properties
+  6-10 and the fix in `sqlite/mod.rs` are still to do, in that order.
+- **`parallel_reads.rs`** names `Backend::Redb` and the whole file is gated on
+  that feature, since no other engine implements the setting. `opened_with`
+  asserts the store reports the setting it was asked for, so the builder
+  mutation named below now goes red - confirmed by making it.
+- **`reentrancy.rs`** - all three tests now assert the callback ran and its
+  write landed. An empty `notify` no longer passes.
+- **`primitives/signal.rs` `subscription_location_captured`** asserts the
+  captured line against `line!()`, so removing `#[track_caller]` goes red.
+- **`reactive/field.rs:930`** is `== 1` rather than `>= 1`.
+- **`reactive/map.rs:1282`** asserts `current_context() == Codec`, and the
+  substring is `entry: ...` rather than a bare `123` that a line number could
+  supply. Either entry name is accepted, because which is met first is the
+  scan's order - that part of the original `||` was right.
+- **`atomic_write.rs:35`** asserts the variant and drops the unreachable arm.
+- **`atomic_write.rs:66`** is replaced by
+  `a_write_that_landed_leaves_no_temporary_behind`, in a directory of its own,
+  which catches a deliberately leaked temporary - confirmed by leaking one.
+- **`two_stores_reactivity.rs:70`** is renamed to what it proves, its doc
+  corrected, and a second test added that writes to the store whose binding is
+  gone. On one point the audit overstated: a change on any source re-runs
+  `refresh`, which reads every source, so the assertion was not reading a stale
+  cache. `[verified]`
+
 ---
 
 ## Does not run at all

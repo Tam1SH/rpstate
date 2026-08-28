@@ -927,7 +927,11 @@ mod tests {
 
         assert!(field.get());
 
-        assert!(*call_count.lock().unwrap() >= 1);
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            1,
+            "one write, one notification - `>= 1` here let a double fire through"
+        );
         assert!(*last_val.lock().unwrap());
 
         let in_store: Option<bool> = store.get(&field_path).unwrap();

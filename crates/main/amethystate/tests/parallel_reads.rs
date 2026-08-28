@@ -8,12 +8,41 @@
 //! Sized past the point where the work is divided at all - below roughly a
 //! thousand entries neither setting splits anything, and a test under that
 //! would compare one code path with itself.
+//!
+//! redb by name, and only redb: `StoreBackend::parallel_reads` is implemented
+//! there and nowhere else, so every other engine takes the trait's `false` and
+//! both halves of these tests would run the same branch. Which is exactly the
+//! failure the paragraph above says the setting was chosen to avoid, and it
+//! was happening - the file named no backend, so under `--features json` it
+//! compared one code path with itself after all.
+
+#![cfg(feature = "redb")]
 
 use amethystate::store::StoreBackend;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 
 const ENTRIES: usize = 5_000;
+
+/// Opens with the setting asked for, and checks the store agrees it got it.
+///
+/// Without this a builder that dropped the setting on the floor would leave
+/// both halves sequential, agreeing perfectly.
+fn opened_with(path: &TempPath, parallel: bool) -> amethystate::Store {
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Redb)
+        .parallel_reads(parallel)
+        .build()
+        .unwrap();
+
+    assert_eq!(
+        store.parallel_reads(),
+        parallel,
+        "the store was asked for parallel_reads={parallel} and reports otherwise, \
+         so this test would be comparing one branch with itself"
+    );
+    store
+}
 
 fn key(i: usize) -> String {
     format!("k{i:05}")
@@ -24,7 +53,10 @@ fn both_settings_read_back_the_same_map() {
     let path = TempPath::new("parallel_reads");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(Backend::Redb)
+            .build()
+            .unwrap();
         let map = store.kv().map::<String, u64>("wide").unwrap();
         for i in 0..ENTRIES {
             map.insert(key(i), &(i as u64)).unwrap();
@@ -33,19 +65,13 @@ fn both_settings_read_back_the_same_map() {
     }
 
     let sequential = {
-        let store = StoreBuilder::new(path.path())
-            .parallel_reads(false)
-            .build()
-            .unwrap();
+        let store = opened_with(&path, false);
         let map = store.kv().map::<String, u64>("wide").unwrap();
         map.entries().collect::<Vec<_>>()
     };
 
     let parallel = {
-        let store = StoreBuilder::new(path.path())
-            .parallel_reads(true)
-            .build()
-            .unwrap();
+        let store = opened_with(&path, true);
         let map = store.kv().map::<String, u64>("wide").unwrap();
         map.entries().collect::<Vec<_>>()
     };
@@ -66,7 +92,10 @@ fn a_bad_entry_is_reported_either_way() {
     let path = TempPath::new("parallel_reads_bad");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(Backend::Redb)
+            .build()
+            .unwrap();
         let map = store.kv().map::<String, u64>("wide").unwrap();
         for i in 0..ENTRIES {
             map.insert(key(i), &(i as u64)).unwrap();
@@ -83,10 +112,7 @@ fn a_bad_entry_is_reported_either_way() {
     }
 
     for parallel in [false, true] {
-        let store = StoreBuilder::new(path.path())
-            .parallel_reads(parallel)
-            .build()
-            .unwrap();
+        let store = opened_with(&path, parallel);
 
         let failure = store
             .kv()

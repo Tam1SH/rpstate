@@ -135,12 +135,14 @@ pub const fn default_backend() -> Backend {
 /// [`default_backend`] picks the first one the build has:
 ///
 /// ```no_run
-/// use amethystate::store::builder::{Backend, Layout, StoreBuilder};
+/// use amethystate::store::builder::{Layout, StoreBuilder, default_backend};
 /// use amethystate::store::config::WriteAttempts;
 /// use std::time::Duration;
 ///
+/// // `Backend::Json` and the rest exist only where their feature is on, so an
+/// // example that has to compile under every one of them names none.
 /// let store = StoreBuilder::located(|at| at.app_under(Layout::Native, "my-app", "settings"))?
-///     .backend(Backend::Json)
+///     .backend(default_backend())
 ///     .debounce(Duration::from_millis(500))
 ///     .file_write(|w| w.replacing(WriteAttempts::times(20).apart(Duration::from_millis(250))))
 ///     .build()?;

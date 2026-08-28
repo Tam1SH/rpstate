@@ -12,6 +12,7 @@
 //! so in its `#[ignore]`, the way the `tamper_*` suite does.
 
 use amethystate::amethystate;
+use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use amethystate::store::config::{FileWritePolicy, WriteAttempts};
@@ -33,8 +34,13 @@ pub struct Held {
     pub b: u32,
 }
 
-/// A file the store cannot write must not take the process down, and must not
-/// leave the caller thinking the value landed.
+/// A path the store cannot use is refused where it is opened, and the refusal
+/// says which file and why.
+///
+/// The `Ok` arm this test used to carry - open, write, expect the flush to fail
+/// - was unreachable: with a directory on the store's own path every engine
+/// fails at `build`. What was left was a boolean and a substring search for the
+/// path, which any `Open` failure satisfies.
 #[test]
 fn a_path_that_cannot_be_written_is_reported() {
     let path = TempPath::new("atomic_unwritable");
@@ -44,59 +50,73 @@ fn a_path_that_cannot_be_written_is_reported() {
     // permission error.
     std::fs::create_dir_all(path.path()).unwrap();
 
-    match StoreBuilder::new(path.path()).build() {
-        Err(report) => {
-            let rendered = format!("{report:?}");
-            assert!(
-                rendered.contains(&path.path().display().to_string()),
-                "the report must name the file it could not use: {rendered}"
-            );
-        }
-        Ok(store) => {
-            let held = Held::new_with(&store).unwrap();
-            held.a().set(7).unwrap();
-            assert!(
-                store.save_now().is_err(),
-                "a flush that cannot write must say so rather than report success"
-            );
-        }
-    }
+    let report = StoreBuilder::new(path.path())
+        .build()
+        .expect_err("a directory where the store's file goes was opened as a store");
+
+    assert_eq!(
+        report.current_context(),
+        &StorageError::Open,
+        "a path that cannot be used is an open failure, not a read or a codec one"
+    );
+
+    let rendered = format!("{report:?}");
+    assert!(
+        rendered.contains(&path.path().display().to_string()),
+        "the report must name the file it could not use: {rendered}"
+    );
 }
 
-/// A temporary file left behind by a process that died mid-write is litter in
-/// the store's own directory. Opening again must not read it, trip over it, or
-/// refuse to start.
+/// A write that lands leaves no temporary file behind.
+///
+/// The whole document goes to a file of its own before replacing the target, so
+/// a write that finished must have moved that file rather than copied it. A
+/// leak here is quiet - the store keeps working, and the user's config
+/// directory fills up with `.tmpXXXXXX` a byte at a time.
+///
+/// This used to litter the directory with invented names and assert the store
+/// still opened, which proved nothing: no engine enumerates its own directory,
+/// it opens the path it was given. The litter could not have been noticed
+/// whatever the write path did.
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn a_leftover_temp_file_does_not_disturb_the_next_open() {
-    let path = TempPath::new("atomic_leftover");
+fn a_write_that_landed_leaves_no_temporary_behind() {
+    // A directory of its own. The temporary file `persist_atomic` makes is
+    // named by `NamedTempFile`, so it shares nothing with the store's own name
+    // and cannot be found by matching against it - only by having nothing else
+    // in the directory to confuse it with. The shared temp directory is where
+    // the rest of this file's stores live, and they write while this one does.
+    let base = TempPath::new("atomic_leftover");
+    let dir = base.path().with_extension("dir");
+    std::fs::create_dir_all(&dir).unwrap();
 
-    {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
-        let held = Held::new_with(&store).unwrap();
-        held.a().set(42).unwrap();
+    let store = StoreBuilder::new(dir.join("settings"))
+        .backend(common::text_backend())
+        .build()
+        .unwrap();
+    let held = Held::new_with(&store).unwrap();
+
+    for n in 0..8 {
+        held.a().set(n).unwrap();
         store.save_now().unwrap();
     }
 
-    let dir = path.path().parent().unwrap();
-    let stem = path
-        .path()
-        .file_name()
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
-        .to_string_lossy()
-        .to_string();
-    for litter in [
-        format!("{stem}.tmp"),
-        format!(".tmp{stem}"),
-        format!("{stem}~"),
-    ] {
-        std::fs::write(dir.join(litter), b"this is not a store").unwrap();
-    }
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|name| !name.starts_with("settings"))
+        .collect();
+    left.sort();
 
-    let store = StoreBuilder::new(path.path())
-        .build()
-        .expect("litter beside the store must not stop it opening");
-    let held = Held::new_with(&store).unwrap();
-    assert_eq!(held.a().get(), 42, "the store's own file is still the store");
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        left.is_empty(),
+        "eight writes left {left:?} beside the store; the temporary file is \
+         meant to become the target, not to accumulate next to it"
+    );
 }
 
 /// The text engines copy the data file to `.bak` on open, so a failed migration

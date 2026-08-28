@@ -1,7 +1,8 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -50,6 +51,15 @@ fn a_map_subscriber_may_write_to_the_map_it_watches() {
         });
 
         items.insert("a".to_string(), &1).unwrap();
+
+        // Without this the test says only that a synchronous call returned, and
+        // an empty `notify` would satisfy it - the callback that was supposed
+        // to deadlock simply never runs.
+        assert_eq!(
+            items.get("mirror"),
+            Some(99),
+            "the subscriber never ran, so nothing was reentered"
+        );
     });
 }
 
@@ -67,6 +77,12 @@ fn a_keyed_subscriber_may_write_to_the_map_it_watches() {
         });
 
         items.insert("a".to_string(), &1).unwrap();
+
+        assert_eq!(
+            items.get("mirror"),
+            Some(99),
+            "the keyed subscriber never ran, so nothing was reentered"
+        );
     });
 }
 
@@ -79,12 +95,22 @@ fn a_subscriber_may_add_another_subscription_while_being_notified() {
         let items = cfg.items();
 
         let nested = items.clone();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_in = ran.clone();
         let _sub = items.subscribe_any(move |_| {
             let extra = nested.subscribe_any(|_| {});
             drop(extra);
+            ran_in.fetch_add(1, Ordering::SeqCst);
         });
 
         items.insert("a".to_string(), &1).unwrap();
+
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "the subscriber never ran, so it never subscribed from inside a \
+             notification and nothing was reentered"
+        );
     });
 }
 

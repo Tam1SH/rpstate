@@ -214,11 +214,25 @@ mod tests {
         assert_eq!(subs[0].2.name, Some("MyWatcher"));
     }
 
+    /// The location is the caller's, not this function's.
+    ///
+    /// `Location::caller().file()` is never empty, so asserting that it is not
+    /// says nothing: without `#[track_caller]` the location would simply point
+    /// at `signal.rs` instead, which is where this test lives too. The line is
+    /// what tells the two apart.
     #[test]
     fn subscription_location_captured() {
         let signal = Signal::new(0i32);
+        let here = line!();
         let sub = signal.subscribe(|_| {});
-        assert!(!sub.location.file().is_empty());
+
+        assert_eq!(sub.location.file(), file!());
+        assert_eq!(
+            sub.location.line(),
+            here + 1,
+            "the subscription recorded where it was made rather than where the \
+             call landed - `#[track_caller]` is missing from `subscribe`"
+        );
     }
 
     #[test]
