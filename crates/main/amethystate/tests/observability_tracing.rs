@@ -12,6 +12,32 @@ pub struct ObsState {
     pub host: String,
 }
 
+/// A field whose own name holds the separator keeps it.
+///
+/// The registry used to take the joined path as a string and recover the name
+/// by splitting on the last separator, which reads straight past the escaping:
+/// a field named `a.b` is stored as `obs.a\.b`, and the split called it `b`.
+/// The path knows where its levels are, so it is asked.
+#[test]
+fn a_field_named_with_a_separator_is_registered_under_that_name() {
+    use amethystate::uuid::Uuid;
+    use amethystate_core::path::StorePath;
+
+    let id = Uuid::new_v4();
+    observability::register_instance(id, "SeparatorNamed");
+    let path = StorePath::from_segments(["obs_sep", "a.b"]);
+    observability::register_field::<u16>(&path, id);
+
+    let meta = observability::resolve_field(path.as_str())
+        .expect("the field must be in the schema registry under the key it was written at");
+
+    assert_eq!(
+        meta.field_name.as_ref(),
+        "a.b",
+        "the name was cut at the separator inside it"
+    );
+}
+
 #[test]
 fn instance_registered_on_new() {
     let path = unique_path("obs_instance_reg");

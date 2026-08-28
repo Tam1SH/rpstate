@@ -1024,8 +1024,12 @@ fn a_subscription_hears_what_its_kind_asked_for(backend: Backend) {
     };
 
     let any = heard(SubscriptionKind::Any);
-    let exact = heard(SubscriptionKind::ExactPath(Arc::from("ui.theme.dark")));
-    let prefix = heard(SubscriptionKind::Prefix(Arc::from("ui.theme")));
+    let exact = heard(SubscriptionKind::ExactPath(StorePath::from_segments([
+        "ui", "theme", "dark",
+    ])));
+    let prefix = heard(SubscriptionKind::Prefix(StorePath::from_segments([
+        "ui", "theme",
+    ])));
 
     store.set(["ui", "theme", "dark"], &true).unwrap();
     store.set(["ui", "layout", "width"], &260u64).unwrap();

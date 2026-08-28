@@ -113,7 +113,7 @@ struct RedbStoreInner {
     db: OpenDatabase,
     path: Arc<Path>,
     pending: Arc<Mutex<utils::Pending>>,
-    initialized: Arc<Mutex<HashSet<Arc<str>>>>,
+    initialized: Arc<Mutex<HashSet<StorePath>>>,
     commits: Arc<CommitSignal>,
     health: Arc<PersistHealth>,
     debouncer: Arc<Debouncer>,
@@ -276,7 +276,7 @@ impl RedbStore {
         write_txn.commit().doing(StorageError::Open, &path)?;
 
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
-        let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
+        let initialized = Arc::new(Mutex::new(HashSet::<StorePath>::new()));
         let commits = Arc::new(CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
 
@@ -637,8 +637,7 @@ impl StoreBackend for RedbStore {
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
-        let bound = utils::subtree_bound(prefix);
-        let prefix = prefix.as_str();
+        let subtree = prefix.subtree();
 
         // Both sides arrive sorted - the engine ranges in key order, and the
         // buffer is sorted once - so the two are merged rather than folded
@@ -658,7 +657,7 @@ impl StoreBackend for RedbStore {
             .doing(StorageError::Scan, &self.inner.path)
             .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
 
-        let range = prefix..;
+        let range = subtree.prefix()..;
         let entries = table
             .range(range)
             .doing(StorageError::Scan, &self.inner.path)
@@ -669,9 +668,9 @@ impl StoreBackend for RedbStore {
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("entries read so far: {}", committed.len()))?;
             let key_str = k.value();
-            if utils::is_under(key_str, prefix, &bound) {
+            if subtree.contains(key_str) {
                 committed.push((utils::stored_path(key_str)?, Vec::from(&v.value()[..])));
-            } else if !key_str.starts_with(prefix) {
+            } else if !key_str.starts_with(subtree.prefix()) {
                 break;
             }
         }
@@ -679,7 +678,7 @@ impl StoreBackend for RedbStore {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
             lock.iter()
-                .filter(|(key, op)| op.is_data() && utils::is_under(key.as_str(), prefix, &bound))
+                .filter(|(key, op)| op.is_data() && subtree.contains(key.as_str()))
                 .map(|(key, op)| (key.clone(), op.value().map(Vec::from)))
                 .collect()
         };
@@ -700,13 +699,13 @@ impl StoreBackend for RedbStore {
         prefix: &StorePath,
         visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
     ) -> StorageResult<()> {
-        let bound = utils::subtree_bound(prefix);
+        let subtree = prefix.subtree();
         let prefix = prefix.as_str();
 
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
             lock.iter()
-                .filter(|(key, op)| op.is_data() && utils::is_under(key.as_str(), prefix, &bound))
+                .filter(|(key, op)| op.is_data() && subtree.contains(key.as_str()))
                 .map(|(key, op)| (key.clone(), op.value().map(Vec::from)))
                 .collect()
         };
@@ -735,7 +734,7 @@ impl StoreBackend for RedbStore {
                 .attach_with(|| format!("prefix: {prefix}"))?;
             let key = k.value();
 
-            if !utils::is_under(key, prefix, &bound) {
+            if !subtree.contains(key) {
                 if !key.starts_with(prefix) {
                     break;
                 }
@@ -773,7 +772,7 @@ impl StoreBackend for RedbStore {
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
-        let bound = utils::subtree_bound(prefix);
+        let subtree = prefix.subtree();
         let prefix = prefix.as_str();
         // Values carried as empty vectors so the same merge serves both scans;
         // nothing reads them.
@@ -802,7 +801,7 @@ impl StoreBackend for RedbStore {
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("keys read so far: {}", keys.len()))?;
             let key = k.value();
-            if !utils::is_under(key, prefix, &bound) {
+            if !subtree.contains(key) {
                 if !key.starts_with(prefix) {
                     break;
                 }
@@ -814,7 +813,7 @@ impl StoreBackend for RedbStore {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
             lock.iter()
-                .filter(|(key, op)| op.is_data() && utils::is_under(key.as_str(), prefix, &bound))
+                .filter(|(key, op)| op.is_data() && subtree.contains(key.as_str()))
                 .map(|(key, op)| (key.clone(), op.value().map(|_| Vec::new())))
                 .collect()
         };
@@ -945,7 +944,7 @@ impl StoreBackend for RedbStore {
             .is_some();
 
         if found {
-            self.inner.initialized.lock().insert(namespace.joined_arc());
+            self.inner.initialized.lock().insert(namespace.clone());
         }
         Ok(found)
     }
@@ -956,7 +955,6 @@ impl StoreBackend for RedbStore {
         }
 
         self.inner.check_debouncer()?;
-        let key = namespace.joined_arc();
         self.inner
             .pending
             .lock()
@@ -964,9 +962,9 @@ impl StoreBackend for RedbStore {
 
         let mut initialized = self.inner.initialized.lock();
         if state.is_seeded() {
-            initialized.insert(key);
+            initialized.insert(namespace.clone());
         } else {
-            initialized.remove(&key);
+            initialized.remove(namespace);
         }
         drop(initialized);
 

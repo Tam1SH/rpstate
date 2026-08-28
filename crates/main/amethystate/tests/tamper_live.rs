@@ -1,6 +1,7 @@
 #![cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 
 use amethystate::store::builder::StoreBuilder;
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -85,7 +86,7 @@ fn an_external_edit_notifies_a_subscriber() {
     let seen = hits.clone();
     StoreBackend::subscribe(
         &store,
-        SubscriptionKind::ExactPath(Arc::from("cfg.note")),
+        SubscriptionKind::ExactPath(StorePath::from_segments(["cfg", "note"])),
         Arc::new(move |_event| {
             seen.fetch_add(1, Ordering::Relaxed);
         }),

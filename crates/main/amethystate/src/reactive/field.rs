@@ -860,7 +860,7 @@ mod tests {
 
         {
             let sub_id = store.subscribe(
-                SubscriptionKind::Prefix(Arc::from("test.field")),
+                SubscriptionKind::Prefix(StorePath::from_segments(["test", "field"])),
                 Arc::new(move |_| {
                     cap.fetch_add(1, Ordering::SeqCst);
                 }),

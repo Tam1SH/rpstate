@@ -71,8 +71,12 @@ pub async fn amethystate_subscribe<R: Runtime>(
     let key_clone = key.clone();
     let store_clone = store.store.clone();
 
+    // The key arrives as text from the front end, so this is the one place the
+    // joined form has to be read back rather than carried.
+    let prefix = amethystate::store::StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
+
     let sub_id = store.store.subscribe(
-        amethystate::SubscriptionKind::Prefix(Arc::from(key.as_str())),
+        amethystate::SubscriptionKind::Prefix(prefix),
         Arc::new(move |event| {
             let event_name = format!("amethystate://{}", key_clone.replace('.', ":"));
             let store_c = store_clone.clone();

@@ -39,7 +39,7 @@ where
 {
     let path = crate::store::to_path(path)?;
 
-    register_field::<TValue>(Arc::from(path.as_str()), instance_id);
+    register_field::<TValue>(&path, instance_id);
 
     if store.get::<TValue>(&path)?.is_none() {
         seed(store, &path, &default)?;
@@ -52,7 +52,7 @@ where
 
     let sig_clone = signal.clone();
     let store_clone = store.clone();
-    let path_log: Arc<str> = Arc::from(path.as_str());
+    let path_log = path.clone();
     let on_delete = default.clone();
 
     let unreadable = crate::reactive::field::Unreadable::default();
@@ -60,7 +60,7 @@ where
     let on_unreadable = default.clone();
 
     let id = store.subscribe(
-        SubscriptionKind::ExactPath(Arc::from(path.as_str())),
+        SubscriptionKind::ExactPath(path.clone()),
         Arc::new(move |event| match &event.new {
             Some(raw) => match store_clone.decode::<TValue>(raw) {
                 Ok(parsed) => {
@@ -306,18 +306,15 @@ where
     }
 
     let core_clone = core.clone();
-    let prefix_for_strip = format!("{}.", path);
-    let path_str: Arc<str> = Arc::from(path.as_str());
+    let map_key = path.joined_arc();
     let path_for_keys = path.clone();
     let store_clone = store.clone();
-    let path_for_sub: Arc<str> = Arc::from(path.as_str());
-
     let id = store.subscribe(
-        SubscriptionKind::Prefix(path_for_sub),
+        SubscriptionKind::Prefix(path.clone()),
         Arc::new(move |event| {
-            if event.op == StoreOp::DeletePrefix
-                && (*event.path == *prefix_for_strip || *event.path == *path_str)
-            {
+            // The map's own path, not anything under it: a subtree deeper down
+            // being removed drops those keys, it does not empty the map.
+            if event.op == StoreOp::DeletePrefix && *event.path == *map_key {
                 core_clone.cache.clear();
                 core_clone.notify(&MapChange::Clear {
                     source: event.source,

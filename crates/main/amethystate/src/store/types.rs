@@ -1,3 +1,4 @@
+use amethystate_core::path::StorePath;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -23,11 +24,19 @@ pub struct StoreEvent {
     pub source: Option<Uuid>,
 }
 
+/// What a subscriber asked to hear about.
+///
+/// `Prefix` means the path and everything under it, by level rather than by
+/// characters: a subscription to `ui` hears `ui.theme` and does not hear
+/// `uix.width`. Which is [`StorePath::subtree`]'s question, and the reason
+/// these hold paths - a subscription made from a path used to keep the string
+/// the path had already joined, and the matching then re-derived by hand what
+/// the path could have been asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscriptionKind {
     Any,
-    ExactPath(Arc<str>),
-    Prefix(Arc<str>),
+    ExactPath(StorePath),
+    Prefix(StorePath),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -33,7 +33,9 @@ macro_rules! define_store_test_suite {
             use std::sync::Arc;
             use std::time::{Duration, SystemTime, UNIX_EPOCH};
             use $crate::store::config::StoreConfig;
-            use $crate::store::{StoreBackend, StoreEvent, StoreExt, StoreOp, SubscriptionKind};
+            use $crate::store::{
+                StoreBackend, StoreEvent, StoreExt, StoreOp, StorePath, SubscriptionKind,
+            };
 
             fn unique_test_path(suffix: &str) -> PathBuf {
                 let nanos = SystemTime::now()
@@ -62,7 +64,9 @@ macro_rules! define_store_test_suite {
                 let (tx, rx) = std::sync::mpsc::channel::<StoreEvent>();
 
                 store.subscribe(
-                    SubscriptionKind::ExactPath(Arc::from("ui.theme.dark")),
+                    SubscriptionKind::ExactPath(StorePath::from_segments([
+                        "ui", "theme", "dark",
+                    ])),
                     Arc::new(move |evt| {
                         let _ = tx.send(evt.clone());
                     }),
@@ -91,7 +95,9 @@ macro_rules! define_store_test_suite {
                 let (tx, rx) = std::sync::mpsc::channel::<StoreEvent>();
 
                 store.subscribe(
-                    SubscriptionKind::ExactPath(Arc::from("ui.theme.dark")),
+                    SubscriptionKind::ExactPath(StorePath::from_segments([
+                        "ui", "theme", "dark",
+                    ])),
                     Arc::new(move |evt| {
                         let _ = tx.send(evt.clone());
                     }),

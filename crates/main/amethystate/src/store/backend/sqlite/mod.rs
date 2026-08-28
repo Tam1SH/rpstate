@@ -98,7 +98,7 @@ struct SqliteStoreInner {
     conn: Arc<Mutex<Connection>>,
     path: PathBuf,
     pending: Arc<Mutex<utils::Pending>>,
-    initialized: Arc<Mutex<HashSet<Arc<str>>>>,
+    initialized: Arc<Mutex<HashSet<StorePath>>>,
     commits: Arc<CommitSignal>,
     health: Arc<PersistHealth>,
     debouncer: Arc<Debouncer>,
@@ -322,7 +322,7 @@ impl SqliteStoreInner {
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
-        let bound = utils::subtree_bound(prefix);
+        let subtree = prefix.subtree();
 
         // Ordered by the engine and merged rather than folded into a tree, so
         // a scan costs one pass instead of a tree walk per row. `ORDER BY` is
@@ -340,8 +340,8 @@ impl SqliteStoreInner {
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
-            let (low, high) = utils::key_range(prefix);
-            let range = utils::range_label(&low, &high);
+            let (low, high) = subtree.range();
+            let range = format!("range: {subtree}");
             let rows = stmt
                 .query_map(rusqlite::params![low, high], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
@@ -368,7 +368,7 @@ impl SqliteStoreInner {
                 // claimed `ui!x` was under it and `delete_prefix`, which is
                 // built on this scan, destroyed it. redb has done this since it
                 // was written.
-                if utils::is_under(&k, prefix.as_str(), &bound) {
+                if subtree.contains(&k) {
                     storage_results.push((utils::stored_path(&k)?, v));
                 }
             }
@@ -377,9 +377,7 @@ impl SqliteStoreInner {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.pending.lock();
             lock.iter()
-                .filter(|(key, op)| {
-                    op.is_data() && utils::is_under(key.as_str(), prefix.as_str(), &bound)
-                })
+                .filter(|(key, op)| op.is_data() && subtree.contains(key.as_str()))
                 .map(|(key, op)| (key.clone(), op.value().map(Vec::from)))
                 .collect()
         };
@@ -389,7 +387,7 @@ impl SqliteStoreInner {
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
-        let bound = utils::subtree_bound(prefix);
+        let subtree = prefix.subtree();
         // Values carried as empty vectors so the same merge serves both scans;
         // nothing reads them.
         let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
@@ -404,8 +402,8 @@ impl SqliteStoreInner {
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_with(|| format!("prefix: {prefix}"))?;
-            let (low, high) = utils::key_range(prefix);
-            let range = utils::range_label(&low, &high);
+            let (low, high) = subtree.range();
+            let range = format!("range: {subtree}");
             let rows = stmt
                 .query_map(rusqlite::params![low, high], |row| row.get::<_, String>(0))
                 .map_err(SqliteStoreError::from)
@@ -424,7 +422,7 @@ impl SqliteStoreInner {
                 // Same as `scan_prefix`: the range admits a sibling whose next
                 // character sorts below the separator, and the buffer below is
                 // filtered while these rows were not.
-                if utils::is_under(&key, prefix.as_str(), &bound) {
+                if subtree.contains(&key) {
                     keys.push((utils::stored_path(&key)?, Vec::new()));
                 }
             }
@@ -433,9 +431,7 @@ impl SqliteStoreInner {
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.pending.lock();
             lock.iter()
-                .filter(|(key, op)| {
-                    op.is_data() && utils::is_under(key.as_str(), prefix.as_str(), &bound)
-                })
+                .filter(|(key, op)| op.is_data() && subtree.contains(key.as_str()))
                 .map(|(key, op)| (key.clone(), op.value().map(|_| Vec::new())))
                 .collect()
         };
@@ -547,7 +543,7 @@ impl SqliteStoreInner {
         };
 
         if found {
-            self.initialized.lock().insert(namespace.joined_arc());
+            self.initialized.lock().insert(namespace.clone());
         }
         Ok(found)
     }
@@ -558,16 +554,15 @@ impl SqliteStoreInner {
         }
 
         self.check_debouncer()?;
-        let key = namespace.joined_arc();
         self.pending
             .lock()
             .insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
 
         let mut initialized = self.initialized.lock();
         if state.is_seeded() {
-            initialized.insert(key);
+            initialized.insert(namespace.clone());
         } else {
-            initialized.remove(&key);
+            initialized.remove(namespace);
         }
         drop(initialized);
 
@@ -624,7 +619,7 @@ impl SqliteStore {
 
         let conn_arc = Arc::new(Mutex::new(conn));
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
-        let initialized = Arc::new(Mutex::new(HashSet::<Arc<str>>::new()));
+        let initialized = Arc::new(Mutex::new(HashSet::<StorePath>::new()));
         let commits = Arc::new(CommitSignal::default());
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
         let next_sub_id = Arc::new(AtomicU64::new(1));

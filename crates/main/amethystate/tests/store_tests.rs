@@ -34,7 +34,7 @@ fn test_local_reactivity() {
     let hit_inner = hit.clone();
 
     store.subscribe(
-        SubscriptionKind::ExactPath(Arc::from("ui.theme")),
+        SubscriptionKind::ExactPath(StorePath::from_segments(["ui", "theme"])),
         Arc::new(move |_| {
             let mut guard = hit_inner.lock();
             *guard = true;

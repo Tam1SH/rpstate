@@ -302,6 +302,17 @@ impl StorePath {
         }
     }
 
+    /// This path and everything under it, as the key space sees it.
+    ///
+    /// Building it costs one string, so a scan builds it once and asks it about
+    /// every key rather than the other way round.
+    pub fn subtree(&self) -> Subtree<'_> {
+        Subtree {
+            prefix: self.as_str(),
+            bound: (!self.is_root()).then(|| format!("{}{SEPARATOR}", self.as_str())),
+        }
+    }
+
     /// The same string as a shared handle, for the places that keep one.
     ///
     /// A path built at runtime already holds its joined form in an `Arc`, so
@@ -745,6 +756,90 @@ impl PartialOrd for StorePath {
 impl Hash for StorePath {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
+    }
+}
+
+/// A path and everything under it, in the key space a flat engine ranges over.
+///
+/// The three questions an engine asks about a subtree - is this key in it,
+/// where does it start, where does it stop - are questions about how a path
+/// joins and escapes, which is this module's subject and not a store's. They
+/// were four functions in the storage layer taking a prefix and a bound as
+/// separate arguments that had to agree, with nothing checking that they did,
+/// and the same predicate was written out by hand in three more places. Here
+/// the bound cannot belong to a different prefix, because a subtree is the only
+/// way to get one.
+pub struct Subtree<'a> {
+    prefix: &'a str,
+    /// Where the children begin: the prefix and a separator. Absent at the
+    /// root, which has no bound to spell - no key can begin with a separator,
+    /// and everything is under it.
+    bound: Option<String>,
+}
+
+impl<'a> Subtree<'a> {
+    /// Whether `key` names this path or something under it.
+    ///
+    /// A key belongs when it is the prefix itself or begins with the prefix
+    /// followed by a separator, which is what keeps `uix.width` from counting
+    /// as a child of `ui`.
+    pub fn contains(&self, key: &str) -> bool {
+        match &self.bound {
+            Some(bound) => key == self.prefix || key.starts_with(bound.as_str()),
+            None => true,
+        }
+    }
+
+    /// The half-open range the subtree occupies, for an engine that queries by
+    /// comparison rather than by walking.
+    ///
+    /// A pattern would have to escape whatever the pattern language treats as
+    /// special, and a name may hold any of it - `panel[0]` is a name.
+    /// Comparison has no such vocabulary, and an index can serve it.
+    ///
+    /// The top is the separator's byte successor rather than a high character
+    /// after it. `prefix.\u{10FFFF}` reads as "surely nothing sorts above
+    /// that", and a child named `\u{10FFFF}z` does. The root has no top at all,
+    /// for the same reason spelled larger: U+10FFFF is the highest scalar value
+    /// there is, so for any candidate `s` the key `s` plus one more character
+    /// sorts above it, and a sentinel excludes exactly what it was chosen to
+    /// admit.
+    ///
+    /// Neither end is exact on its own. The bottom is the prefix itself, so a
+    /// sibling whose next character sorts below the separator falls inside the
+    /// range; [`Subtree::contains`] is what settles that, and a caller has to
+    /// apply it to what the range hands back.
+    pub fn range(&self) -> (&str, Option<String>) {
+        if self.bound.is_none() {
+            return ("", None);
+        }
+
+        let mut high = String::with_capacity(self.prefix.len() + 1);
+        high.push_str(self.prefix);
+        high.push((SEPARATOR as u8 + 1) as char);
+        (self.prefix, Some(high))
+    }
+
+    /// Where the children begin, for a caller that compares against it itself.
+    pub fn child_bound(&self) -> Option<&str> {
+        self.bound.as_deref()
+    }
+
+    /// The joined prefix, for a walk that wants to stop once the keys have
+    /// gone past it entirely.
+    pub fn prefix(&self) -> &str {
+        self.prefix
+    }
+}
+
+impl fmt::Display for Subtree<'_> {
+    /// How the range reads in a failure, with the open top said rather than
+    /// spelled.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.range() {
+            (low, Some(high)) => write!(f, "[{low}, {high})"),
+            (low, None) => write!(f, "[{low}, and no upper bound)"),
+        }
     }
 }
 

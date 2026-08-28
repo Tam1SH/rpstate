@@ -1,8 +1,6 @@
 use crate::SubscriptionKind;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::{StoreEvent, SubscriptionEntry};
-#[cfg(feature = "sqlite")]
-use amethystate_core::path::SEPARATOR;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use parking_lot::RwLock;
@@ -112,70 +110,6 @@ pub fn merge_buffered(
     out
 }
 
-/// Where a subtree stops, for engines that store a key whole.
-///
-/// A key belongs to `prefix` when it is `prefix` itself or begins with it
-/// followed by a separator - comparing the strings alone puts `uix.width` under
-/// `ui`. At the root there is no bound to spell, since no key can begin with a
-/// separator, and everything is under it.
-#[cfg(any(feature = "redb", feature = "sqlite"))]
-pub fn subtree_bound(prefix: &StorePath) -> Option<String> {
-    (!prefix.is_root()).then(|| format!("{}.", prefix.as_str()))
-}
-
-/// The half-open key range a subtree occupies, for an engine that queries by
-/// comparison rather than by iterating.
-///
-/// A pattern would have to escape whatever the pattern language treats as
-/// special, and a name is allowed to hold any of it - `panel[0]` is a name.
-/// Comparison has no such vocabulary, and an index can serve it.
-///
-/// The upper bound is the separator's byte successor rather than a high
-/// character after it. `prefix.\u{10FFFF}` reads as "surely nothing sorts
-/// above that", and a child named `\u{10FFFF}z` does: it was written fine,
-/// read fine by its own path, and was invisible to every scan of the level
-/// above it - so it also survived a delete of its own subtree. `prefix/`
-/// admits every `prefix.` and nothing else, whatever the name after it.
-///
-/// The root has no upper bound, and none can be invented for it. U+10FFFF is
-/// the highest scalar value there is, so for any candidate `s` the key `s` plus
-/// one more character sorts above it - a sentinel excludes exactly the keys it
-/// was picked to include. `None` is the bound, the same answer
-/// [`subtree_bound`] gives.
-///
-/// Neither bound is exact on its own. The low end is the prefix itself, so a
-/// sibling whose next character sorts below the separator falls inside the
-/// range; [`is_under`] is what settles that, and every caller has to apply it
-/// to the rows as well as to the buffer.
-#[cfg(feature = "sqlite")]
-pub fn key_range(prefix: &StorePath) -> (String, Option<String>) {
-    if prefix.is_root() {
-        return (String::new(), None);
-    }
-
-    let low = prefix.as_str().to_string();
-    let mut high = low.clone();
-    high.push((SEPARATOR as u8 + 1) as char);
-    (low, Some(high))
-}
-
-/// How a range reads in a failure, with the open top said rather than spelled.
-#[cfg(feature = "sqlite")]
-pub fn range_label(low: &str, high: &Option<String>) -> String {
-    match high {
-        Some(high) => format!("range: [{low}, {high})"),
-        None => format!("range: [{low}, and no upper bound)"),
-    }
-}
-
-#[cfg(any(feature = "redb", feature = "sqlite"))]
-pub fn is_under(key: &str, prefix: &str, bound: &Option<String>) -> bool {
-    match bound {
-        Some(bound) => key == prefix || key.starts_with(bound.as_str()),
-        None => true,
-    }
-}
-
 /// A key read back out of storage, as the path it claims to be.
 ///
 /// Every key a scan hands back is one this library could have written, so this
@@ -213,19 +147,14 @@ pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent
 fn matches_kind(kind: &SubscriptionKind, path: &str) -> bool {
     match kind {
         SubscriptionKind::Any => true,
-        SubscriptionKind::ExactPath(p) => **p == *path,
-        SubscriptionKind::Prefix(prefix) => {
-            *path == **prefix
-                || path
-                    .strip_prefix(&**prefix)
-                    .is_some_and(|t| t.starts_with('.'))
-        }
+        SubscriptionKind::ExactPath(p) => p.as_str() == path,
+        SubscriptionKind::Prefix(prefix) => prefix.subtree().contains(path),
     }
 }
 
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 mod buffered {
-    use super::{SubscriptionEntry, emit_events, is_under, subtree_bound};
+    use super::{SubscriptionEntry, emit_events};
     use crate::store::StoreEvent;
     use crate::store::util::debouncer::Debouncer;
     use crate::{StorageResult, StoreOp};
@@ -280,14 +209,14 @@ mod buffered {
             return Pending::new();
         }
 
-        let bound = subtree_bound(prefix);
-        if bound.is_none() {
+        if prefix.is_root() {
             return pending.clone();
         }
 
+        let subtree = prefix.subtree();
         pending
             .iter()
-            .filter(|(key, _)| is_under(key.as_str(), prefix.as_str(), &bound))
+            .filter(|(key, _)| subtree.contains(key.as_str()))
             .map(|(key, op)| (key.clone(), op.clone()))
             .collect()
     }

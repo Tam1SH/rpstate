@@ -132,13 +132,11 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
     /// first picked up the second's entries and then refused them for not being
     /// under the map they were scanned from, failing the migration for good.
     ///
-    /// The store's own scans have used `key_range` and `is_under` all along;
-    /// this is the same thing, in the adapter that repairs data rather than
-    /// serves it.
+    /// The store's own scans have asked the subtree all along; this is the same
+    /// thing, in the adapter that repairs data rather than serves it.
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
-        let (low, high) = crate::store::backend::utils::key_range(prefix);
-        let bound = crate::store::backend::utils::subtree_bound(prefix);
-        let prefix_str = prefix.as_str();
+        let subtree = prefix.subtree();
+        let (low, high) = subtree.range();
 
         let mut stmt = self
             .txn
@@ -165,10 +163,10 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("rows read: {}", res.len()))?;
 
-            // The range's own bounds are not exact: `key_range` opens at the
-            // prefix itself and closes above `prefix.`, so a sibling whose next
+            // The range's own bounds are not exact: it opens at the prefix
+            // itself and closes above `prefix.`, so a sibling whose next
             // character sorts below the separator falls inside it.
-            if crate::store::backend::utils::is_under(&key, prefix_str, &bound) {
+            if subtree.contains(&key) {
                 res.push((crate::store::backend::utils::stored_path(&key)?, value));
             }
         }
