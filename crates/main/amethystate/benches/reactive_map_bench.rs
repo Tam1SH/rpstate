@@ -12,13 +12,42 @@
 #![allow(clippy::unit_arg)]
 
 use amethystate::store::StoreBackend;
+use amethystate::uuid::Uuid;
 use amethystate::{ReactiveMap, Store, StoreBuilder};
+use amethystate_core::path::StorePath;
+use amethystate_core::primitives::map_core::ReactiveMapCore;
 use amethystate_core::test_utils::TempPath;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Duration;
 
 type Map = ReactiveMap<String, u64>;
+
+/// `ReactiveMap` as it is: the parts behind one `Arc`.
+#[derive(Clone)]
+struct Wrapped {
+    inner: Arc<Parts>,
+}
+
+struct Parts {
+    core: ReactiveMapCore<String, u64>,
+    path: StorePath,
+    instance_id: Uuid,
+    _store: Store,
+    _store_sub: Arc<()>,
+}
+
+/// The same parts without it. `Arc<()>` stands in for the store subscription,
+/// which cannot be built from a bench and clones like any other `Arc`.
+#[derive(Clone)]
+struct Flat {
+    core: ReactiveMapCore<String, u64>,
+    path: StorePath,
+    instance_id: Uuid,
+    store: Store,
+    store_sub: Arc<()>,
+}
 
 /// A stored value with more than one field in it, which is what a declared
 /// struct actually is.
@@ -93,6 +122,25 @@ fn committed(tag: &str, n: usize) -> (TempPath, Store, Map) {
     (path, store, map)
 }
 
+/// Committed, with `pending` of its entries written again.
+///
+/// The state a scan actually meets between flushes, and the only one where the
+/// merge merges: [`populated`] leaves the engine side empty and [`committed`]
+/// leaves the buffer side empty, so in both of those the two lists never
+/// interleave and a key is never in both.
+///
+/// The rewritten keys are spread across the range rather than taken from the
+/// front, so the buffer's turn comes throughout the walk instead of once at the
+/// start.
+fn half_flushed(tag: &str, n: usize, pending: usize) -> (TempPath, Store, Map) {
+    let (path, store, map) = committed(tag, n);
+    let stride = (n / pending.max(1)).max(1);
+    for i in (0..n).step_by(stride).take(pending) {
+        map.insert(key(i), &7).unwrap();
+    }
+    (path, store, map)
+}
+
 fn bench_writes(c: &mut Criterion) {
     let mut group = c.benchmark_group("map_write_vs_size");
 
@@ -164,6 +212,409 @@ fn bench_scans(c: &mut Criterion) {
     group.finish();
 }
 
+/// What a table costs when the values are not numbers and the render wants a
+/// window.
+///
+/// `entries()` clones every key twice - once to a `String` to sort by, once as
+/// the key - clones every value, collects the lot and sorts it, per call. A
+/// function drawing rows 7 to 34 pays for all of them, every frame, and
+/// `RFC-reactive-table.md` opens with that. This is what "all of them" costs
+/// once a value is a row rather than a counter.
+///
+/// `keys()` is the floor: the same collect and sort with no value cloned. The
+/// difference between the two is what the values cost, and it is the part a
+/// window would not have to pay.
+fn bench_windowed_reads(c: &mut Criterion) {
+    /// Sized like a row somebody would render: a few fields and some text.
+    fn row(i: usize) -> String {
+        format!("{i:07}|{}|{}", "name".repeat(8), "x".repeat(200))
+    }
+
+    let mut group = c.benchmark_group("map_window_vs_size");
+
+    for n in [1_000usize, 10_000] {
+        let (_tmp, _store) = store(&format!("map-window-{n}"));
+        let (_tmp2, _store2, light) = populated(&format!("map-window-light-{n}"), n);
+
+        let path = TempPath::new(&format!("map-window-heavy-{n}"));
+        let heavy_store = StoreBuilder::new(path.path())
+            .debounce(Duration::from_secs(100))
+            .build()
+            .unwrap();
+        let heavy = heavy_store.kv().map::<String, String>("bench").unwrap();
+        for i in 0..n {
+            heavy.insert(key(i), &row(i)).unwrap();
+        }
+
+        group.throughput(Throughput::Elements(n as u64));
+
+        // The window a table draws: twenty-seven rows out of however many.
+        group.bench_with_input(BenchmarkId::new("u64/window of 27", n), &n, |b, _| {
+            b.iter(|| black_box(light.entries().skip(7).take(27).count()))
+        });
+        group.bench_with_input(BenchmarkId::new("u64/every row", n), &n, |b, _| {
+            b.iter(|| black_box(light.entries().count()))
+        });
+
+        group.bench_with_input(BenchmarkId::new("row/window of 27", n), &n, |b, _| {
+            b.iter(|| black_box(heavy.entries().skip(7).take(27).count()))
+        });
+        group.bench_with_input(BenchmarkId::new("row/every row", n), &n, |b, _| {
+            b.iter(|| black_box(heavy.entries().count()))
+        });
+
+        // The floor: sorting the same keys with no value touched.
+        group.bench_with_input(BenchmarkId::new("row/keys only", n), &n, |b, _| {
+            b.iter(|| black_box(heavy.keys().len()))
+        });
+
+        // What a windowed read could be: the order settled once, then only the
+        // rows asked for are fetched. A stand-in for the shape, not a proposal
+        // for the API.
+        let ordered = heavy.keys();
+        group.bench_with_input(BenchmarkId::new("row/window, order kept", n), &n, |b, _| {
+            b.iter(|| {
+                black_box(
+                    ordered
+                        .iter()
+                        .skip(7)
+                        .take(27)
+                        .filter_map(|k| heavy.get(k))
+                        .count(),
+                )
+            })
+        });
+    }
+
+    group.finish();
+}
+
+/// Whether the handle needs the `Arc` it is behind.
+///
+/// `ReactiveMap` is `Arc<MapInner>`, and everything in `MapInner` is already
+/// cheap to clone: the core is seven `Arc`s, the path is a `&'static` slice or
+/// one `Arc`, the instance id is `Copy`, the store and the subscription are one
+/// `Arc` each. So the outer `Arc` buys one refcount bump on a clone instead of
+/// about ten, and charges a pointer hop on every field access - which is every
+/// read and every write.
+///
+/// The same trade as `Arc<Signal<T>>` inside a pipeline, which was pure loss.
+/// Here the ratio is different and the answer is not obvious, so: how often is a
+/// handle cloned against how often it is read?
+///
+/// `Flat` stands in for the shape without the wrapper. `Arc<()>` is where the
+/// store subscription would be - it cannot be built from a bench, and one `Arc`
+/// clones like any other.
+fn bench_handle_shape(c: &mut Criterion) {
+    let (_tmp, store) = store("map-handle-shape");
+    let path = StorePath::from_segments(["bench", "handle"]);
+    let id = Uuid::new_v4();
+
+    let wrapped = Wrapped {
+        inner: Arc::new(Parts {
+            core: ReactiveMapCore::new(),
+            path: path.clone(),
+            instance_id: id,
+            _store: store.clone(),
+            _store_sub: Arc::new(()),
+        }),
+    };
+    let flat = Flat {
+        core: ReactiveMapCore::new(),
+        path,
+        instance_id: id,
+        store: store.clone(),
+        store_sub: Arc::new(()),
+    };
+
+    let mut group = c.benchmark_group("map_handle_shape");
+
+    group.bench_function("clone/wrapped", |b| b.iter(|| black_box(wrapped.clone())));
+    group.bench_function("clone/flat", |b| b.iter(|| black_box(flat.clone())));
+
+    group.bench_function("read a field/wrapped", |b| {
+        b.iter(|| black_box(wrapped.inner.instance_id))
+    });
+    group.bench_function("read a field/flat", |b| {
+        b.iter(|| black_box(flat.instance_id))
+    });
+
+    group.bench_function("read the cache/wrapped", |b| {
+        b.iter(|| black_box(wrapped.inner.core.cache.len()))
+    });
+    group.bench_function("read the cache/flat", |b| {
+        b.iter(|| black_box(flat.core.cache.len()))
+    });
+
+    black_box((
+        &flat.path,
+        &flat.store,
+        &flat.store_sub,
+        &wrapped.inner.path,
+    ));
+    group.finish();
+}
+
+/// The same question with the caches ruined, which is the only version that
+/// answers it.
+///
+/// `map_handle_shape` measured one handle in a loop: both shapes sat in L1 and
+/// the hop came out at 0.62 ns against 0.67 ns - two cycles either way, which
+/// is a measurement of nothing. A pointer you just dereferenced is free to
+/// dereference again.
+///
+/// So: `HANDLES` distinct handles, walked in a fixed random permutation, with a
+/// working set past any L3. Now the hop is a dependent load that cannot start
+/// until the first load lands - the shape of the cost, if it has one.
+///
+/// The two shapes are not symmetric under this load, and not in the wrapper's
+/// favour: `Flat` is one miss on a large array, `Wrapped` is one access to a
+/// small pointer array plus a dependent miss on `Parts`.
+///
+/// `read a field` walks a fixed permutation, so the iterations are independent
+/// and the processor keeps many misses in flight at once - which is what a real
+/// loop over handles looks like, and which hides some of the second load.
+/// `chase a field` takes the next index out of the field just read, so nothing
+/// overlaps and every hop pays full dependent latency. That is the worst case
+/// the wrapper can ever be put in, and no application produces it.
+///
+/// One handicap in `Flat`'s favour, taken deliberately: all handles share one
+/// core, so the refcount lines a clone touches stay hot. Building `HANDLES`
+/// real cores would be three `DashMap`s each. A real application clones one
+/// map's handle many times over, so hot control blocks are the honest case
+/// anyway - and if `Flat` loses even here, it loses.
+fn bench_handle_shape_cold(c: &mut Criterion) {
+    const HANDLES: usize = 200_000;
+
+    let (_tmp, store) = store("map-handle-shape-cold");
+    let path = StorePath::from_segments(["bench", "handle"]);
+    let core = ReactiveMapCore::<String, u64>::new();
+
+    let mut wrapped = Vec::with_capacity(HANDLES);
+    let mut flat = Vec::with_capacity(HANDLES);
+    for _ in 0..HANDLES {
+        let id = Uuid::new_v4();
+        wrapped.push(Wrapped {
+            inner: Arc::new(Parts {
+                core: core.clone(),
+                path: path.clone(),
+                instance_id: id,
+                _store: store.clone(),
+                _store_sub: Arc::new(()),
+            }),
+        });
+        flat.push(Flat {
+            core: core.clone(),
+            path: path.clone(),
+            instance_id: id,
+            store: store.clone(),
+            store_sub: Arc::new(()),
+        });
+    }
+
+    let order = permutation(HANDLES);
+    let chain = cycle(HANDLES);
+    for (handle, &next) in wrapped.iter_mut().zip(&chain) {
+        Arc::get_mut(&mut handle.inner).unwrap().instance_id = Uuid::from_u128(next as u128);
+    }
+    for (handle, &next) in flat.iter_mut().zip(&chain) {
+        handle.instance_id = Uuid::from_u128(next as u128);
+    }
+
+    eprintln!(
+        "handle sizes: Wrapped {} B, Flat {} B, Parts {} B; \
+         working set: wrapped {} KiB of pointers + {} KiB of parts, flat {} KiB",
+        size_of::<Wrapped>(),
+        size_of::<Flat>(),
+        size_of::<Parts>(),
+        HANDLES * size_of::<Wrapped>() / 1024,
+        HANDLES * size_of::<Parts>() / 1024,
+        HANDLES * size_of::<Flat>() / 1024,
+    );
+
+    let mut group = c.benchmark_group("map_handle_shape_cold");
+    group.throughput(Throughput::Elements(HANDLES as u64));
+
+    group.bench_function("read a field/wrapped", |b| {
+        b.iter(|| {
+            let mut acc = 0u128;
+            for &i in &order {
+                acc ^= wrapped[i].inner.instance_id.as_u128();
+            }
+            acc
+        })
+    });
+    group.bench_function("read a field/flat", |b| {
+        b.iter(|| {
+            let mut acc = 0u128;
+            for &i in &order {
+                acc ^= flat[i].instance_id.as_u128();
+            }
+            acc
+        })
+    });
+
+    group.bench_function("chase a field/wrapped", |b| {
+        b.iter(|| {
+            let mut i = 0usize;
+            for _ in 0..HANDLES {
+                i = wrapped[i].inner.instance_id.as_u128() as usize;
+            }
+            i
+        })
+    });
+    group.bench_function("chase a field/flat", |b| {
+        b.iter(|| {
+            let mut i = 0usize;
+            for _ in 0..HANDLES {
+                i = flat[i].instance_id.as_u128() as usize;
+            }
+            i
+        })
+    });
+
+    group.bench_function("clone/wrapped", |b| {
+        b.iter(|| {
+            for &i in &order {
+                black_box(wrapped[i].clone());
+            }
+        })
+    });
+    group.bench_function("clone/flat", |b| {
+        b.iter(|| {
+            for &i in &order {
+                black_box(flat[i].clone());
+            }
+        })
+    });
+
+    group.finish();
+}
+
+/// Which lookup is actually faster, hashed or ordered, at the sizes this
+/// library is built for.
+///
+/// The two lose in different ways and the answer is not the same for both key
+/// types. A hash lookup is one hash and one random probe - one miss, whatever
+/// the size. A `BTreeMap` walk is `log_B(n)` steps, but the root and the level
+/// under it stay resident, so the steps are not all misses; what it pays
+/// instead is a comparison per node, and for a `String` that is a `memcmp` per
+/// node against the default hasher's one pass over the key.
+///
+/// Sizes track the envelope: a hundred thousand entries is the edge of what
+/// this library is for, and ten is the common case.
+fn bench_lookup_structure(c: &mut Criterion) {
+    use std::collections::{BTreeMap, HashMap};
+
+    const PROBES: usize = 4096;
+    const FILLS: [usize; 3] = [10, 1_000, 100_000];
+
+    let mut group = c.benchmark_group("lookup_structure");
+    group.throughput(Throughput::Elements(PROBES as u64));
+
+    for fill in FILLS {
+        let probes: Vec<usize> = permutation(PROBES.max(fill))
+            .into_iter()
+            .map(|i| i % fill)
+            .take(PROBES)
+            .collect();
+
+        let hashed: HashMap<u64, u64> = (0..fill as u64).map(|i| (i, i)).collect();
+        let ordered: BTreeMap<u64, u64> = (0..fill as u64).map(|i| (i, i)).collect();
+
+        group.bench_with_input(BenchmarkId::new("u64/hash", fill), &fill, |b, _| {
+            b.iter(|| {
+                let mut acc = 0u64;
+                for &i in &probes {
+                    acc ^= hashed[&(i as u64)];
+                }
+                acc
+            })
+        });
+        group.bench_with_input(BenchmarkId::new("u64/btree", fill), &fill, |b, _| {
+            b.iter(|| {
+                let mut acc = 0u64;
+                for &i in &probes {
+                    acc ^= ordered[&(i as u64)];
+                }
+                acc
+            })
+        });
+
+        let keys: Vec<String> = (0..fill).map(|i| format!("item-{i:07}")).collect();
+        let hashed: HashMap<String, u64> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.clone(), i as u64))
+            .collect();
+        let ordered: BTreeMap<String, u64> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.clone(), i as u64))
+            .collect();
+
+        group.bench_with_input(BenchmarkId::new("string/hash", fill), &fill, |b, _| {
+            b.iter(|| {
+                let mut acc = 0u64;
+                for &i in &probes {
+                    acc ^= hashed[keys[i].as_str()];
+                }
+                acc
+            })
+        });
+        group.bench_with_input(BenchmarkId::new("string/btree", fill), &fill, |b, _| {
+            b.iter(|| {
+                let mut acc = 0u64;
+                for &i in &probes {
+                    acc ^= ordered[keys[i].as_str()];
+                }
+                acc
+            })
+        });
+    }
+
+    group.finish();
+}
+
+/// A fixed shuffle of `0..len`, so the walk order is the same on every run and
+/// on both shapes, and no prefetcher can follow it.
+fn permutation(len: usize) -> Vec<usize> {
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    let mut order: Vec<usize> = (0..len).collect();
+    for i in (1..len).rev() {
+        order.swap(i, (next() % (i as u64 + 1)) as usize);
+    }
+    order
+}
+
+/// A permutation of `0..len` that is one cycle of length `len`, so following
+/// `i = cycle[i]` visits every element before it repeats.
+///
+/// Sattolo's algorithm - Fisher-Yates with the swap partner drawn strictly
+/// below `i`, which is exactly the constraint that leaves a single cycle.
+fn cycle(len: usize) -> Vec<usize> {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    let mut order: Vec<usize> = (0..len).collect();
+    for i in (1..len).rev() {
+        order.swap(i, (next() % (i as u64)) as usize);
+    }
+    order
+}
+
 /// The store's own scan, with the whole map still in the write buffer.
 ///
 /// `ReactiveMap`'s `len`, `keys` and `entries` answer from the projection and
@@ -195,6 +646,33 @@ fn bench_store_scan(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("scan_prefix_committed", n), &n, |b, _| {
             b.iter(|| black_box(StoreBackend::scan_prefix(&store, &prefix).unwrap().len()))
         });
+    }
+
+    // The state between flushes, where the two lists interleave and the merge
+    // has something to do. A handful of rewrites is what an application has
+    // buffered a moment after somebody edited something; half is what a burst
+    // leaves.
+    for n in [1_000usize, 10_000, 100_000] {
+        let prefix = amethystate_core::path::StorePath::segment("bench");
+        group.throughput(Throughput::Elements(n as u64));
+
+        for pending in [32usize, n / 2] {
+            let (_tmp, store, _map) =
+                half_flushed(&format!("store-scan-mixed-{n}-{pending}"), n, pending);
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("scan_keys_pending{pending}"), n),
+                &n,
+                |b, _| b.iter(|| black_box(StoreBackend::scan_keys(&store, &prefix).unwrap().len())),
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("scan_prefix_pending{pending}"), n),
+                &n,
+                |b, _| {
+                    b.iter(|| black_box(StoreBackend::scan_prefix(&store, &prefix).unwrap().len()))
+                },
+            );
+        }
     }
 
     group.finish();
@@ -421,6 +899,10 @@ criterion_group!(
     bench_writes,
     bench_len,
     bench_scans,
+    bench_windowed_reads,
+    bench_handle_shape,
+    bench_handle_shape_cold,
+    bench_lookup_structure,
     bench_store_scan,
     bench_map_open,
     bench_reads,

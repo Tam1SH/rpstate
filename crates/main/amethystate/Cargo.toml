@@ -31,6 +31,10 @@ test-utils = ["amethystate-core/test-utils"]
 # records a backtrace per allocation, which makes any timing meaningless.
 dhat-heap = []
 
+# Opens `store::backend::utils` so a bench can reach it. A bench is a separate
+# crate and cannot see a private module; none of what this exposes is API.
+bench-internals = []
+
 # The macro goldens: trybuild and macrotest, which compile a crate per case
 # and cost more than the rest of the suite put together. Off by default so an
 # ordinary run stays quick; CI turns it on, which is what keeps the goldens
@@ -84,6 +88,8 @@ trybuild = { workspace = true }
 tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
 real-confy = { package = "confy", version = "2.0.0" }
 serial_test = "3.5.0"
+dashmap = { workspace = true }
+smol_str = { workspace = true }
 rmp-serde = { workspace = true }
 dhat = "0.3"
 
@@ -98,3 +104,16 @@ harness = false
 [[bench]]
 name = "reactive_map_bench"
 harness = false
+
+[[bench]]
+name = "signal_arc_bench"
+harness = false
+
+[[bench]]
+name = "map_cache_shape"
+harness = false
+
+[[bench]]
+name = "scan_merge_bench"
+harness = false
+required-features = ["bench-internals", "redb"]
