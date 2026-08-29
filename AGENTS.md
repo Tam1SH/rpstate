@@ -59,10 +59,11 @@ hides plenty; a change can pass under one engine and fail under another.
 It pins `INSTA_UPDATE=no`, so snapshot tests report a mismatch instead of
 quietly rewriting the snapshot.
 
-Two differences from the GitHub workflow worth knowing: that one excludes
-`amethystate-gpui`, which needs a toolchain the hosted runners lack, and it uses
-the bare `sqlite` feature where the script uses `sqlite-bundled` — the bare one
-links against a system SQLite that may not be installed.
+One difference from the GitHub workflow worth knowing: that one excludes
+`amethystate-gpui`, which needs a toolchain the hosted runners lack.
+
+`sqlite` compiles SQLite in; `sqlite-bundled` is the old name for it and now
+means the same thing.
 
 ## Documentation examples
 

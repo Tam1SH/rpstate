@@ -27,10 +27,12 @@ amethystate = "*"
 amethystate = { version = "*", default-features = false, features = ["json"] }
 ```
 
-**SQLite** — via rusqlite. Use `sqlite-bundled` if you don't want a system SQLite dependency.
+**SQLite** — via rusqlite, compiled in rather than linked from the system, so a
+C toolchain is needed to build it and the SQLite version is this library's
+choice rather than your distribution's.
 
 ```toml
-amethystate = { version = "*", default-features = false, features = ["sqlite-bundled"] }
+amethystate = { version = "*", default-features = false, features = ["sqlite"] }
 ```
 
 ## Tauri

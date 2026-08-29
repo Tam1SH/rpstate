@@ -14,8 +14,14 @@ default = ["redb"]
 json = ["text"]
 toml = ["dep:toml_edit", "text"]
 ron = ["dep:ron", "text"]
-sqlite = ["dep:rusqlite", "dep:sonic-rs", "dep:parking_lot"]
-sqlite-bundled = ["sqlite", "rusqlite/bundled"]
+# SQLite is compiled in rather than linked from the system, so the floor this
+# library imposes is this library's own. Linking the system one hands that
+# choice to whatever the user's distribution ships, and a feature we adopt later
+# can raise the floor by years without SQLite recording that it did - `STRICT`
+# moves it to 3.37 while leaving the header untouched, so an older build reports
+# a corrupt schema for an intact file.
+sqlite = ["dep:rusqlite", "dep:sonic-rs", "dep:parking_lot", "rusqlite/bundled"]
+sqlite-bundled = ["sqlite"]
 redb = ["dep:redb", "dep:rmp-serde", "dep:parking_lot", "dep:arc-swap"]
 text = ["dep:tempfile", "dep:parking_lot", "dep:notify"]
 
