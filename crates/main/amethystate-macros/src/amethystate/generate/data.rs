@@ -23,8 +23,6 @@ pub(crate) fn data_impl(
     macro_args: &MacroArgs,
     rp_mode: RpMode,
 ) -> TokenStream2 {
-    // Only `derive` is forwarded: the rest of the user's attributes belong to
-    // the struct they wrote, not to this schema carrier.
     let forwarded_derives: Vec<&syn::Attribute> = attrs
         .iter()
         .filter(|a| a.path().is_ident("derive"))
@@ -57,11 +55,6 @@ pub(crate) fn data_impl(
     let version_val = macro_args.version.unwrap_or(0);
 
     let field_descriptors = p_fields.iter().map(|e| {
-        // The stored name, not the Rust one. `#[amestate(key = "..")]` moves
-        // where the value goes, and everything that reads or writes it already
-        // used `stored_name` - the schema alone was describing a path nothing
-        // held, so a migration planned off the snapshot planned against a name
-        // that was not there.
         let fname_str = e.stored_name();
         let ty = &e.ty;
         let type_name = quote!(#ty).to_string().replace(" ", "");

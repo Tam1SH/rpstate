@@ -2,6 +2,7 @@ use crate::reactive::cell::CellCommit;
 use crate::reactive::cell::ReactiveCell;
 use crate::reactive::error::WriteError;
 use crate::store::StoreBackend;
+use crate::store::facts::Facts;
 use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::{MapChange, Signal};
 use error_stack::{Report, ResultExt};
@@ -89,7 +90,7 @@ where
                     .store
                     .flush_prefix(&inner.path)
                     .change_context(WriteError::Storage)
-                    .attach_with(|| format!("committing an entry write: {}", inner.path))
+                    .attach_key(&inner.path)
             }),
             start: Arc::new(move || match start.upgrade() {
                 Some(inner) => inner.store.flush_async(),

@@ -1,5 +1,6 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
 use crate::error::FieldError;
+use crate::facts::Facts;
 use crate::path::StorePath;
 use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
@@ -114,7 +115,7 @@ where
             .get(&self.path)
             .await
             .change_context(FieldError::Storage)
-            .attach_with(|| format!("field: {}", self.path))?
+            .attach_key(&self.path)?
             .ok_or_else(|| {
                 Report::new(FieldError::KeyNotFound(self.path.to_string()))
                     .attach("read through a field handle")

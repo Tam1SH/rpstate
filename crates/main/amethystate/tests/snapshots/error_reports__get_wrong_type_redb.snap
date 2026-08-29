@@ -4,11 +4,12 @@ expression: shape(&err)
 ---
 the store could not read
 ├╴store: <store>
-├╴key: cfg.name (unflushed)
+├╴key: cfg.name
+├╴not yet flushed
 │
 ├─▶ the value could not be encoded or decoded
-│   ├╴path: cfg.name
-│   ╰╴decoding 13 bytes of messagepack
+│   ├╴key: cfg.name
+│   ╰╴value bytes: 13
 │
 ├─▶ Erased codec error: wrong msgpack marker FixStr(12)
 │

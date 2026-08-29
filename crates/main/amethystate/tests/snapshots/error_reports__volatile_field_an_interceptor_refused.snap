@@ -4,5 +4,5 @@ expression: shape(&err)
 ---
 an interceptor rejected the change
 ├╴refused by an interceptor on the field
-├╴field: app.session
+├╴key: app.session
 ╰╴a volatile field: nothing was going to be stored either way

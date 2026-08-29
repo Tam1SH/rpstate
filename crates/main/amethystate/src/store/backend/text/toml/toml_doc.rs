@@ -68,7 +68,7 @@ impl TextDocument for TomlDocument {
                 Err(_) => {
                     return Err(Report::new(TextStoreError::RootMustBeObject)
                         .change_context(StorageError::Write)
-                        .attach("node: the document root"));
+                        .attach("the write was addressed at the document root"));
                 }
             };
             *self.0.as_item_mut() = toml_edit::Item::Table(table);
@@ -137,8 +137,6 @@ impl TextDocument for TomlDocument {
             val: &'a T,
         }
 
-        // The wrapper toml needs adds a level of its own, and it is not the
-        // application's - the budget is spent on `val`, inside it.
         let s = toml_edit::ser::to_string(&Wrap {
             val: &depth.count(value),
         })
@@ -164,8 +162,6 @@ impl TextDocument for TomlDocument {
         bytes: &[u8],
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
-        // `node_to_bytes` wraps the value in a `val = ...` document, so the
-        // deserializer has to be built from that key, not from the whole text.
         let node = Self::bytes_to_node(bytes)?;
         let rendered = match node.as_value() {
             Some(v) => v.to_string(),

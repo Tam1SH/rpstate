@@ -3,9 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn unique_path(suffix: &str) -> PathBuf {
-    // The clock alone is not enough: Windows resolves `SystemTime::now` far
-    // more coarsely than tests start, so parallel tests collided on one path
-    // and the second one met `DatabaseAlreadyOpen`.
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let nanos = SystemTime::now()
@@ -49,8 +46,6 @@ impl AsRef<Path> for TempPath {
 
 impl Drop for TempPath {
     fn drop(&mut self) {
-        // Text backends keep a sibling backup, redb and sqlite may leave a
-        // lock or journal file; sweep anything sharing the stem.
         let (Some(dir), Some(stem)) = (self.0.parent(), self.0.file_name()) else {
             return;
         };

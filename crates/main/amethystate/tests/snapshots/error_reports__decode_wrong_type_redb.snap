@@ -4,7 +4,7 @@ expression: shape(&err)
 ---
 the value could not be encoded or decoded
 ├╴as: u16
-├╴decoding 13 bytes of messagepack
+├╴value bytes: 13
 │
 ├─▶ Erased codec error: wrong msgpack marker FixStr(12)
 │

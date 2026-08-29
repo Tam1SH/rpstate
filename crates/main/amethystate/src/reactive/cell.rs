@@ -410,10 +410,6 @@ mod tests {
 
     #[test]
     fn a_cell_dies_with_the_field_it_views() {
-        // A cell is a view, not an owner. Once the field is gone there is
-        // nothing to view: reads answer `None` rather than going on reporting
-        // the last value they saw, and writes say so instead of landing
-        // somewhere nobody is watching.
         let store = unique_store("outlive");
         let cell = {
             let field = stored_field(&store, "height", 10);
@@ -446,10 +442,6 @@ mod tests {
 
     #[test]
     fn write_through_cell_fires_once_per_write() {
-        // The bug that started this refactor: a cell with two writers - a local
-        // optimistic set plus the store round-trip - raised subscribers twice
-        // for one write. With the store as the only writer, one write is one
-        // notification.
         let store = unique_store("single-fire");
         let field = stored_field(&store, "fires", 0);
         let cell = field.cell();
@@ -467,9 +459,6 @@ mod tests {
 
     #[test]
     fn rejected_write_reports_and_leaves_the_cache_alone() {
-        // An interceptor refusing the write must surface as an error, and the
-        // cell must keep reporting what is actually stored - not the value
-        // somebody tried to write.
         let store = unique_store("rejected");
         let field = stored_field(&store, "guarded", 5);
         let _guard = field.intercept(|_change| None);

@@ -283,9 +283,11 @@ dependencies = [
  "error-stack",
  "futures",
  "inventory",
+ "parking_lot",
  "proptest",
  "serde",
  "serde_json",
+ "smol_str 0.3.6",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
@@ -11550,6 +11552,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

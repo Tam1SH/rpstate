@@ -1,6 +1,7 @@
 #![allow(clippy::complexity)]
 pub mod backend;
 pub mod change;
+pub mod facts;
 
 #[cfg(feature = "async")]
 pub mod async_impl;

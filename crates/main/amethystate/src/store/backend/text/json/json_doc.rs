@@ -66,7 +66,7 @@ impl TextDocument for JsonDocument {
             if !node.is_object() {
                 return Err(Report::new(TextStoreError::RootMustBeObject)
                     .change_context(StorageError::Write)
-                    .attach("node: the document root"));
+                    .attach("the write was addressed at the document root"));
             }
             self.0 = node;
             return Ok(());

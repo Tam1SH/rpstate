@@ -15,6 +15,14 @@ pub enum StoreOp {
     DeletePrefix,
 }
 
+/// The writer of a change that arrived from the file rather than from a handle
+/// in this process.
+///
+/// Its bytes are `amethystate_disk` in ASCII, so it reads as itself in a log
+/// and cannot collide with a generated id: the version and variant bits are
+/// not a v4's.
+pub const EXTERNAL_EDIT: Uuid = Uuid::from_u128(0x616d_6574_6879_7374_6174_655f_6469_736b);
+
 #[derive(Debug, Clone)]
 pub struct StoreEvent {
     pub path: StorePath,
@@ -22,6 +30,13 @@ pub struct StoreEvent {
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
     pub source: Option<Uuid>,
+}
+
+impl StoreEvent {
+    /// Whether this change came off the disk.
+    pub fn is_external_edit(&self) -> bool {
+        self.source == Some(EXTERNAL_EDIT)
+    }
 }
 
 /// What a subscriber asked to hear about. `Prefix` matches by level, not by

@@ -1,3 +1,4 @@
+use crate::facts::Facts;
 use crate::path::StorePath;
 use crate::primitives::error::{FieldError, ReactiveFieldResult};
 use crate::primitives::field_core::FieldValue;
@@ -19,17 +20,13 @@ where
     let change = core
         .run_interceptors(path.clone(), value, source)
         .map_err(FieldError::intercepted)
-        .attach_with(|| format!("field: {path}"))?;
+        .attach_key(&path)?;
 
-    // The cache is left to the backend's subscription, as in the sync path.
-    // Writing it here too made the field its own second writer: subscribers
-    // heard about one write twice, and a write the backend refused still
-    // showed up in get().
     backend
         .set_owned_with_source(path.clone(), &change.new_value, change.source)
         .await
         .change_context(FieldError::Storage)
-        .attach_with(|| format!("field: {path}"))?;
+        .attach_key(&path)?;
 
     Ok(())
 }

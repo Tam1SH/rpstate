@@ -3,8 +3,8 @@ use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
 use crate::store::StorageError;
 use crate::store::backend::text::store::scan_prefix_recursive;
-use crate::store::facts::Facts;
 use crate::store::backend::text::{TextDocument, TextStore};
+use crate::store::facts::Facts;
 use crate::store::meta::SchemaSnapshot;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -25,7 +25,7 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
             let bytes = D::node_to_bytes(&node)
                 .change_context(StorageError::Scan)
                 .attach_store_file(&self.inner.files.data.path)
-                .attach_with(|| format!("node: {k}"))?;
+                .attach_raw_key(&k)?;
             results.push((crate::store::backend::utils::stored_path(&k)?, bytes));
         }
         Ok(results)
@@ -43,7 +43,7 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
                 let snapshot: SchemaSnapshot = D::deserialize_node(&node)
                     .change_context(StorageError::Meta)
                     .attach_meta_file(&self.inner.files.meta.path)
-                    .attach_with(|| format!("meta node: {full_key}"))?;
+                    .attach_meta_node(&full_key)?;
                 results.push((prefix.to_string(), snapshot));
             }
         }
@@ -54,12 +54,13 @@ impl<D: TextDocument + Send + 'static> InspectorBackend for TextStore<D> {
         self.inner.check_debouncer()?;
         let path = StorePath::parse_joined(key)
             .change_context(StorageError::Path)
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_raw_key(key)?;
 
         let node = D::bytes_to_node(value)
             .change_context(StorageError::Write)
             .attach_store_file(&self.inner.files.data.path)
-            .attach_with(|| format!("node: {path}"))?;
+            .attach_key(&path)
+            .attach_value_bytes(value.len())?;
 
         self.inner.set_node(path, node, None)
     }

@@ -102,7 +102,7 @@ fn apply_pending(
                 }
                 .doing(StorageError::Flush, path)
                 .attach_table(TABLE_META.name())
-                .attach_with(|| format!("namespace: {key}"))?;
+                .attach_prefix(key)?;
             }
         }
     }
@@ -233,17 +233,7 @@ impl RedbStoreInner {
     /// flush that lands clears this. A debouncer thread that is actually dead
     /// is a different thing and still panics: that is a bug here, not a disk.
     fn check_debouncer(&self) -> StorageResult<()> {
-        if let Some(reason) = self.health.failure() {
-            return Err(error_stack::Report::new(StorageError::CommitFailed)
-                .attach(format!("the background flush is not landing: {reason:#}"))
-                .attach(
-                    "what is already buffered is still being retried, and reads are unaffected",
-                ));
-        }
-        if self.debouncer.is_poisoned() {
-            panic!("debouncer thread is dead — store integrity cannot be guaranteed");
-        }
-        Ok(())
+        utils::check_debouncer(&self.health, &self.debouncer)
     }
 }
 
@@ -304,9 +294,6 @@ impl RedbStore {
 
         let db = Arc::new(arc_swap::ArcSwapOption::from(Some(opened)));
 
-        // The swap, not the database: a clone of the `Database` here would
-        // hold redb's file lock for the life of this thread, and a reopen
-        // could never take it back.
         let db_save = db.clone();
         let pending_save = pending.clone();
         let path_save = path.clone();
@@ -362,18 +349,12 @@ impl RedbStore {
                         Ok(())
                     }
                     Err(report) => {
-                        // Retrying against a handle that answers `PreviousIo`
-                        // is spinning: it has stopped going near the disk at
-                        // all. Trading it for a fresh one is the only thing
-                        // that turns a recovered disk back into a working
-                        // store, and the next attempt of this same retry loop
-                        // is the one that lands.
                         if is_previous_io(&report)
                             && let Err(failed) = reopen(&db_save, &path_save)
                         {
                             return Err(report
                                 .attach("reopening the database after it stopped reaching the disk failed too")
-                                .attach(format!("{failed:#}")));
+                                .attach(failed));
                         }
                         Err(report)
                     }
@@ -532,7 +513,7 @@ impl StoreBackend for RedbStore {
     ) -> StorageResult<()> {
         let mut de = rmp_serde::Deserializer::from_read_ref(bytes);
         let mut erased = <dyn erased_serde::Deserializer>::erase(&mut de);
-        f(&mut erased).attach_with(|| format!("decoding {} bytes of messagepack", bytes.len()))
+        f(&mut erased).attach_value_bytes(bytes.len())
     }
 
     fn set_erased(
@@ -556,24 +537,12 @@ impl StoreBackend for RedbStore {
             .check_path(&path)
             .attach_store_file(&self.inner.path)?;
 
-        // Counted during the codec's own pass rather than in one of its own.
-        // redb needs it most: `rmp_serde` has no ceiling, so a value deep
-        // enough is committed and then kills every process that opens the file
-        // afterwards - and building the value to measure it is the very act
-        // that overflows the stack.
         let depth = self.inner.budget.for_value(&path);
         let counted = depth.count(value);
         let bytes = SERIALIZATION_BUFFER
             .with(|buf| {
                 let mut b = buf.borrow_mut();
                 b.clear();
-                // `with_struct_map` writes a struct as a map of its field
-                // names. Without it a struct goes out as an array, so which
-                // slot held which name is nowhere in the file - and swapping
-                // two same-typed fields in the declaration silently swapped
-                // every stored value, while renaming one was invisible. The
-                // schema snapshot beside the data names every field; the data
-                // did not, and only one of the two was consulted on a read.
                 let mut ser = Serializer::new(&mut *b)
                     .with_bytes(BytesMode::ForceAll)
                     .with_struct_map();
@@ -632,11 +601,6 @@ impl StoreBackend for RedbStore {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let subtree = prefix.subtree();
 
-        // Both sides arrive sorted - the engine ranges in key order, and the
-        // buffer is sorted once - so the two are merged rather than folded
-        // into a tree. A tree charged a walk of twenty-odd path comparisons
-        // for every committed key, and at a million entries those comparisons
-        // stopped fitting in cache.
         let mut committed: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         let (_txn, table) = self.inner.read_data(StorageError::Scan).attach_prefix(prefix)?;
@@ -715,7 +679,6 @@ impl StoreBackend for RedbStore {
                 continue;
             }
 
-            // Everything the buffer holds ahead of this key belongs before it.
             while pending.peek().is_some_and(|(p, _)| p.as_str() < key) {
                 let (p, value) = pending.next().expect("peeked");
                 if let Some(value) = value {
@@ -724,8 +687,6 @@ impl StoreBackend for RedbStore {
             }
 
             match pending.peek() {
-                // A buffered write replaces this one, a buffered delete removes
-                // it, and either way the buffer's turn is now.
                 Some((p, _)) if p.as_str() == key => {
                     let (p, value) = pending.next().expect("peeked");
                     if let Some(value) = value {
@@ -747,8 +708,6 @@ impl StoreBackend for RedbStore {
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let subtree = prefix.subtree();
-        // Values carried as empty vectors so the same merge serves both scans;
-        // nothing reads them.
         let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         let read_txn = self
@@ -904,7 +863,7 @@ impl StoreBackend for RedbStore {
             .db()?
             .begin_read()
             .doing(StorageError::Meta, &self.inner.path)
-            .attach_with(|| format!("namespace: {namespace}"))?;
+            .attach_prefix(namespace)?;
         let table = read_txn
             .open_table(TABLE_META)
             .doing(StorageError::Meta, &self.inner.path)
@@ -912,7 +871,7 @@ impl StoreBackend for RedbStore {
         let found = table
             .get(key.as_str())
             .doing(StorageError::Meta, &self.inner.path)
-            .attach_with(|| format!("key: {key}"))?
+            .attach_raw_key(&key)?
             .is_some();
 
         if found {
@@ -922,7 +881,7 @@ impl StoreBackend for RedbStore {
     }
 
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
-        if self.inner.initialized.lock().contains(namespace.as_str()) == state.is_seeded() {
+        if state.is_seeded() && self.inner.initialized.lock().contains(namespace.as_str()) {
             return Ok(());
         }
 
@@ -1281,12 +1240,12 @@ mod tests {
             "a write while the flush is not landing should say so, not queue quietly"
         );
 
-        // The reads the store already had are untouched by any of it.
         assert_eq!(
             store
                 .get::<u32>(StorePath::from_segments(["doomed"]))
                 .unwrap(),
-            Some(1)
+            Some(1),
+            "the reads the store already had are untouched by any of it"
         );
 
         SIMULATE_WRITE_FAILURE.store(false, Ordering::Relaxed);
@@ -1303,10 +1262,6 @@ mod tests {
         store
             .set(StorePath::from_segments(["waiting"]), &1u32)
             .unwrap();
-        // Polled by reading rather than by writing: a `set` that succeeds
-        // schedules the debouncer and restarts its quiet period, so a loop that
-        // polls with a write keeps the flush from ever reaching the retry
-        // streak it is waiting for.
         assert!(
             wait_until(|| store.inner.health.failure().is_some()),
             "the flush never gave up, so there is nothing for a write to be \
@@ -1321,8 +1276,6 @@ mod tests {
 
         SIMULATE_WRITE_FAILURE.store(false, Ordering::Relaxed);
 
-        // The retry loop is still running, so the next attempt lands on its
-        // own - nothing here asks it to.
         assert!(
             wait_until(|| store.inner.health.failure().is_none()),
             "a flush that can land again never cleared the failure"

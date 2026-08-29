@@ -3,6 +3,7 @@ use crate::observability::SchemaEntry;
 use crate::observability::register_instance;
 use crate::reactive::error::{WriteError, WriteResult};
 use crate::store::Durable;
+use crate::store::facts::Facts;
 use crate::store::{
     InitState, StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only,
 };
@@ -138,7 +139,7 @@ impl Kv {
         self.store
             .get(&path)
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("kv read: {path}"))
+            .attach_key(&path)
     }
 
     /// The same writes, each returning only once the change is on disk.
@@ -175,7 +176,7 @@ impl Kv {
         self.store
             .set_with_source(&path, value, Some(self.instance_id))
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("kv write: {path}"))?;
+            .attach_key(&path)?;
         Ok(())
     }
 
@@ -203,7 +204,7 @@ impl Kv {
         self.store
             .delete_with_source(&path, Some(self.instance_id))
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("kv remove: {path}"))?;
+            .attach_key(&path)?;
         Ok(())
     }
 
@@ -274,7 +275,7 @@ impl Kv {
 
         let field = field_with_path::<T>(&self.store, path.clone(), default, self.instance_id)
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("kv cell: {path}"))?;
+            .attach_key(&path)?;
 
         let cell = field.cell();
         Ok(cell.owning(Arc::new(field)))
@@ -308,7 +309,7 @@ impl Kv {
 
         reactive_map_with_path_only(&self.store, path.clone(), HashMap::new(), self.instance_id)
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("kv map: {path}"))
+            .attach_prefix(&path)
     }
 
     /// Refuses a path a declared struct owns.
@@ -505,10 +506,11 @@ fn collision(at: &StorePath, fields: &[FieldDescriptor], path: &StorePath) -> Op
     None
 }
 
-/// Every namespace at or under `at` that a construction marks as seeded.
+/// Every path at or under `at` that a construction marks as seeded.
 ///
-/// A struct marks its own prefix, and a nested node marks the path it was built
-/// at, so the set is the prefix plus every `Role::Node` under it.
+/// A struct marks its own prefix, a nested node marks the path it was built at,
+/// and a map marks its own path - so the set is the prefix, every `Role::Node`
+/// under it, and every `Role::Map`.
 fn seeded_namespaces_under(at: &StorePath) -> Vec<StorePath> {
     let mut found = Vec::new();
 
@@ -521,23 +523,26 @@ fn seeded_namespaces_under(at: &StorePath) -> Vec<StorePath> {
         }
 
         found.push(prefix.clone());
-        collect_nodes(prefix, entry.fields, &mut found);
+        collect_seeded(prefix, entry.fields, &mut found);
     }
 
     found
 }
 
-fn collect_nodes(at: &StorePath, fields: &[FieldDescriptor], found: &mut Vec<StorePath>) {
+fn collect_seeded(at: &StorePath, fields: &[FieldDescriptor], found: &mut Vec<StorePath>) {
     for field in fields {
-        if field.role != Role::Node {
-            continue;
-        }
-        let Ok(node) = at.try_push(field.name) else {
+        let Ok(path) = at.try_push(field.name) else {
             continue;
         };
 
-        collect_nodes(&node, field.children, found);
-        found.push(node);
+        match field.role {
+            Role::Node => {
+                collect_seeded(&path, field.children, found);
+                found.push(path);
+            }
+            Role::Map => found.push(path),
+            Role::Field => {}
+        }
     }
 }
 
@@ -570,7 +575,7 @@ impl Durable<'_, Kv> {
             .store
             .flush_prefix(&path)
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("committing kv write: {path}"))?;
+            .attach_key(&path)?;
         Ok(())
     }
 
@@ -587,7 +592,7 @@ impl Durable<'_, Kv> {
             .flush_async()
             .await
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("committing a kv write: {path}"))?;
+            .attach_key(&path)?;
         Ok(())
     }
 
@@ -601,7 +606,7 @@ impl Durable<'_, Kv> {
             .store
             .flush_prefix(&path)
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("committing kv remove: {path}"))?;
+            .attach_key(&path)?;
         Ok(())
     }
 
@@ -618,7 +623,7 @@ impl Durable<'_, Kv> {
             .flush_async()
             .await
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("committing a kv remove: {path}"))?;
+            .attach_key(&path)?;
         Ok(())
     }
 }

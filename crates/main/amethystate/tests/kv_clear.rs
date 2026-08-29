@@ -16,6 +16,9 @@ pub struct App {
 
     #[amestate(nested)]
     pub panel: Panel,
+
+    #[amestate(default = { "left": 200u32 })]
+    pub widths: amethystate::ReactiveMap<String, u32>,
 }
 
 #[amethystate]
@@ -157,5 +160,10 @@ fn resetting_puts_the_declared_defaults_back_on_the_next_build() {
         store.kv().namespace("app").get::<u8>("theme").unwrap(),
         Some(1),
         "resetting the schema's paths took an undeclared one with it"
+    );
+    assert_eq!(
+        app.widths().get("left"),
+        Some(200),
+        "the map's default did not come back"
     );
 }

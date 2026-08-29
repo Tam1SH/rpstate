@@ -7,4 +7,4 @@ a name that cannot be a level
 ├╴levels: 4, and the limit is 3
 ├╴set by: limits(|l| l.key_depth(..))
 ├╴what is stored here spends the same budget - this store reads 80 levels in all
-╰╴file: <store>
+╰╴store: <store>

@@ -4,5 +4,5 @@ expression: shape(&err)
 ---
 an interceptor rejected the change
 ├╴refused by an interceptor on the map
-├╴map: app.widths
+├╴prefix: app.widths
 ╰╴affects: app.widths.cpu

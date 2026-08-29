@@ -1,5 +1,6 @@
 use crate::migration::builder::MigrationBuilder;
 use crate::store::config::{AfterGivingUp, FileWritePolicy, StoreConfig, WriteLimits};
+use crate::store::facts::Facts;
 use crate::store::{StorageError, StorageResult};
 use crate::{MigrationReport, Store};
 use error_stack::{Report, ResultExt};
@@ -60,17 +61,12 @@ impl Backend {
         match self {
             #[cfg(feature = "redb")]
             Backend::Redb => 512,
-            // 128 in `serde_json`, less the level the root object spends.
             #[cfg(feature = "json")]
             Backend::Json => 127,
-            // Measured at 81 for a path and 80 for a value, which do not add up
-            // on toml - the lower of the two holds for both.
             #[cfg(feature = "toml")]
             Backend::Toml => 80,
             #[cfg(feature = "ron")]
             Backend::Ron => 64,
-            // `sonic_rs` stops at 255; the path is a `TEXT` key and costs
-            // nothing, so the whole of it is the value's.
             #[cfg(feature = "sqlite")]
             Backend::Sqlite => 254,
         }
@@ -342,7 +338,7 @@ fn ensure_parent(path: &Path) -> StorageResult<()> {
     std::fs::create_dir_all(parent)
         .change_context(StorageError::Open)
         .attach_with(|| format!("directory: {}", parent.display()))
-        .attach_with(|| format!("store: {}", path.display()))
+        .attach_store_file(path)
 }
 
 impl StoreBuilder {

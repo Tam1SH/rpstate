@@ -80,7 +80,7 @@ impl TextDocument for RonDocument {
             if !matches!(node, ::ron::value::Value::Map(_)) {
                 return Err(Report::new(TextStoreError::RootMustBeObject)
                     .change_context(StorageError::Write)
-                    .attach("node: the document root"));
+                    .attach("the write was addressed at the document root"));
             }
             self.0 = node;
             return Ok(());
@@ -150,8 +150,6 @@ impl TextDocument for RonDocument {
         bytes: &[u8],
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
-        // Deserialize from the node, not from its rendered text: a `Value` map
-        // renders as `{..}`, which a struct deserializer will not accept.
         let node = Self::bytes_to_node(bytes)?;
         let mut erased = <dyn erased_serde::Deserializer>::erase(node);
         f(&mut erased)

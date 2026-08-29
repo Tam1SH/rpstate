@@ -164,9 +164,6 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
                 .attach_prefix(prefix)
                 .attach_read_so_far(res.len())?;
 
-            // The range's own bounds are not exact: it opens at the prefix
-            // itself and closes above `prefix.`, so a sibling whose next
-            // character sorts below the separator falls inside it.
             if subtree.contains(&key) {
                 res.push((crate::store::backend::utils::stored_path(&key)?, value));
             }

@@ -3,6 +3,7 @@ use crate::path::StorePath;
 use crate::primitives::error::WriteError;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
+use crate::facts::{Facts, Prefix};
 use crate::{MapChange, ReactiveMapCore, map_apply_remote_change};
 use error_stack::{Report, ResultExt};
 use uuid::Uuid;
@@ -20,7 +21,7 @@ where
         .get::<V>(entry)
         .await
         .change_context(WriteError::Storage)
-        .attach_with(|| format!("reading map entry: {entry}"))
+        .attach_key(entry)
 }
 
 pub async fn map_get_async<B, K, V>(
@@ -37,21 +38,6 @@ where
     read_entry::<B, V>(backend, &entry).await
 }
 
-pub async fn map_contains_key_async<B, K, V>(
-    backend: &B,
-    path: &StorePath,
-    key: &K,
-) -> ReactiveMapResult<bool>
-where
-    B: AmeBackend,
-    K: Display,
-    V: DeserializeOwned,
-{
-    map_get_async::<B, K, V>(backend, path, key)
-        .await
-        .map(|v| v.is_some())
-}
-
 pub async fn map_entries_async<B, K, V>(
     backend: &B,
     path: &StorePath,
@@ -65,7 +51,7 @@ where
         .scan_prefix(path)
         .await
         .change_context(WriteError::Storage)
-        .attach_with(|| format!("scanning map: {path}"))?;
+        .attach_prefix(path)?;
     let mut results = Vec::new();
 
     for (full_path, raw) in kvs {
@@ -84,25 +70,13 @@ where
         let value = backend
             .decode::<V>(&raw)
             .change_context(WriteError::Storage)
-            .attach_with(|| format!("map: {path}"))
-            .attach_with(|| format!("entry: {key_str}"))?;
+            .attach_prefix(path)
+            .attach_entry(&key_str)?;
 
         results.push((key, value));
     }
 
     Ok(results)
-}
-
-pub async fn map_len_async<B>(backend: &B, path: &StorePath) -> ReactiveMapResult<usize>
-where
-    B: AmeBackend,
-{
-    backend
-        .scan_prefix(path)
-        .await
-        .map(|kvs| kvs.len())
-        .change_context(WriteError::Storage)
-        .attach_with(|| format!("scanning map: {path}"))
 }
 
 pub async fn map_update_async<B, K, V>(
@@ -122,8 +96,10 @@ where
     let old_value = match read_entry::<B, V>(backend, &full_path).await? {
         Some(old_value) => old_value,
         None => {
-            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {path}")));
+            return Err(
+                Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                    .attach(Prefix(path.clone())),
+            );
         }
     };
 
@@ -237,15 +213,12 @@ where
     let processed = core
         .run_interceptors(context_path, change)
         .map_err(ReactiveMapError::intercepted)
-        .attach_with(|| format!("map: {path}"))
+        .attach_prefix(&path)
         .attach_with(|| match &subject {
             Some(entry) => format!("affects: {entry}"),
             None => format!("affects: all of {path}"),
         })?;
 
-    // Writes carry the provenance the change came with, as the sync path does.
-    // Without it a handle's own write comes back looking like somebody else's,
-    // and anything answering external changes with a write of its own echoes.
     let source = processed.source();
 
     match &processed {
@@ -260,7 +233,7 @@ where
                 .set_with_source(&entry, value, source)
                 .await
                 .change_context(WriteError::Storage)
-                .attach_with(|| format!("writing map entry: {entry}"))?;
+                .attach_key(&entry)?;
         }
         MapChange::Remove { key, .. } => {
             let entry = path.entry(key)?;
@@ -268,30 +241,17 @@ where
                 .delete_with_source(&entry, source)
                 .await
                 .change_context(WriteError::Storage)
-                .attach_with(|| format!("removing map entry: {entry}"))?;
+                .attach_key(&entry)?;
         }
         MapChange::Clear { .. } => {
-            let kvs = backend
-                .scan_prefix(&path)
+            backend
+                .delete_prefix(&path, source)
                 .await
                 .change_context(WriteError::Storage)
-                .attach_with(|| format!("clearing map: {path}"))?;
-            for (key, _) in kvs {
-                backend
-                    .delete_with_source(&key, source)
-                    .await
-                    .change_context(WriteError::Storage)
-                    .attach_with(|| format!("clearing map entry: {key}"))?;
-            }
+                .attach_prefix(&path)?;
         }
     }
 
-    // After the write, not before. Updating first meant a failure below left
-    // the cache holding a value the backend never took, with nothing to undo
-    // it - and values() and get_sync read the cache alone.
-    //
-    // Subscribers are told by the backend's subscription, as in the sync path;
-    // notifying here as well delivered every change twice.
     map_apply_remote_change(core, &processed);
 
     Ok(())

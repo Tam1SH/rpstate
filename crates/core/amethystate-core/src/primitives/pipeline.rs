@@ -260,8 +260,6 @@ impl ReactiveScope {
 impl<R, T> IntoPipeline<T> for R
 where
     R: Reactive<T>,
-    // Required by `IntoPipeline` itself rather than by `Reactive`, so it is not
-    // the repetition the `Send + Sync + 'static` on `R` was.
     T: Clone + Send + Sync + 'static,
 {
     fn pipe(self) -> Pipeline<T> {
@@ -274,13 +272,6 @@ where
 
         let mut keepalive: Vec<Arc<dyn Send + Sync>> = self.keepalive().into_iter().collect();
 
-        // The source itself, and not only whatever it was keeping alive. A
-        // subscription does not hold what it is subscribed to, so a pipeline
-        // built from one source used to go quiet the moment the caller let go
-        // of it - showing the value it started with and never another, which
-        // is the shape of a component that pipes one field and drops the
-        // struct the field came from. Piping several sources kept them by
-        // accident, through the closure that re-reads them all.
         keepalive.push(Arc::new(self));
 
         Pipeline {

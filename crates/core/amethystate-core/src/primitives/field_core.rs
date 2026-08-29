@@ -110,9 +110,6 @@ impl<T: Clone + 'static> FieldCore<T> {
         };
 
         let Some(_guard) = InterceptGuard::enter(&self.intercept_depth, path) else {
-            // Letting the change through unchecked would turn a validating
-            // interceptor off exactly where recursion is deepest, and the value
-            // it exists to reject would reach the backend.
             return Err("interceptors nested too deep".to_string());
         };
 

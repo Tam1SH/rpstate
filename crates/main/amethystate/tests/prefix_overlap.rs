@@ -105,3 +105,29 @@ fn a_prefix_may_not_land_on_another_structs_field() {
         "the branch on disk"
     );
 }
+
+/// A map reads its whole subtree as entries, so anything stored below an entry
+/// is read back *as* that entry - with the deeper value's bytes under the
+/// shallower key. Two keys under one entry name collide and the scan's order
+/// decides which survives.
+#[test]
+#[ignore = "known: overlapping stored paths are neither prevented nor reported - see TODO.md"]
+fn a_map_reads_what_is_stored_below_its_entries_as_those_entries() {
+    let path = TempPath::new("map_swallows_below");
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+
+    store.set(["widths", "left", "px"], &800u32).unwrap();
+    store.set(["widths", "left", "pct"], &50u32).unwrap();
+    store.flush_prefix(StorePath::root()).unwrap();
+
+    let map: amethystate::ReactiveMap<String, u32> = store.kv().map("widths").unwrap();
+
+    assert_eq!(
+        map.keys(),
+        Vec::<String>::new(),
+        "`widths.left.px` is not an entry of the map at `widths`, and neither is \
+         `left`: the map's entries are the level below it, and nothing is stored \
+         there. Instead: {:?}",
+        map.entries().collect::<Vec<_>>()
+    );
+}

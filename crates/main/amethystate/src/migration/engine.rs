@@ -4,6 +4,7 @@ use crate::migration::set::MigrationSet;
 use crate::migration::{AppliedStep, ComponentOutcome, ComponentResult, NaggingRecord, SchemaDiff};
 use crate::observability::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
+use crate::store::facts::Facts;
 use crate::store::{StorageError, StorageResult};
 use crate::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
 use amethystate_core::path::StorePath;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 fn group_path(prefix: &str) -> StorageResult<StorePath> {
     StorePath::parse_joined(prefix)
         .change_context(StorageError::Path)
-        .attach_with(|| format!("migration group: {prefix}"))
+        .attach_migrating(prefix)
 }
 
 pub trait StorageProvider {

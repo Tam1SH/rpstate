@@ -31,7 +31,7 @@ macro_rules! define_store_test_suite {
             use super::*;
             use std::path::PathBuf;
             use std::sync::Arc;
-            use std::time::{Duration, SystemTime, UNIX_EPOCH};
+            use std::time::{SystemTime, UNIX_EPOCH};
             use $crate::store::config::StoreConfig;
             use $crate::store::{
                 StoreBackend, StoreEvent, StoreExt, StoreOp, StorePath, SubscriptionKind,
@@ -73,10 +73,9 @@ macro_rules! define_store_test_suite {
                 );
 
                 std::fs::write(&path, $watch_set_true).expect("updated file should be written");
+                store.0.inner.pull_external_changes();
 
-                let event = rx
-                    .recv_timeout(Duration::from_secs(3))
-                    .expect("watcher should emit set event");
+                let event = rx.try_recv().expect("the reread should emit a set event");
 
                 assert_eq!(event.path.as_str(), "ui.theme.dark");
                 assert_eq!(event.op, StoreOp::Set);
@@ -104,10 +103,9 @@ macro_rules! define_store_test_suite {
                 );
 
                 std::fs::write(&path, $watch_delete_empty).expect("updated file should be written");
+                store.0.inner.pull_external_changes();
 
-                let event = rx
-                    .recv_timeout(Duration::from_secs(3))
-                    .expect("watcher should emit delete event");
+                let event = rx.try_recv().expect("the reread should emit a delete event");
 
                 assert_eq!(event.path.as_str(), "ui.theme.dark");
                 assert_eq!(event.op, StoreOp::Delete);

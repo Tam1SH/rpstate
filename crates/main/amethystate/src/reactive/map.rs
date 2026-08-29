@@ -1,15 +1,14 @@
 use crate::Store;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
 use crate::store::StoreSubscription;
+use crate::store::facts::{Facts, Prefix};
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Durable, StoreBackend};
-use amethystate_core::path::{StorePath, cmp_names};
+use amethystate_core::path::StorePath;
 use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
 use error_stack::{Report, ResultExt};
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display};
-use std::hash::Hash;
-
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -143,9 +142,9 @@ where
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Display + ?Sized,
     {
-        self.inner.core.cache.get(key).map(|v| v.clone())
+        self.inner.core.cache.get(key)
     }
 
     /// Whether `key` has a value, without cloning it.
@@ -163,7 +162,7 @@ where
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Display + ?Sized,
     {
         self.inner.core.cache.contains_key(key)
     }
@@ -174,18 +173,10 @@ where
     /// - see [`ReactiveMap::keys`], where the difference is worked through.
     ///
     /// Read from the map's projection, so nothing is decoded and the disk is
-    /// not touched, but the whole map is cloned and sorted before the iterator
-    /// is handed over.
+    /// not touched. The projection is already in this order, so nothing is
+    /// sorted; the entries are cloned because the iterator outlives the read.
     pub fn entries(&self) -> impl Iterator<Item = (K, V)> {
-        let mut entries: Vec<(String, K, V)> = self
-            .inner
-            .core
-            .cache
-            .iter()
-            .map(|e| (e.key().to_string(), e.key().clone(), e.value().clone()))
-            .collect();
-        entries.sort_by(|(a, ..), (b, ..)| cmp_names(a, b));
-        entries.into_iter().map(|(_, k, v)| (k, v))
+        self.inner.core.cache.entries().into_iter()
     }
 
     /// Every key, sorted. Values are neither read nor deserialized.
@@ -224,15 +215,7 @@ where
     /// assert_eq!(odd.keys(), ["a1b", "a.b"]);
     /// ```
     pub fn keys(&self) -> Vec<K> {
-        let mut keys: Vec<(String, K)> = self
-            .inner
-            .core
-            .cache
-            .iter()
-            .map(|e| (e.key().to_string(), e.key().clone()))
-            .collect();
-        keys.sort_by(|(a, _), (b, _)| cmp_names(a, b));
-        keys.into_iter().map(|(_, k)| k).collect()
+        self.inner.core.cache.keys()
     }
 
     /// How many entries the map holds.
@@ -434,7 +417,7 @@ where
     pub fn update_with<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         if let Some(val) = self.get(key) {
@@ -443,7 +426,7 @@ where
             Ok(Some(new_val))
         } else {
             Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {}", self.inner.path)))
+                .attach(Prefix(self.inner.path.clone())))
         }
     }
 
@@ -452,7 +435,7 @@ where
     pub fn modify<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
         F: FnOnce(&mut V),
     {
         if let Some(mut val) = self.get(key) {
@@ -460,7 +443,7 @@ where
             self.update(key, &val)
         } else {
             Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {}", self.inner.path)))
+                .attach(Prefix(self.inner.path.clone())))
         }
     }
 
@@ -499,13 +482,11 @@ where
     pub fn update<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
     {
-        // Strict, so the key is already here and its owned form with it. Only
-        // `insert` has to be handed one.
-        let Some(owned) = self.inner.core.cache.get(key).map(|e| e.key().clone()) else {
+        let Some(owned) = self.inner.core.cache.owned_key(key) else {
             return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {}", self.inner.path)));
+                .attach(Prefix(self.inner.path.clone())));
         };
 
         let backend = SyncBridge::new(self.inner.store.clone());
@@ -568,11 +549,9 @@ where
     pub fn remove<Q>(&self, key: &Q) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Display + ?Sized,
     {
-        // The owned key comes from the projection rather than the caller, so a
-        // removal costs no allocation and the change still carries a `K`.
-        let Some(owned) = self.inner.core.cache.get(key).map(|e| e.key().clone()) else {
+        let Some(owned) = self.inner.core.cache.owned_key(key) else {
             return Ok(None);
         };
 
@@ -683,7 +662,7 @@ where
     pub fn update<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
     {
         self.0.update(key, value)?;
         self.commit()
@@ -698,7 +677,7 @@ where
     pub async fn update_async<Q>(&self, key: &Q, value: &V) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
     {
         self.0.update(key, value)?;
         self.commit_async().await
@@ -728,7 +707,7 @@ where
     pub fn remove<Q>(&self, key: &Q) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Display + ?Sized,
     {
         let previous = self.0.remove(key)?;
         self.commit()?;
@@ -743,7 +722,7 @@ where
     pub async fn remove_async<Q>(&self, key: &Q) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Display + ?Sized,
     {
         let previous = self.0.remove(key)?;
         self.commit_async().await?;
@@ -774,7 +753,7 @@ where
     pub fn update_with<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         let value = self.0.update_with(key, f)?;
@@ -790,7 +769,7 @@ where
     pub async fn update_with_async<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<Option<V>>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
         F: FnOnce(V) -> V,
     {
         let value = self.0.update_with(key, f)?;
@@ -804,7 +783,7 @@ where
     pub fn modify<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;
@@ -816,7 +795,7 @@ where
     pub async fn modify_async<Q, F>(&self, key: &Q, f: F) -> ReactiveMapResult<()>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Display + ?Sized,
+        Q: Display + ?Sized,
         F: FnOnce(&mut V),
     {
         self.0.modify(key, f)?;
@@ -829,7 +808,7 @@ where
             .store
             .flush_prefix(&self.0.inner.path)
             .change_context(ReactiveMapError::Storage)
-            .attach_with(|| format!("committing a map write: {}", self.0.inner.path))?;
+            .attach_prefix(&self.0.inner.path)?;
         Ok(())
     }
 
@@ -840,7 +819,7 @@ where
             .flush_async()
             .await
             .change_context(ReactiveMapError::Storage)
-            .attach_with(|| format!("committing a map write: {}", self.0.inner.path))?;
+            .attach_prefix(&self.0.inner.path)?;
         Ok(())
     }
 }
@@ -1289,18 +1268,13 @@ mod tests {
              codec's refusal, not a read or an open failure"
         );
 
-        // Two entries are unreadable at the new type - one by its key, one by
-        // its value - and which is met first is the scan's order, so either
-        // name will do. What must not do is a bare substring: `123` alone is
-        // satisfied by a line number or by the nanosecond stamp in the temp
-        // path, which is what this assertion used to accept.
         let report = format!("{err:?}");
         assert!(
             report.contains("entry: 123") || report.contains("entry: not_int_key"),
             "the report names the entry it could not read: {report}"
         );
         assert!(
-            report.contains("map: test.parse"),
+            report.contains("prefix: test.parse"),
             "the report names the map the entry is in: {report}"
         );
     }

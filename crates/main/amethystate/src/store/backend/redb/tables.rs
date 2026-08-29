@@ -70,8 +70,6 @@ impl TableWriter for WriteTransaction {
         val: &T,
     ) -> RedbResult<()> {
         let mut table = self.open_table(table_def)?;
-        // Named fields rather than positions - see the note on `with_struct_map`
-        // where values are written. The reader takes either form.
         let bytes = rmp_serde::to_vec_named(val).map_err(CodecError::from)?;
         table.insert(key, bytes.as_slice())?;
         Ok(())

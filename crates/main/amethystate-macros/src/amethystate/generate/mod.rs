@@ -325,11 +325,6 @@ pub fn generate_code(
         quote! {}
     };
 
-    // Bound per field, so a field type that cannot be printed leaves the struct
-    // without Debug instead of failing to compile.
-    // Autoref specialisation: a field whose type is Debug prints itself, one
-    // that is not prints a placeholder. Without it the bound would be fully
-    // concrete and rustc would demand Debug from every field type.
     let debug_fields_auto = entries.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
         quote! { .field(stringify!(#fname), (&__AmeW(&self.#fname)).__ame()) }

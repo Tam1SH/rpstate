@@ -122,7 +122,6 @@ impl IntoGlobalStore for &Path {
 /// ```
 #[must_use = "dropped here, the global store is closed here - bind it in `main` \
               (`let _ame = ...`) so the last writes are flushed on the way out"]
-// The `fn main` is the example: where the guard is bound is the whole point.
 #[allow(clippy::needless_doctest_main)]
 pub fn init_global<T: IntoGlobalStore>(source: T) -> GlobalStoreGuard {
     source.init_global()

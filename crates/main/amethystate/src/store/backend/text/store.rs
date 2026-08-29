@@ -10,12 +10,12 @@ use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
 use crate::store::depth::{Depth, DepthBudget};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
-use crate::store::facts::Facts;
+use crate::store::facts::{Facts, Key, StoreFile as StoreFileFact};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
-    InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
-    SubscriptionEntry, SubscriptionId, SubscriptionKind,
+    EXTERNAL_EDIT, InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback,
+    StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId, SubscriptionKind,
 };
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -239,17 +239,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     /// flush that lands clears this. A debouncer thread that is actually dead
     /// is a different thing and still panics: that is a bug here, not a disk.
     pub(crate) fn check_debouncer(&self) -> StorageResult<()> {
-        if let Some(reason) = self.health.failure() {
-            return Err(error_stack::Report::new(StorageError::CommitFailed)
-                .attach(format!("the background flush is not landing: {reason:#}"))
-                .attach(
-                    "what is already buffered is still being retried, and reads are unaffected",
-                ));
-        }
-        if self.debouncer.is_poisoned() {
-            panic!("debouncer thread is dead — store integrity cannot be guaranteed");
-        }
-        Ok(())
+        utils::check_debouncer(&self.health, &self.debouncer)
     }
 }
 
@@ -321,7 +311,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                     .files
                     .restore_from_backups(&initial_data, &initial_meta);
                 Err(e
-                    .attach(format!("store: {}", store.inner.files.data.path.display()))
+                    .attach(StoreFileFact(store.inner.files.data.path.clone()))
                     .attach("the files were restored from their backups"))
             }
         }
@@ -353,9 +343,6 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                 on_giveup: config.on_persist_failure.clone(),
             },
             move || -> StorageResult<()> {
-                // Read the generation before serializing. A write landing during
-                // the persist bumps it past this, so it stays pending instead of
-                // being marked saved without having been written.
                 let saving = writes_debounce.load(Ordering::Acquire);
                 files_debounce.persist()?;
                 persisted_debounce.store(saving, Ordering::Release);
@@ -369,11 +356,6 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let persisted_watch = persisted.clone();
         let meta_path = files.meta.path.clone();
 
-        // External edits (e.g. a text editor doing truncate-then-write) fire multiple
-        // raw filesystem events in quick succession, and reading the file on the very
-        // first one can observe a transient, partially-written state (seen as a
-        // spurious delete of every key). Debounce so we only re-read once the file
-        // has settled, same as we already do for our own outgoing writes.
         let watch_debouncer = Arc::new(Debouncer::new(config.watch_interval, move || {
             sync_external_changes::<D>(
                 &files_watch.data,
@@ -410,7 +392,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         })
         .map_err(|e| TextStoreError::Watch(e.to_string()))
         .change_context(StorageError::Open)
-        .attach_with(|| format!("file: {}", config.path.display()))?;
+        .attach_store_file(&config.path)?;
 
         let watch_dir = config.path.parent().unwrap_or(Path::new("."));
         let mut watcher = watcher;
@@ -419,7 +401,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             .map_err(|e| TextStoreError::Watch(e.to_string()))
             .change_context(StorageError::Open)
             .attach_with(|| format!("watching: {}", watch_dir.display()))
-            .attach_with(|| format!("file: {}", config.path.display()))?;
+            .attach_store_file(&config.path)?;
 
         let inner = Arc::new(TextStoreInner {
             files,
@@ -494,7 +476,7 @@ impl<D: TextDocument> TextStoreInner<D> {
             Some(node) => Ok(Some(
                 D::node_to_bytes(node)
                     .doing(StorageError::Read, &self.files.data.path)
-                    .attach_with(|| format!("node: {path}"))?,
+                    .attach_key(path)?,
             )),
             None => Ok(None),
         }
@@ -511,18 +493,15 @@ impl<D: TextDocument> TextStoreInner<D> {
             .check_path(path)
             .attach_store_file(&self.files.data.path)?;
 
-        // One pass: the codec renders the value and the levels are counted on
-        // the way past. A refusal comes back as the codec's own error, so which
-        // it was has to be asked rather than matched.
         let depth = self.budget.for_value(path);
         let node = D::serialize_node(value, &depth).map_err(|e| {
             if depth.overflowed() {
                 self.budget
                     .too_deep(path)
-                    .attach(format!("file: {}", self.files.data.path.display()))
+                    .attach(StoreFileFact(self.files.data.path.clone()))
             } else {
                 e.change_context(StorageError::Write)
-                    .attach(format!("node: {path}"))
+                    .attach(Key(path.clone()))
             }
         })?;
         self.set_node(path.clone(), node, source)
@@ -537,7 +516,7 @@ impl<D: TextDocument> TextStoreInner<D> {
 
     /// Picks up an edit made to the file outside the process before writing our
     /// own, unless we have unsaved changes of our own to lose.
-    fn pull_external_changes(&self) {
+    pub(crate) fn pull_external_changes(&self) {
         sync_external_changes::<D>(
             &self.files.data,
             &self.subscriptions,
@@ -573,11 +552,11 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .map(|n| D::node_to_bytes(n))
                 .transpose()
                 .doing(StorageError::Delete, &self.files.data.path)
-                .attach_with(|| format!("node: {path}"))?;
+                .attach_key(path)?;
             guard
                 .delete(&parts)
                 .doing(StorageError::Delete, &self.files.data.path)
-                .attach_with(|| format!("node: {path}"))?;
+                .attach_key(path)?;
             old
         };
 
@@ -616,7 +595,7 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .write()
                 .delete_subtree(&parts)
                 .doing(StorageError::Delete, &self.files.data.path)
-                .attach_with(|| format!("prefix: {prefix}"))?;
+                .attach_prefix(prefix)?;
         }
 
         self.writes.fetch_add(1, Ordering::Release);
@@ -668,20 +647,20 @@ impl<D: TextDocument> TextStoreInner<D> {
                 InitState::Seeded => {
                     let node = D::serialize_node(&true, &Depth::unlimited())
                         .in_meta(StorageError::Meta, &self.files.meta.path)
-                        .attach_with(|| format!("namespace: {namespace}"))?;
+                        .attach_key(namespace)?;
                     guard.set(&parts, node)
                 }
                 InitState::Fresh => guard.delete(&parts).map(|_| ()),
             }
             .in_meta(StorageError::Meta, &self.files.meta.path)
-            .attach_with(|| format!("namespace: {namespace}"))?;
+            .attach_key(namespace)?;
         }
 
         self.files
             .meta
             .persist()
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("namespace: {namespace}"))?;
+            .attach_key(namespace)?;
         Ok(())
     }
 
@@ -705,18 +684,18 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .map(|n| D::node_to_bytes(n))
                 .transpose()
                 .doing(StorageError::Write, &self.files.data.path)
-                .attach_with(|| format!("node: {path_str}"))
+                .attach_key(&path_str)
                 .attach("while reading the value being replaced")?;
             guard
                 .set(&parts, node)
                 .doing(StorageError::Write, &self.files.data.path)
-                .attach_with(|| format!("node: {path_str}"))?;
+                .attach_key(&path_str)?;
             let new = guard
                 .get(&parts)
                 .map(|n| D::node_to_bytes(n))
                 .transpose()
                 .doing(StorageError::Write, &self.files.data.path)
-                .attach_with(|| format!("node: {path_str}"))?;
+                .attach_key(&path_str)?;
             (old, new)
         };
 
@@ -766,7 +745,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
             Some(bytes) => {
                 D::with_bytes_de(&bytes, f)
                     .doing(StorageError::Read, &self.inner.files.data.path)
-                    .attach_with(|| format!("node: {path}"))?;
+                    .attach_key(path)?;
                 Ok(true)
             }
             None => Ok(false),
@@ -847,7 +826,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
     }
 
     fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
-        self.save_now().attach_with(|| format!("prefix: {prefix}"))
+        self.save_now().attach_prefix(prefix)
     }
 
     fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
@@ -938,8 +917,8 @@ pub(super) fn scan_prefix_impl<D: TextDocument>(
         if k.starts_with(prefix.as_str()) {
             let bytes = D::node_to_bytes(&node)
                 .change_context(StorageError::Scan)
-                .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("node: {k}"))?;
+                .attach_prefix(prefix)
+                .attach_raw_key(&k)?;
             results.push((utils::stored_path(&k)?, bytes));
         }
     }
@@ -977,10 +956,7 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
         }
     } else {
         for (full_key, _node) in children {
-            let child_path = StorePath::parse_joined(&full_key)
-                .change_context(StorageError::Scan)
-                .attach_with(|| format!("stored key: {full_key}"))
-                .attach("the document holds a key this library could not have written")?;
+            let child_path = utils::stored_path(&full_key)?;
             let child_levels: Vec<Cow<'_, str>> = child_path.segments().collect();
             let child_parts: Vec<&str> = child_levels.iter().map(Cow::as_ref).collect();
             let grand_children = doc.scan(&child_parts)?;
@@ -1017,10 +993,6 @@ fn sync_external_changes<D: TextDocument>(
     let events = {
         let mut guard = file.doc.write();
 
-        // Under the same guard a write takes, so this cannot be overtaken:
-        // either the write landed first and is seen here, or it lands after
-        // and applies on top. Checking before taking the guard let a write
-        // slip into the gap and be overwritten with what was read from disk.
         if writes.load(Ordering::Acquire) != persisted.load(Ordering::Acquire) {
             return;
         }
@@ -1079,7 +1051,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                         op: StoreOp::Set,
                         old: old_bytes,
                         new: new_bytes,
-                        source: None,
+                        source: Some(EXTERNAL_EDIT),
                     });
                 }
             }
@@ -1090,7 +1062,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                     op: StoreOp::Delete,
                     old: old_bytes,
                     new: None,
-                    source: None,
+                    source: Some(EXTERNAL_EDIT),
                 });
             }
             (None, Some(n)) => {
@@ -1100,7 +1072,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                     op: StoreOp::Set,
                     old: None,
                     new: new_bytes,
-                    source: None,
+                    source: Some(EXTERNAL_EDIT),
                 });
             }
             (None, None) => {}
@@ -1146,24 +1118,12 @@ fn scan_keys_recursive<D: TextDocument>(
 
     let children = doc.scan(parts)?;
     if children.is_empty() {
-        // A scan names the subtree rooted at the prefix, the root included, so
-        // a leaf answers with itself. Every engine agrees on this - `is_under`
-        // admits `key == prefix` on the flat ones - and `scan_prefix` says the
-        // same, which conformance property 7 pins.
-        //
-        // It is a trap for a caller who walks the key space by recursing into
-        // whatever a scan returned: the leaf hands back the path it was given,
-        // and the walk never gets closer to the bottom. That is the caller's to
-        // notice, and `StoreBackend::scan_keys` says so.
         if !prefix_str.is_empty() && doc.get(parts).is_some() {
             keys.push(prefix_str.to_string());
         }
     } else {
         for (full_key, _node) in children {
-            let child_path = StorePath::parse_joined(&full_key)
-                .change_context(StorageError::Scan)
-                .attach_with(|| format!("stored key: {full_key}"))
-                .attach("the document holds a key this library could not have written")?;
+            let child_path = utils::stored_path(&full_key)?;
             let child_levels: Vec<Cow<'_, str>> = child_path.segments().collect();
             let child_parts: Vec<&str> = child_levels.iter().map(Cow::as_ref).collect();
             let grand_children = doc.scan(&child_parts)?;

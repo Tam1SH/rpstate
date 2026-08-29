@@ -376,7 +376,10 @@ impl StorePath {
     /// Borrowed unless the name carries an escaped separator, which is the
     /// only case where the level is not a run of the joined string.
     pub fn name_under(&self, prefix: &StorePath) -> Option<Cow<'_, str>> {
-        level_below(self.as_str(), prefix.as_str(), prefix.is_root())
+        match level_below(self.as_str(), prefix.as_str(), prefix.is_root()) {
+            Level::Entry(name) | Level::Deeper(name) => Some(name),
+            Level::Prefix | Level::Outside => None,
+        }
     }
 
     /// The name `key` is stored under, below this path: the *last* level of
@@ -402,40 +405,60 @@ impl StorePath {
     }
 }
 
-/// The level directly under `prefix` in a key read back from a store, without
-/// building a path for it.
+/// Where a key read back from a store sits relative to the prefix it was
+/// scanned from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Level<'a> {
+    /// The key is the prefix itself.
+    Prefix,
+
+    /// The key is exactly one level below, named here.
+    Entry(Cow<'a, str>),
+
+    /// The key is more than one level below. The name is the level directly
+    /// under the prefix; the rest of the key is inside it.
+    Deeper(Cow<'a, str>),
+
+    /// The key is not under the prefix.
+    Outside,
+}
+
+/// Where `key` sits under `prefix`, without building a path for it.
 ///
 /// What a scan's caller usually wants from a key: a map keyed by the level
 /// below its own path reads every key once and asks for one name from each, so
 /// building a [`StorePath`] to answer that is a string and a walk thrown away
 /// per entry.
 ///
+/// [`Level::Entry`] and [`Level::Deeper`] are separate because a map owns the
+/// level below it and nothing further: a key two levels down is somebody else's
+/// and reading it as an entry hands back the wrong value under the wrong name.
+///
 /// The key is still checked, because a key this library did not write has to
-/// be refused where it is read rather than believed. `Ok(None)` means the key
-/// is not under `prefix` - including when it *is* `prefix`, which a caller
-/// tells apart by comparing the two strings.
-pub fn name_under_key<'a>(
-    key: &'a str,
-    prefix: &StorePath,
-) -> Result<Option<Cow<'a, str>>, StorePathError> {
+/// be refused where it is read rather than believed.
+pub fn level_under<'a>(key: &'a str, prefix: &StorePath) -> Result<Level<'a>, StorePathError> {
     validate_joined(key)?;
     Ok(level_below(key, prefix.as_str(), prefix.is_root()))
 }
 
 /// The level after `head` in `whole`, both joined.
-fn level_below<'a>(whole: &'a str, head: &str, head_is_root: bool) -> Option<Cow<'a, str>> {
+fn level_below<'a>(whole: &'a str, head: &str, head_is_root: bool) -> Level<'a> {
     let rest = if head_is_root {
         whole
+    } else if whole == head {
+        return Level::Prefix;
     } else {
-        // A level boundary, not a string one: `ui` does not start `uix.width`,
-        // and only the separator says so.
-        whole
+        match whole
             .strip_prefix(head)
-            .and_then(|rest| rest.strip_prefix(SEPARATOR))?
+            .and_then(|rest| rest.strip_prefix(SEPARATOR))
+        {
+            Some(rest) => rest,
+            None => return Level::Outside,
+        }
     };
 
     if rest.is_empty() {
-        return None;
+        return Level::Prefix;
     }
 
     let mut escaped = false;
@@ -443,12 +466,12 @@ fn level_below<'a>(whole: &'a str, head: &str, head_is_root: bool) -> Option<Cow
         match ch {
             _ if escaped => escaped = false,
             ESCAPE => escaped = true,
-            SEPARATOR => return Some(unescape(&rest[..at])),
+            SEPARATOR => return Level::Deeper(unescape(&rest[..at])),
             _ => {}
         }
     }
 
-    Some(unescape(rest))
+    Level::Entry(unescape(rest))
 }
 
 /// Whether a joined key is one this type could have written, without building
@@ -687,6 +710,19 @@ pub fn cmp_names(a: &str, b: &str) -> Ordering {
     escaped(a).cmp(escaped(b))
 }
 
+/// A name as it appears inside a joined path, with the separator and the
+/// escape doubled. Borrowed unless the name holds one of them.
+///
+/// Two escaped names compare as [`cmp_names`] compares the names they came
+/// from, so a collection ordered by this is ordered the way a store lists the
+/// keys its entries become.
+pub fn escape_name(name: &str) -> Cow<'_, str> {
+    if !name.contains([SEPARATOR, ESCAPE]) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(escaped(name).collect())
+}
+
 fn escaped(name: &str) -> impl Iterator<Item = char> + '_ {
     name.chars().flat_map(|ch| {
         let lead = (ch == SEPARATOR || ch == ESCAPE).then_some(ESCAPE);
@@ -828,6 +864,44 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// Whether two subtrees hold any key in common.
+    fn overlaps(a: &StorePath, b: &StorePath) -> bool {
+        a.subtree().contains(b.as_str()) || b.subtree().contains(a.as_str())
+    }
+
+    /// The same question asked of the levels instead of the joined form: two
+    /// subtrees meet exactly when one level list starts the other.
+    fn shares_a_key_by_levels(a: &StorePath, b: &StorePath) -> bool {
+        let a: Vec<_> = a.segments().collect();
+        let b: Vec<_> = b.segments().collect();
+        let common = a.len().min(b.len());
+        a[..common] == b[..common]
+    }
+
+    /// Two subtrees are nested or apart, and the string form is not the test.
+    #[test]
+    fn two_subtrees_overlap_exactly_when_one_holds_the_other() {
+        let cases: &[(&[&str], &[&str], bool, &str)] = &[
+            (&["ui"], &["ui"], true, "the same path"),
+            (&["ui"], &["ui", "theme"], true, "a child"),
+            (&["ui"], &["ui", "a", "b"], true, "a grandchild - a subtree is not one level"),
+            (&["ui", "theme"], &["ui", "width"], false, "siblings"),
+            (&["ui"], &["net"], false, "strangers"),
+            (&["ui"], &["uix"], false, "a string prefix is not a level prefix"),
+            (&["ui"], &["uix", "width"], false, "and neither is its subtree"),
+            (&["ui"], &["ui!x"], false, "`!` sorts below the separator, and is still not under `ui`"),
+            (&["ui.theme"], &["ui"], false, "one level literally named `ui.theme`, escaped as `ui\\.theme`"),
+            (&["ui.theme"], &["ui", "theme"], false, "which is a different place from two levels"),
+            (&[], &["ui", "theme"], true, "the root holds everything"),
+        ];
+
+        for (a, b, want, why) in cases {
+            let (a, b) = (StorePath::from_segments(*a), StorePath::from_segments(*b));
+            assert_eq!(overlaps(&a, &b), *want, "{why}: {a} vs {b}");
+            assert_eq!(overlaps(&b, &a), *want, "{why}, the other way round: {b} vs {a}");
+        }
+    }
+
     /// Weighted towards what turns up in a segment and towards what can break
     /// one. The letter range is deliberately tiny so that different segments
     /// collide often; digits get their own arm because a map keyed by a number
@@ -880,6 +954,69 @@ mod tests {
     }
 
     proptest! {
+        /// `Subtree::contains` walks the joined string; the levels are a list.
+        /// The two have to answer the same question, and this is the pair that
+        /// escaping is between - a name carrying a separator is one level and
+        /// two runs of the joined form.
+        ///
+        /// It also pins the shape: there is no third case. Whatever the two
+        /// paths, they are nested or apart, so a key in both forces one to
+        /// start the other.
+        #[test]
+        fn two_subtrees_meet_exactly_when_one_starts_the_other(
+            a in path_strategy(),
+            b in path_strategy(),
+        ) {
+            let (a, b) = (StorePath::from_segments(&a), StorePath::from_segments(&b));
+
+            prop_assert_eq!(
+                overlaps(&a, &b),
+                shares_a_key_by_levels(&a, &b),
+                "the joined form and the levels disagree: {} vs {}", a, b
+            );
+            prop_assert_eq!(overlaps(&a, &b), overlaps(&b, &a), "{} vs {}", a, b);
+
+            // Nested means the deeper one is itself the shared key.
+            if overlaps(&a, &b) {
+                let deeper = if a.len() >= b.len() { &a } else { &b };
+                prop_assert!(a.subtree().contains(deeper.as_str()));
+                prop_assert!(b.subtree().contains(deeper.as_str()));
+            }
+        }
+
+        /// Two paths drawn independently almost never meet, so the true branch
+        /// above is barely exercised. These two build the answer in.
+        #[test]
+        fn a_path_meets_everything_grown_from_it(
+            head in path_strategy(),
+            tail in prop::collection::vec(segment_strategy(), 0..4),
+        ) {
+            let a = StorePath::from_segments(&head);
+            let b = StorePath::from_segments(head.iter().chain(&tail));
+
+            prop_assert!(overlaps(&a, &b), "{} does not hold {}", a, b);
+            prop_assert!(a.subtree().contains(b.as_str()), "{} vs {}", a, b);
+        }
+
+        /// And the sharp case: one level apart under a shared ancestor. This is
+        /// where a name carrying a separator would leak across if the joined
+        /// form were read as characters rather than as levels.
+        #[test]
+        fn two_branches_of_one_level_never_meet(
+            head in path_strategy(),
+            left in segment_strategy(),
+            right in segment_strategy(),
+            left_tail in prop::collection::vec(segment_strategy(), 0..3),
+            right_tail in prop::collection::vec(segment_strategy(), 0..3),
+        ) {
+            prop_assume!(left != right);
+
+            let a = StorePath::from_segments(head.iter().chain([&left]).chain(&left_tail));
+            let b = StorePath::from_segments(head.iter().chain([&right]).chain(&right_tail));
+
+            prop_assert!(!overlaps(&a, &b), "siblings met: {} vs {}", a, b);
+        }
+
         /// The point of the type, at any depth: a name is whatever the caller
         /// passed, and a separator inside it stays a character. The levels come
         /// back exactly as they went in, never more of them, and taking the
@@ -1161,11 +1298,6 @@ mod tests {
             for path in derived {
                 let rebuilt = match StorePath::try_from_segments(path.segments()) {
                     Ok(rebuilt) => rebuilt,
-                    // The root has no levels at all, which is refused on
-                    // purpose: a list that came from data and turned out empty
-                    // is not something anyone said. Deriving one - a parent of
-                    // a single level, a prefix stripped from itself - is, and
-                    // `StorePath::root` is how it is spelled.
                     Err(StorePathError::EmptyPath) => {
                         prop_assert!(path.is_root());
                         continue;

@@ -1,5 +1,6 @@
 use crate::AmeBackendSync;
 use crate::FieldCore;
+use crate::facts::Facts;
 use crate::path::StorePath;
 use crate::primitives::error::{FieldError, ReactiveFieldResult};
 use crate::primitives::field_core::FieldValue;
@@ -20,12 +21,12 @@ where
     let change = core
         .run_interceptors(path.clone(), value, source)
         .map_err(FieldError::intercepted)
-        .attach_with(|| format!("field: {path}"))?;
+        .attach_key(&path)?;
 
     backend
         .set_owned_with_source(path.clone(), &change.new_value, change.source)
         .change_context(FieldError::Storage)
-        .attach_with(|| format!("field: {path}"))?;
+        .attach_key(&path)?;
 
     Ok(())
 }

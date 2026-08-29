@@ -4,91 +4,13 @@ use crate::primitives::error::WriteError;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore};
+use crate::facts::{Facts, Prefix};
 use error_stack::{Report, ResultExt};
-use std::borrow::Borrow;
-
 use serde::de::DeserializeOwned;
-use std::fmt::Display;
-use std::str::FromStr;
 use uuid::Uuid;
-
-pub fn map_get<B, K, V>(backend: &B, path: &StorePath, key: &K) -> ReactiveMapResult<Option<V>>
-where
-    B: AmeBackendSync,
-    K: Display,
-    V: DeserializeOwned,
-{
-    let entry = path.entry(key)?;
-
-    backend
-        .get(&entry)
-        .change_context(WriteError::Storage)
-        .attach_with(|| format!("reading map entry: {entry}"))
-}
-
-pub fn map_contains_key<B, K, V>(backend: &B, path: &StorePath, key: &K) -> ReactiveMapResult<bool>
-where
-    B: AmeBackendSync,
-    K: Display,
-    V: DeserializeOwned,
-{
-    map_get::<B, K, V>(backend, path, key).map(|v| v.is_some())
-}
-
-pub fn map_entries<B, K, V>(backend: &B, path: &StorePath) -> ReactiveMapResult<Vec<(K, V)>>
-where
-    B: AmeBackendSync,
-    K: FromStr,
-    V: DeserializeOwned + Default,
-{
-    let kvs = backend
-        .scan_prefix(path)
-        .change_context(WriteError::Storage)
-        .attach_with(|| format!("scanning map: {path}"))?;
-
-    let mut results = Vec::new();
-
-    for (full_path, raw) in kvs {
-        let Some(key_str) = full_path
-            .strip_prefix(path)
-            .as_ref()
-            .and_then(StorePath::name)
-            .map(|name| name.into_owned())
-        else {
-            continue;
-        };
-        let Ok(key) = K::from_str(&key_str) else {
-            continue;
-        };
-
-        let value = backend
-            .decode::<V>(raw.borrow())
-            .change_context(WriteError::Storage)
-            .attach_with(|| format!("map: {path}"))
-            .attach_with(|| format!("entry: {key_str}"))?;
-
-        results.push((key, value));
-    }
-
-    Ok(results)
-}
-
-pub fn map_len<B>(backend: &B, path: &StorePath) -> ReactiveMapResult<usize>
-where
-    B: AmeBackendSync,
-{
-    backend
-        .scan_prefix(path)
-        .map(|kvs| kvs.len())
-        .change_context(WriteError::Storage)
-        .attach_with(|| format!("scanning map: {path}"))
-}
 
 /// Writes a key that already exists, and fails with
 /// [`ReactiveMapError::KeyNotFound`] otherwise.
-///
-/// The old value is read first because [`MapChange::Update`] carries it to
-/// subscribers; a key that does not exist has none to carry.
 pub fn map_update<B, K, V>(
     backend: &B,
     core: &ReactiveMapCore<K, V>,
@@ -106,8 +28,10 @@ where
     let old_value = match read_entry::<B, V>(backend, &full_path)? {
         Some(old_value) => old_value,
         None => {
-            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {path}")));
+            return Err(
+                Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                    .attach(Prefix(path.clone())),
+            );
         }
     };
 
@@ -197,7 +121,7 @@ where
     backend
         .get::<V>(entry)
         .change_context(WriteError::Storage)
-        .attach_with(|| format!("reading map entry: {entry}"))
+        .attach_key(entry)
 }
 
 pub fn map_clear<B, K, V>(
@@ -234,7 +158,7 @@ where
     let processed = core
         .run_interceptors(context_path, change)
         .map_err(ReactiveMapError::intercepted)
-        .attach_with(|| format!("map: {path}"))
+        .attach_prefix(&path)
         .attach_with(|| match &subject {
             Some(entry) => format!("affects: {entry}"),
             None => format!("affects: all of {path}"),
@@ -251,26 +175,23 @@ where
             backend
                 .set_with_source(&entry, value, processed.source())
                 .change_context(WriteError::Storage)
-                .attach_with(|| format!("writing map entry: {entry}"))?;
+                .attach_key(&entry)?;
         }
         MapChange::Remove { key, .. } => {
             let entry = path.entry(key)?;
             backend
                 .delete_with_source(&entry, processed.source())
                 .change_context(WriteError::Storage)
-                .attach_with(|| format!("removing map entry: {entry}"))?;
+                .attach_key(&entry)?;
         }
         MapChange::Clear { .. } => {
             backend
                 .delete_prefix(&path, processed.source())
                 .change_context(WriteError::Storage)
-                .attach_with(|| format!("clearing map: {path}"))?;
+                .attach_prefix(&path)?;
         }
     }
 
-    // Subscribers are told by the backend's subscription, not from here. One
-    // notifier means a change is reported once and always says what the store
-    // actually took, rather than what was asked for.
     map_apply_remote_change(core, &processed);
 
     Ok(())

@@ -153,17 +153,7 @@ impl SqliteStoreInner {
     /// flush that lands clears this. A debouncer thread that is actually dead
     /// is a different thing and still panics: that is a bug here, not a disk.
     fn check_debouncer(&self) -> StorageResult<()> {
-        if let Some(reason) = self.health.failure() {
-            return Err(error_stack::Report::new(StorageError::CommitFailed)
-                .attach(format!("the background flush is not landing: {reason:#}"))
-                .attach(
-                    "what is already buffered is still being retried, and reads are unaffected",
-                ));
-        }
-        if self.debouncer.is_poisoned() {
-            panic!("debouncer thread is dead — store integrity cannot be guaranteed");
-        }
-        Ok(())
+        utils::check_debouncer(&self.health, &self.debouncer)
     }
 
     /// The value a subscriber should see as the old one.
@@ -273,10 +263,6 @@ impl SqliteStoreInner {
             .check_path(&path)
             .attach_store_file(&self.path)?;
 
-        // Counted during the codec's own pass. sqlite's path is a `TEXT` key
-        // and costs nothing of the value's budget, so almost all of the 254 is
-        // the value's - until the store promises to stay readable somewhere
-        // stricter, and `for_value` is where that arrives.
         let depth = self.budget.for_value(&path);
         let vec = sonic_rs::to_vec(&depth.count(&value)).map_err(|e| {
             if depth.overflowed() {
@@ -324,10 +310,6 @@ impl SqliteStoreInner {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let subtree = prefix.subtree();
 
-        // Ordered by the engine and merged rather than folded into a tree, so
-        // a scan costs one pass instead of a tree walk per row. `ORDER BY` is
-        // load-bearing now: without it sqlite is free to return the range in
-        // any order, and the tree that used to hide that is gone.
         let mut storage_results: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         {
@@ -341,7 +323,6 @@ impl SqliteStoreInner {
                 .doing(StorageError::Scan, &self.path)
                 .attach_prefix(prefix)?;
             let (low, high) = subtree.range();
-            let range = format!("range: {subtree}");
             let rows = stmt
                 .query_map(rusqlite::params![low, high], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
@@ -349,25 +330,16 @@ impl SqliteStoreInner {
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_prefix(prefix)
-                .attach_with(|| range.clone())?;
+                .attach_with(|| format!("range: {subtree}"))?;
 
             for row in rows {
                 let (k, v) = row
                     .map_err(SqliteStoreError::from)
                     .doing(StorageError::Scan, &self.path)
                     .attach_prefix(prefix)
-                    .attach_with(|| range.clone())
+                    .attach_with(|| format!("range: {subtree}"))
                     .attach_read_so_far(storage_results.len())?;
 
-                // The range is not exact and was never meant to be: it opens at
-                // the prefix itself and closes above `prefix.`, so a sibling
-                // whose next character sorts below the separator - a space,
-                // `!`, `%`, `-`, any of U+0000 to U+002D, all legal in a name -
-                // falls inside it. The buffer below has always been filtered
-                // this way; the committed rows were not, so a scan of `ui`
-                // claimed `ui!x` was under it and `delete_prefix`, which is
-                // built on this scan, destroyed it. redb has done this since it
-                // was written.
                 if subtree.contains(&k) {
                     storage_results.push((utils::stored_path(&k)?, v));
                 }
@@ -388,8 +360,6 @@ impl SqliteStoreInner {
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let subtree = prefix.subtree();
-        // Values carried as empty vectors so the same merge serves both scans;
-        // nothing reads them.
         let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         {
@@ -403,25 +373,21 @@ impl SqliteStoreInner {
                 .doing(StorageError::Scan, &self.path)
                 .attach_prefix(prefix)?;
             let (low, high) = subtree.range();
-            let range = format!("range: {subtree}");
             let rows = stmt
                 .query_map(rusqlite::params![low, high], |row| row.get::<_, String>(0))
                 .map_err(SqliteStoreError::from)
                 .doing(StorageError::Scan, &self.path)
                 .attach_prefix(prefix)
-                .attach_with(|| range.clone())?;
+                .attach_with(|| format!("range: {subtree}"))?;
 
             for row in rows {
                 let key = row
                     .map_err(SqliteStoreError::from)
                     .doing(StorageError::Scan, &self.path)
                     .attach_prefix(prefix)
-                    .attach_with(|| range.clone())
+                    .attach_with(|| format!("range: {subtree}"))
                     .attach_read_so_far(keys.len())?;
 
-                // Same as `scan_prefix`: the range admits a sibling whose next
-                // character sorts below the separator, and the buffer below is
-                // filtered while these rows were not.
                 if subtree.contains(&key) {
                     keys.push((utils::stored_path(&key)?, Vec::new()));
                 }
@@ -551,7 +517,7 @@ impl SqliteStoreInner {
     }
 
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
-        if self.initialized.lock().contains(namespace.as_str()) == state.is_seeded() {
+        if state.is_seeded() && self.initialized.lock().contains(namespace.as_str()) {
             return Ok(());
         }
 
@@ -731,7 +697,7 @@ impl StoreBackend for SqliteStore {
     ) -> StorageResult<()> {
         let mut de = sonic_rs::Deserializer::from_slice(bytes);
         let mut erased = <dyn erased_serde::Deserializer>::erase(&mut de);
-        f(&mut erased).attach_with(|| format!("decoding {} bytes of json", bytes.len()))
+        f(&mut erased).attach_value_bytes(bytes.len())
     }
 
     fn set_erased(

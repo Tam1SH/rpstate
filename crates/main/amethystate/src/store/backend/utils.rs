@@ -1,6 +1,8 @@
 use crate::SubscriptionKind;
+use crate::store::durable::PersistHealth;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::Facts;
+use crate::store::util::debouncer::Debouncer;
 use crate::store::{StoreEvent, SubscriptionEntry};
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -18,6 +20,19 @@ impl<R: ResultExt> Attempted for R {
     fn doing(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok> {
         self.change_context(what).attach_store_file(file)
     }
+}
+
+/// Refuses a write while the background flush is not landing.
+pub fn check_debouncer(health: &PersistHealth, debouncer: &Debouncer) -> StorageResult<()> {
+    if let Some(reason) = health.failure() {
+        return Err(error_stack::Report::new(StorageError::CommitFailed)
+            .attach(format!("the background flush is not landing: {reason:#}"))
+            .attach("what is already buffered is still being retried, and reads are unaffected"));
+    }
+    if debouncer.is_poisoned() {
+        panic!("debouncer thread is dead — store integrity cannot be guaranteed");
+    }
+    Ok(())
 }
 
 /// Reports what a store's closing flush did, from the `Drop` where nothing
@@ -68,7 +83,6 @@ pub fn merge_buffered(
 
         if take_left {
             let (key, value) = left.next().expect("peeked");
-            // A buffered op at the same key wins, and is taken on its own turn.
             if right.peek().is_some_and(|(b, _)| *b == key) {
                 continue;
             }
@@ -437,9 +451,7 @@ mod tests {
             for (key, op) in entries {
                 let key = format!("k{key:02}");
                 match op {
-                    // Only in the engine.
                     None => { committed.insert(key, vec![0u8]); }
-                    // In the buffer, as a write or as a delete.
                     Some(value) => { buffered.insert(key, value.map(|v| vec![v])); }
                 }
             }

@@ -4,11 +4,14 @@ use crate::store::CodecFormat;
 use crate::store::backend::sqlite::error::SqliteStoreError;
 use crate::store::backend::utils;
 use crate::store::error::StorageError;
+use crate::store::facts::Facts;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::SqliteStore;
 use crate::{StorageResult, StoreBackend};
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
+
+const SNAPSHOTS: &str = "schema_snapshot";
 
 impl InspectorBackend for SqliteStore {
     fn format(&self) -> CodecFormat {
@@ -25,7 +28,7 @@ impl InspectorBackend for SqliteStore {
             .prepare_cached("SELECT key, value FROM schema_snapshot")
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Meta)
-            .attach("table: schema_snapshot")?;
+            .attach_table(SNAPSHOTS)?;
         let rows = stmt
             .query_map([], |row| {
                 let key: String = row.get(0)?;
@@ -34,21 +37,21 @@ impl InspectorBackend for SqliteStore {
             })
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Meta)
-            .attach("table: schema_snapshot")?;
+            .attach_table(SNAPSHOTS)?;
 
         let mut results = Vec::new();
         for row in rows {
             let (key, bytes) = row
                 .map_err(SqliteStoreError::from)
                 .change_context(StorageError::Meta)
-                .attach("table: schema_snapshot")
-                .attach_with(|| format!("snapshots read: {}", results.len()))?;
+                .attach_table(SNAPSHOTS)
+                .attach_read_so_far(results.len())?;
             let snapshot: SchemaSnapshot = sonic_rs::from_slice(&bytes)
                 .map_err(CodecError::from)
                 .change_context(StorageError::Codec)
-                .attach("table: schema_snapshot")
-                .attach_with(|| format!("key: {key}"))
-                .attach_with(|| format!("value bytes: {}", bytes.len()))?;
+                .attach_table(SNAPSHOTS)
+                .attach_raw_key(&key)
+                .attach_value_bytes(bytes.len())?;
             results.push((key, snapshot));
         }
         Ok(results)

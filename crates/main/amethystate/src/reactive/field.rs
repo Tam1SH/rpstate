@@ -2,6 +2,7 @@ use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
 use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::store::facts::Facts;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Commit, Durable, StoreBackend, StoreSubscription};
 use amethystate_core::Signal;
@@ -375,7 +376,7 @@ where
                     sub.store()
                         .flush_prefix(&inner.path)
                         .change_context(FieldError::Storage)
-                        .attach_with(|| format!("committing a field write: {}", inner.path))
+                        .attach_key(&inner.path)
                 }),
                 start: Arc::new(move || match start.upgrade() {
                     Some(inner) => match inner.store_sub.as_ref() {
@@ -475,7 +476,7 @@ where
                 .core
                 .run_interceptors(self.inner.path.clone(), value, Some(self.inner.instance_id))
                 .map_err(FieldError::intercepted)
-                .attach_with(|| format!("field: {}", self.inner.path))
+                .attach_key(&self.inner.path)
                 .attach("a volatile field: nothing was going to be stored either way")?;
             self.inner
                 .core
@@ -794,7 +795,7 @@ where
             sub.store()
                 .flush_prefix(&self.0.inner.path)
                 .change_context(FieldError::Storage)
-                .attach_with(|| format!("committing a field write: {}", self.0.inner.path))?;
+                .attach_key(&self.0.inner.path)?;
         }
         Ok(())
     }
@@ -805,7 +806,7 @@ where
                 .flush_async()
                 .await
                 .change_context(FieldError::Storage)
-                .attach_with(|| format!("committing a field write: {}", self.0.inner.path))?;
+                .attach_key(&self.0.inner.path)?;
         }
         Ok(())
     }

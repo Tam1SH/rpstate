@@ -3,15 +3,16 @@ source: crates/main/amethystate/tests/kv.rs
 expression: shape(&err)
 ---
 the store could not carry out the write
-├╴kv cell: ui.width
+├╴key: ui.width
 │
 ├─▶ the store could not read
 │   ├╴store: <store>
-│   ╰╴key: ui.width (unflushed)
+│   ├╴key: ui.width
+│   ╰╴not yet flushed
 │
 ├─▶ the value could not be encoded or decoded
-│   ├╴path: ui.width
-│   ╰╴decoding 3 bytes of messagepack
+│   ├╴key: ui.width
+│   ╰╴value bytes: 3
 │
 ├─▶ Erased codec error: invalid type: integer `800`, expected a string
 │

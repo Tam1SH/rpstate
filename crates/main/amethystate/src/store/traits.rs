@@ -2,6 +2,7 @@ use crate::codec::CodecError;
 use crate::migration::AppliedStep;
 use crate::migration::set::MigrationSet;
 use crate::store::error::{StorageError, StorageResult};
+use crate::store::facts::{Facts, ValueBytes};
 use amethystate_core::path::{IntoStorePath, StorePath};
 
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
@@ -21,14 +22,12 @@ pub fn to_path(path: impl IntoStorePath) -> StorageResult<StorePath> {
 }
 
 /// One more level under `path`, named by a map key.
-///
-/// A key comes from the caller's data, so it can turn out not to be a name at
-/// all; where that happens the report says which map and which key.
 pub fn entry_path(path: &StorePath, key: impl AsRef<str>) -> StorageResult<StorePath> {
     let key = key.as_ref();
     path.try_push(key)
         .change_context(StorageError::Path)
-        .attach_with(|| format!("map: {path}, key: {key}"))
+        .attach_prefix(path)
+        .attach_entry(key)
 }
 
 pub trait MigrationBackendAdapter {
@@ -230,7 +229,7 @@ pub trait StoreExt: StoreBackend {
                 erased_serde::deserialize::<T>(d)
                     .map_err(CodecError::from)
                     .change_context(StorageError::Codec)
-                    .attach_with(|| format!("path: {path}"))?,
+                    .attach_key(&path)?,
             );
             Ok(())
         })?;
@@ -279,7 +278,7 @@ pub trait StoreExt: StoreBackend {
         out.ok_or_else(|| {
             Report::new(StorageError::Codec)
                 .attach("the backend accepted the bytes without producing a value")
-                .attach(format!("decoding {} bytes", bytes.len()))
+                .attach(ValueBytes(bytes.len()))
         })
     }
 }

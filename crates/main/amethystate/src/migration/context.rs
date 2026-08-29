@@ -3,6 +3,7 @@ use crate::migration::fields::AmeStateFields;
 use crate::migration::migrate_from::MigrateFrom;
 use crate::migration::provided::Provided;
 use crate::store::MigrationBackendAdapter;
+use crate::store::facts::{Entry, Facts, Migrating, Prefix, RawKey};
 use crate::store::{CodecFormat, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::{Report, ResultExt};
@@ -127,7 +128,7 @@ impl<'a> MigrationContext<'a> {
         };
 
         Err(Report::new(StorageError::Migrate)
-            .attach(format!("migrating {}", self.prefix))
+            .attach(Migrating(self.prefix.clone()))
             .attach(format!("no value provided for {}", type_name::<T>()))
             .attach(offered)
             .attach("StoreBuilder::provide hands a value to every migration step"))
@@ -166,8 +167,8 @@ impl<'a> MigrationContext<'a> {
         let scoped = self.scoped_path(key);
         self.storage
             .delete(&scoped)
-            .attach_with(|| format!("migrating {}: dropping {key}", self.prefix))
-            .attach_with(|| format!("stored key: {scoped}"))
+            .attach_migrating(&self.prefix)
+            .attach_raw_key(&scoped)
     }
 
     /// Moves a value to another key, bytes untouched.
@@ -255,7 +256,8 @@ impl<'a> MigrationContext<'a> {
         match self.get_raw(key)? {
             Some(bytes) => Ok(Some(
                 decode(self.storage, &bytes)
-                    .attach_with(|| format!("migrating {}: reading {key}", self.prefix))
+                    .attach_migrating(&self.prefix)
+                    .attach_entry(key)
                     .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
             )),
             None => Ok(None),
@@ -265,7 +267,8 @@ impl<'a> MigrationContext<'a> {
     /// Writes a value relative to this context's prefix.
     pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> StorageResult<()> {
         let bytes = encode(self.storage, value)
-            .attach_with(|| format!("migrating {}: writing {key}", self.prefix))
+            .attach_migrating(&self.prefix)
+            .attach_entry(key)
             .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?;
         self.set_raw(key, &bytes)
     }
@@ -280,12 +283,15 @@ impl<'a> MigrationContext<'a> {
         let read = self
             .storage
             .get(full_key)
-            .attach_with(|| format!("migrating {}: reading {full_key} elsewhere", self.prefix))?;
+            .attach_migrating(&self.prefix)
+            .attach_raw_key(full_key)?;
 
         match read {
-            Some(bytes) => Ok(Some(decode(self.storage, &bytes).attach_with(|| {
-                format!("migrating {}: reading {full_key} elsewhere", self.prefix)
-            })?)),
+            Some(bytes) => Ok(Some(
+                decode(self.storage, &bytes)
+                    .attach_migrating(&self.prefix)
+                    .attach_raw_key(full_key)?,
+            )),
             None => Ok(None),
         }
     }
@@ -293,10 +299,13 @@ impl<'a> MigrationContext<'a> {
     /// Writes a value by its whole path, ignoring this context's prefix.
     pub fn global_set<T: Serialize>(&mut self, full_key: &str, value: &T) -> StorageResult<()> {
         let bytes = encode(self.storage, value)
-            .attach_with(|| format!("migrating {}: writing {full_key} elsewhere", self.prefix))?;
+            .attach_migrating(&self.prefix)
+            .attach_raw_key(full_key)?;
         self.storage
             .set(full_key, &bytes)
-            .attach_with(|| format!("migrating {}: writing {full_key} elsewhere", self.prefix))
+            .attach_migrating(&self.prefix)
+            .attach_raw_key(full_key)
+            .attach_value_bytes(bytes.len())
     }
 
     /// The stored bytes at `key`, undecoded.
@@ -307,8 +316,8 @@ impl<'a> MigrationContext<'a> {
         let scoped = self.scoped_path(key);
         self.storage
             .get(&scoped)
-            .attach_with(|| format!("migrating {}: reading {key}", self.prefix))
-            .attach_with(|| format!("stored key: {scoped}"))
+            .attach_migrating(&self.prefix)
+            .attach_raw_key(&scoped)
     }
 
     /// Writes bytes at `key` as they are.
@@ -318,8 +327,9 @@ impl<'a> MigrationContext<'a> {
         let scoped = self.scoped_path(key);
         self.storage
             .set(&scoped, value)
-            .attach_with(|| format!("migrating {}: writing {key}", self.prefix))
-            .attach_with(|| format!("stored key: {scoped}, {} bytes", value.len()))
+            .attach_migrating(&self.prefix)
+            .attach_raw_key(&scoped)
+            .attach_value_bytes(value.len())
     }
 
     /// A context narrowed to a sub-prefix, so a nested part can be migrated
@@ -348,36 +358,50 @@ impl<'a> MigrationContext<'a> {
         let scoped = self.scoped_path(key);
         let full_prefix = StorePath::parse_joined(&scoped)
             .change_context(StorageError::Path)
-            .attach_with(|| format!("migration key: {scoped}"))?;
+            .attach_raw_key(&scoped)?;
         let raw = self
             .storage
             .scan_prefix(&full_prefix)
-            .attach_with(|| format!("migrating {}: reading the map at {key}", self.prefix))?;
+            .attach_migrating(&self.prefix)
+            .attach_prefix(&full_prefix)?;
         let mut map = HashMap::new();
 
         for (path, bytes) in raw {
-            let name = path
-                .strip_prefix(&full_prefix)
-                .as_ref()
-                .and_then(StorePath::name)
-                .map(|name| name.into_owned())
-                .ok_or_else(|| {
-                    Report::new(StorageError::Path)
-                        .attach(format!("map: {full_prefix}"))
-                        .attach(format!("stored key: {path}"))
-                        .attach("the key is not under the map it was scanned from")
-                })?;
+            let below = amethystate_core::path::level_under(path.as_str(), &full_prefix)
+                .change_context(StorageError::Path)
+                .attach_prefix(&full_prefix)
+                .attach_raw_key(path.as_str())?;
+
+            let name = match below {
+                amethystate_core::path::Level::Entry(name) => name.into_owned(),
+                amethystate_core::path::Level::Deeper(name) => {
+                    return Err(Report::new(StorageError::Path)
+                        .attach(Prefix(full_prefix.clone()))
+                        .attach(RawKey(path.to_string()))
+                        .attach(Entry(name.into_owned()))
+                        .attach(
+                            "a map owns the level below it and nothing further, and this \
+                             step would rewrite the map whole",
+                        ));
+                }
+                amethystate_core::path::Level::Prefix | amethystate_core::path::Level::Outside => {
+                    return Err(Report::new(StorageError::Path)
+                        .attach(Prefix(full_prefix.clone()))
+                        .attach(RawKey(path.to_string()))
+                        .attach("the key is not under the map it was scanned from"));
+                }
+            };
 
             let parsed = K::from_str(&name).map_err(|_| {
                 Report::new(StorageError::Codec)
-                    .attach(format!("map: {full_prefix}"))
-                    .attach(format!("entry: {name}"))
+                    .attach(Prefix(full_prefix.clone()))
+                    .attach(Entry(name.clone()))
                     .attach(format!("key type: {}", std::any::type_name::<K>()))
             })?;
 
             let value = decode::<V>(self.storage, &bytes)
-                .attach_with(|| format!("map: {full_prefix}"))
-                .attach_with(|| format!("entry: {name}"))
+                .attach_prefix(&full_prefix)
+                .attach_entry(&name)
                 .attach_with(|| format!("value type: {}", std::any::type_name::<V>()))?;
 
             map.insert(parsed, value);

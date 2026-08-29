@@ -28,7 +28,7 @@ impl<'a> RedbMigrationBackend<'a> {
             .open_table(TABLE_DATA)
             .change_context(StorageError::Migrate)
             .attach_store_file(&self.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))
+            .attach_table(TABLE_DATA.name())
     }
 }
 
@@ -37,7 +37,7 @@ trait Bookkeeping<T> {
         self,
         store: &Path,
         table: TableDefinition<'static, &'static str, &'static [u8]>,
-        prefix: &str,
+        prefix: &StorePath,
     ) -> StorageResult<T>;
 }
 
@@ -49,12 +49,12 @@ where
         self,
         store: &Path,
         table: TableDefinition<'static, &'static str, &'static [u8]>,
-        prefix: &str,
+        prefix: &StorePath,
     ) -> StorageResult<T> {
         self.change_context(StorageError::Meta)
-            .attach_with(|| format!("store: {}", store.display()))
-            .attach_with(|| format!("table: {}", table.name()))
-            .attach_with(|| format!("prefix: {prefix}"))
+            .attach_store_file(store)
+            .attach_table(table.name())
+            .attach_prefix(prefix)
     }
 }
 
@@ -69,7 +69,7 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
             .get(key)
             .change_context(StorageError::Migrate)
             .attach_store_file(&self.path)
-            .attach_with(|| format!("key: {key}"))?
+            .attach_raw_key(key)?
             .map(|v| v.value().to_vec()))
     }
 
@@ -79,8 +79,8 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
             .insert(key, value)
             .change_context(StorageError::Migrate)
             .attach_store_file(&self.path)
-            .attach_with(|| format!("key: {key}"))
-            .attach_with(|| format!("value: {} bytes", value.len()))?;
+            .attach_raw_key(key)
+            .attach_value_bytes(value.len())?;
         Ok(())
     }
 
@@ -90,32 +90,26 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
             .remove(key)
             .change_context(StorageError::Migrate)
             .attach_store_file(&self.path)
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_raw_key(key)?;
         Ok(())
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let subtree = prefix.subtree();
-        let prefix = prefix.as_str();
         let table = self.data_table()?;
         let mut result = Vec::new();
         let entries = table
             .iter()
             .change_context(StorageError::Migrate)
             .attach_store_file(&self.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
         for entry in entries {
             let (k, v) = entry
                 .change_context(StorageError::Migrate)
                 .attach_store_file(&self.path)
-                .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("entries read so far: {}", result.len()))?;
+                .attach_prefix(prefix)
+                .attach_read_so_far(result.len())?;
             let key = k.value();
-            // `starts_with` is not "under": two map fields named `routes` and
-            // `routes_v2` share a beginning, so loading the first picked up the
-            // second's entries and then refused them for not being under the
-            // map they were scanned from - a migration that failed for good.
-            // The store's own scans have asked the subtree all along.
             if subtree.contains(key) {
                 result.push((utils::stored_path(key)?, v.value().to_vec()));
             }
@@ -124,23 +118,20 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
     }
 
     fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>> {
-        let prefix = prefix.as_str();
         self.txn
-            .load_typed(TABLE_META, prefix)
+            .load_typed(TABLE_META, prefix.as_str())
             .bookkeeping(self.path, TABLE_META, prefix)
     }
 
     fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
-        let prefix = prefix.as_str();
         self.txn
-            .save_typed(TABLE_META, prefix, meta)
+            .save_typed(TABLE_META, prefix.as_str(), meta)
             .bookkeeping(self.path, TABLE_META, prefix)
     }
 
     fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
-        let prefix = prefix.as_str();
         self.txn
-            .load_typed(TABLE_SCHEMA_SNAPSHOT, prefix)
+            .load_typed(TABLE_SCHEMA_SNAPSHOT, prefix.as_str())
             .bookkeeping(self.path, TABLE_SCHEMA_SNAPSHOT, prefix)
     }
 
@@ -149,23 +140,20 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         prefix: &StorePath,
         snapshot: &SchemaSnapshot,
     ) -> StorageResult<()> {
-        let prefix = prefix.as_str();
         self.txn
-            .save_typed(TABLE_SCHEMA_SNAPSHOT, prefix, snapshot)
+            .save_typed(TABLE_SCHEMA_SNAPSHOT, prefix.as_str(), snapshot)
             .bookkeeping(self.path, TABLE_SCHEMA_SNAPSHOT, prefix)
     }
 
     fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {
-        let prefix = prefix.as_str();
         self.txn
-            .load_typed(TABLE_MIGRATION_LOG, prefix)
+            .load_typed(TABLE_MIGRATION_LOG, prefix.as_str())
             .bookkeeping(self.path, TABLE_MIGRATION_LOG, prefix)
     }
 
     fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
-        let prefix = prefix.as_str();
         self.txn
-            .save_typed(TABLE_MIGRATION_LOG, prefix, &log)
+            .save_typed(TABLE_MIGRATION_LOG, prefix.as_str(), &log)
             .bookkeeping(self.path, TABLE_MIGRATION_LOG, prefix)
             .attach_with(|| format!("steps: {}", log.len()))
     }

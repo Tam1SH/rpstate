@@ -132,17 +132,9 @@ where
         .await
     }
 
-    /// The cached entries, sorted by key.
+    /// The cached entries, in the order a scan lists them.
     pub fn values(&self) -> ReactiveMapResult<Vec<(K, V)>> {
-        let mut entries: Vec<(K, V)> = self
-            .core
-            .cache
-            .iter()
-            .map(|e| (e.key().clone(), e.value().clone()))
-            .collect();
-
-        entries.sort_by_key(|(k, _)| k.to_string());
-        Ok(entries)
+        Ok(self.core.cache.entries())
     }
 
     /// Every entry, sorted by key.

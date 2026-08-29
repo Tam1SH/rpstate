@@ -4,8 +4,8 @@ expression: shape(&err)
 ---
 the value could not be encoded or decoded
 ├╴as: u32
-├╴decoding 5 bytes of messagepack
-├╴map: cols
+├╴value bytes: 5
+├╴prefix: cols
 ├╴entry: cpu
 │
 ├─▶ Erased codec error: wrong msgpack marker FixStr(4)

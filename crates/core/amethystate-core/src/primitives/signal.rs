@@ -101,10 +101,6 @@ impl<T: 'static> Signal<T> {
     }
 
     fn store_and_emit(&self, value: T, source: Option<Uuid>) {
-        // Emit the value we just stored rather than re-reading it: a concurrent
-        // write can land between the store and the load, which would hand
-        // subscribers someone else's value tagged with our source. Provenance
-        // drives echo suppression, so a mismatch there is not cosmetic.
         let value = Arc::new(value);
         self.value.store(Arc::clone(&value));
         self.emit(value, source);
@@ -251,11 +247,6 @@ mod tests {
 
     #[test]
     fn concurrent_writes_keep_value_and_source_together() {
-        // `emit` used to re-read the value out of the ArcSwap instead of
-        // emitting the one it had just stored, so a write landing in between
-        // handed subscribers someone else's value tagged with this writer's
-        // source. Provenance drives echo suppression, so a mismatch there can
-        // turn into a spurious write-back.
         const WRITERS: usize = 8;
         const WRITES: usize = 500;
 
@@ -264,8 +255,6 @@ mod tests {
 
         let seen = mismatches.clone();
         let _sub = signal.subscribe_with_source(move |(stamp, _): &(Uuid, usize), source| {
-            // Every writer stamps the value with its own id, so the value and
-            // the source must always agree on who wrote it.
             if Some(*stamp) != source {
                 seen.fetch_add(1, Ordering::Relaxed);
             }

@@ -1,13 +1,17 @@
 use crate::SignalSubscription;
 use crate::change::MapChange;
-use crate::path::StorePath;
+use crate::facts::Facts;
+use crate::path::{StorePath, escape_name};
 use crate::primitives::error::{ReactiveMapResult, WriteError};
 use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::SubscriptionMeta;
 use dashmap::DashMap;
 use error_stack::ResultExt;
+use parking_lot::{RwLock, RwLockReadGuard};
+use smol_str::SmolStr;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 use std::panic::Location;
@@ -27,8 +31,8 @@ impl MapEntryPath for StorePath {
 
         self.try_push(&key)
             .change_context(WriteError::Path)
-            .attach_with(|| format!("map: {self}"))
-            .attach_with(|| format!("key: {key}"))
+            .attach_prefix(self)
+            .attach_entry(&key)
     }
 }
 
@@ -51,6 +55,126 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static + Default> 
 {
 }
 
+/// A map's entries, held in the order the store lists them.
+///
+/// Keyed by the escaped name rather than by `K`, because the contract's order
+/// is the order a scan hands the keys back in - `[10, 100, 9]` for numeric
+/// keys, not `K: Ord`'s `[9, 10, 100]`. The key `K` rides along in the value so
+/// a listing does not have to parse it back.
+pub struct MapCache<K, V> {
+    entries: RwLock<BTreeMap<SmolStr, (K, V)>>,
+}
+
+impl<K, V> Default for MapCache<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: RwLock::new(BTreeMap::new()),
+        }
+    }
+}
+
+fn escaped_key<Q: Display + ?Sized>(key: &Q) -> SmolStr {
+    SmolStr::new(escape_name(&key.to_string()))
+}
+
+impl<K: Clone, V: Clone> MapCache<K, V> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get<Q: Display + ?Sized>(&self, key: &Q) -> Option<V> {
+        self.entries
+            .read()
+            .get(escaped_key(key).as_str())
+            .map(|(_, value)| value.clone())
+    }
+
+    pub fn contains_key<Q: Display + ?Sized>(&self, key: &Q) -> bool {
+        self.entries.read().contains_key(escaped_key(key).as_str())
+    }
+
+    /// The key as the map holds it, for a caller that looked one up by
+    /// something it borrows from and needs the owned form back.
+    pub fn owned_key<Q: Display + ?Sized>(&self, key: &Q) -> Option<K> {
+        self.entries
+            .read()
+            .get(escaped_key(key).as_str())
+            .map(|(key, _)| key.clone())
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.read().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.read().is_empty()
+    }
+
+    pub fn clear(&self) {
+        self.entries.write().clear();
+    }
+
+    /// The entries themselves, in order, without copying any of them.
+    ///
+    /// Holds the read lock for as long as the guard lives, so a caller walks
+    /// and drops it rather than keeping it across work of its own.
+    pub fn borrow(&self) -> Entries<'_, K, V> {
+        Entries(self.entries.read())
+    }
+
+    /// Every key, in the order the contract promises.
+    pub fn keys(&self) -> Vec<K> {
+        self.borrow().iter().map(|(key, _)| key.clone()).collect()
+    }
+
+    /// Every entry, in that order.
+    pub fn entries(&self) -> Vec<(K, V)> {
+        self.borrow().iter().cloned().collect()
+    }
+}
+
+/// A read of a [`MapCache`], in order, held open.
+pub struct Entries<'a, K, V>(RwLockReadGuard<'a, BTreeMap<SmolStr, (K, V)>>);
+
+impl<K, V> Entries<'_, K, V> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &(K, V)> {
+        self.0.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<K: Display + Clone, V: Clone> MapCache<K, V> {
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        self.entries
+            .write()
+            .insert(escaped_key(&key), (key, value))
+            .map(|(_, old)| old)
+    }
+
+    pub fn remove<Q: Display + ?Sized>(&self, key: &Q) -> Option<(K, V)> {
+        self.entries.write().remove(escaped_key(key).as_str())
+    }
+}
+
+impl<K: Debug, V: Debug> Debug for MapCache<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.entries.try_read() {
+            Some(entries) => f
+                .debug_map()
+                .entries(entries.values().map(|(k, v)| (k, v)))
+                .finish(),
+            None => f.write_str("<locked>"),
+        }
+    }
+}
+
 pub struct ReactiveMapCore<K, V> {
     pub interceptors_any: Arc<Mutex<Vec<(u64, InterceptorAny<K, V>)>>>,
     pub interceptors_key: Arc<DashMap<K, Vec<(u64, InterceptorKey<K, V>)>>>,
@@ -58,7 +182,7 @@ pub struct ReactiveMapCore<K, V> {
     pub subscribers_key: Arc<DashMap<K, Vec<(u64, SubscriberKey<K, V>, SubscriptionMeta)>>>,
     pub next_id: Arc<AtomicU64>,
     pub intercept_depth: Arc<AtomicUsize>,
-    pub cache: Arc<DashMap<K, V>>,
+    pub cache: Arc<MapCache<K, V>>,
 }
 
 impl<K, V> Clone for ReactiveMapCore<K, V> {
@@ -107,14 +231,10 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
         Self::with_capacity(0)
     }
 
-    /// The same, with the projection sized for `entries` up front.
-    ///
-    /// The projection is behind an `Arc` from the moment it exists, so it
-    /// cannot be reserved afterwards - `DashMap::try_reserve` wants `&mut
-    /// self`. The size is known when a map is loaded from a store, and a table
-    /// that grows into a million entries rehashes everything it holds on the
-    /// way there.
-    pub fn with_capacity(entries: usize) -> Self {
+    /// The same. A tree has nothing to reserve, so `entries` is ignored; the
+    /// signature stays because a caller loading a store knows the size and
+    /// should not have to know that.
+    pub fn with_capacity(_entries: usize) -> Self {
         Self {
             interceptors_any: Arc::new(Mutex::new(Vec::new())),
             interceptors_key: Arc::new(DashMap::new()),
@@ -122,7 +242,7 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
             subscribers_key: Arc::new(DashMap::new()),
             next_id: Arc::new(AtomicU64::new(0)),
             intercept_depth: Arc::new(AtomicUsize::new(0)),
-            cache: Arc::new(DashMap::with_capacity(entries)),
+            cache: Arc::new(MapCache::new()),
         }
     }
 
@@ -253,15 +373,9 @@ impl<K: ReactiveMapKey, V: ReactiveMapValue> ReactiveMapCore<K, V> {
         mut change: MapChange<K, V>,
     ) -> Result<MapChange<K, V>, String> {
         let Some(_guard) = InterceptGuard::enter(&self.intercept_depth, path) else {
-            // Letting the change through unchecked would turn a validating
-            // interceptor off exactly where recursion is deepest, and the value
-            // it exists to reject would reach the backend.
             return Err("interceptors nested too deep".to_string());
         };
 
-        // A change with no key is not about any one key, so key interceptors do
-        // not apply. Running all of them used to hand each the same `Clear`,
-        // accumulating their rewrites, in `HashMap` order.
         if let Some(key) = change.key().cloned() {
             let interceptors = self
                 .interceptors_key
