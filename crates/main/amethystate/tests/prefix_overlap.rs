@@ -1,5 +1,14 @@
+//! Two owners cannot have one place on disk.
+//!
+//! A path can be arrived at more than one way - a dotted `key`, a dotted
+//! `prefix`, a struct rooted where another stores a value - and until the
+//! claims table nothing compared them. The last writer won, silently, and the
+//! damage only showed on the next start when the signals had to come off the
+//! disk again.
+
 use amethystate::store::builder::StoreBuilder;
-use amethystate_core::path::StorePath;
+use amethystate::store::owners::Claimed;
+use amethystate_core::facts::all;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 
@@ -27,39 +36,42 @@ pub struct TypedPanels {
     pub left_visible: u32,
 }
 
-/// A `key` override and a dotted `prefix` can name the same place on disk, and
-/// nothing checks that they do not. With matching types the two structs share
-/// one slot and the last writer wins.
+/// A dotted `key` under one prefix and a plain field under a dotted `prefix`
+/// compose to the same path. The second construction is refused, and the report
+/// names both schemas rather than leaving the two to share a slot.
 #[test]
-#[ignore = "known: overlapping stored paths are neither prevented nor reported - see TODO.md"]
 fn two_structs_cannot_claim_the_same_stored_path() {
     let path = TempPath::new("prefix_overlap");
     let store = StoreBuilder::new(path.path()).build().unwrap();
 
-    let outer = Outer::new_with(&store).unwrap();
-    let panels = Panels::new_with(&store).unwrap();
+    let _outer = Outer::new_with(&store).unwrap();
+    let refused = Panels::new_with(&store).unwrap_err();
 
-    outer.left_panel_visible().set(false).unwrap();
-    panels.left_visible().set(true).unwrap();
+    let named: Vec<String> = all::<Claimed, _>(&refused)
+        .map(|claim| claim.by.to_string())
+        .collect();
 
+    assert_eq!(named.len(), 2, "the report names both: {refused:?}");
     assert!(
-        !outer.left_panel_visible().get(),
-        "the write through Panels landed on Outer's field"
+        named.iter().any(|by| by.contains("Outer"))
+            && named.iter().any(|by| by.contains("Panels")),
+        "and names them by their schemas: {named:?}"
     );
 }
 
-/// With types that disagree the overlap does surface, but as a decode failure
-/// while the second struct is being built - nothing names the real problem.
+/// Types that disagree used to surface as a decode failure while the second
+/// struct was being built - a codec error standing in for a name collision.
+/// It is the same refusal as when they agree, because the claim is about the
+/// path and not about what is stored at it.
 #[test]
-#[ignore = "known: overlapping stored paths are neither prevented nor reported - see TODO.md"]
 fn an_overlap_between_different_types_is_reported_as_an_overlap() {
     let path = TempPath::new("prefix_overlap_typed");
     let store = StoreBuilder::new(path.path()).build().unwrap();
 
     let _outer = TypedOuter::new_with(&store).unwrap();
-    let err = TypedPanels::new_with(&store).unwrap_err();
+    let refused = TypedPanels::new_with(&store).unwrap_err();
 
-    let rendered = format!("{err:?}");
+    let rendered = format!("{refused:?}");
     assert!(
         rendered.contains("TypedOuter") && rendered.contains("TypedPanels"),
         "the report should name both schemas claiming `typed.panels.left.visible`, got: {rendered}"
@@ -78,56 +90,52 @@ pub struct Branch {
     pub x: u32,
 }
 
-/// One struct stores a value at `root.b`, another roots itself there. The leaf
-/// and the branch want the same node.
+/// One struct stores a value at `root.b`, another roots itself there. A field
+/// owns what is under it - that is the inside of its value - so the branch is
+/// refused rather than left to put a level where a leaf already is.
 #[test]
-#[ignore = "known: overlapping stored paths are neither prevented nor reported - see TODO.md"]
 fn a_prefix_may_not_land_on_another_structs_field() {
     let path = TempPath::new("root_is_a_leaf");
     let store = StoreBuilder::new(path.path()).build().unwrap();
 
-    let root = Root::new_with(&store).unwrap();
-    let branch = Branch::new_with(&store).unwrap();
+    let _root = Root::new_with(&store).unwrap();
+    let refused = Branch::new_with(&store).unwrap_err();
 
-    root.b().set(10).unwrap();
-    branch.x().set(20).unwrap();
+    let claims: Vec<String> = all::<Claimed, _>(&refused)
+        .map(|claim| claim.path.as_str().to_string())
+        .collect();
 
-    store.flush_prefix(StorePath::root()).unwrap();
-
-    assert_eq!(
-        store.get::<u32>(["root", "b"]).unwrap(),
-        Some(10),
-        "the leaf on disk"
-    );
-    assert_eq!(
-        store.get::<u32>(["root", "b", "x"]).unwrap(),
-        Some(20),
-        "the branch on disk"
+    assert!(
+        claims.iter().any(|p| p == "root.b") && claims.iter().any(|p| p == "root.b.x"),
+        "the report names the leaf and the branch that wanted to sit under it: {claims:?}"
     );
 }
 
-/// A map reads its whole subtree as entries, so anything stored below an entry
-/// is read back *as* that entry - with the deeper value's bytes under the
-/// shallower key. Two keys under one entry name collide and the scan's order
-/// decides which survives.
+/// A map owns the level below it and nothing further, so a key two levels down
+/// is somebody else's. Reading it as an entry gave the shallower name the
+/// deeper value's bytes, and a second key under the same name displaced the
+/// first by the scan's order. Now the map refuses to open and says which key.
 #[test]
-#[ignore = "known: overlapping stored paths are neither prevented nor reported - see TODO.md"]
-fn a_map_reads_what_is_stored_below_its_entries_as_those_entries() {
+fn a_map_will_not_open_over_keys_deeper_than_its_entries() {
     let path = TempPath::new("map_swallows_below");
     let store = StoreBuilder::new(path.path()).build().unwrap();
 
     store.set(["widths", "left", "px"], &800u32).unwrap();
     store.set(["widths", "left", "pct"], &50u32).unwrap();
-    store.flush_prefix(StorePath::root()).unwrap();
+    store.save_now().unwrap();
 
-    let map: amethystate::ReactiveMap<String, u32> = store.kv().map("widths").unwrap();
+    let refused = store
+        .kv()
+        .map::<String, u32>("widths")
+        .expect_err("the map cannot be read over keys that are not its entries");
 
-    assert_eq!(
-        map.keys().collect::<Vec<_>>(),
-        Vec::<String>::new(),
-        "`widths.left.px` is not an entry of the map at `widths`, and neither is \
-         `left`: the map's entries are the level below it, and nothing is stored \
-         there. Instead: {:?}",
-        map.entries().collect::<Vec<_>>()
+    let rendered = format!("{refused:?}");
+    assert!(
+        rendered.contains("widths.left.p"),
+        "the report names the key that is not an entry: {rendered}"
+    );
+    assert!(
+        rendered.contains("a map owns the level below it"),
+        "and says why it is not one: {rendered}"
     );
 }

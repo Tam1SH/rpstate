@@ -29,6 +29,20 @@ where
     field_with_path(store, path, default, instance_id)
 }
 
+/// Records that whoever is being built owns this path, or refuses because
+/// somebody else already does.
+///
+/// The claim is the schema's own type name, which is what makes it idempotent:
+/// building the same struct twice claims the same path twice and changes
+/// nothing. An instance nobody registered claims nothing - there is no name to
+/// attribute it to, and refusing what cannot be attributed would be guessing.
+fn claim(store: &Store, path: &StorePath, instance_id: Uuid) -> StorageResult<()> {
+    match crate::observability::resolve_instance(instance_id) {
+        Some(by) => store.owners().claim(path, by),
+        None => Ok(()),
+    }
+}
+
 pub fn field_with_path<TValue>(
     store: &Store,
     path: impl IntoStorePath,
@@ -40,6 +54,7 @@ where
 {
     let path = crate::store::to_path(path)?;
 
+    claim(store, &path, instance_id)?;
     register_field::<TValue>(&path, instance_id);
 
     if store.get::<TValue>(&path)?.is_none() {
@@ -254,6 +269,8 @@ where
     V: ReactiveMapValue,
 {
     let path = crate::store::to_path(path)?;
+    claim(store, &path, instance_id)?;
+
     let mut known_cache = load_map::<K, V>(store, &path)?;
 
     let seeded_before = store.is_initialized(&path)? || !known_cache.is_empty();

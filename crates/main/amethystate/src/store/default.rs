@@ -39,7 +39,10 @@ use std::sync::Arc;
 /// somewhere else, or not exit yet - calls [`Store::close`] on the way out and
 /// reads the result.
 #[derive(Clone)]
-pub struct Store(Arc<dyn StoreBackend>);
+pub struct Store {
+    backend: Arc<dyn StoreBackend>,
+    owners: Arc<crate::store::owners::Owners>,
+}
 
 impl Store {
     /// Wraps a backend that was built by hand.
@@ -47,13 +50,21 @@ impl Store {
     /// [`StoreBuilder`](crate::StoreBuilder) is the ordinary way in; this is
     /// for a [`StoreBackend`] implemented outside the crate.
     pub fn from_arc(inner: Arc<dyn StoreBackend>) -> Self {
-        Self(inner)
+        Self {
+            backend: inner,
+            owners: Arc::new(crate::store::owners::Owners::default()),
+        }
     }
 
     /// The erased backend underneath, for code that is generic over
     /// [`StoreBackend`] rather than over this handle.
     pub fn as_dyn(&self) -> &Arc<dyn StoreBackend> {
-        &self.0
+        &self.backend
+    }
+
+    /// Who owns which stored path, shared by every clone of this handle.
+    pub fn owners(&self) -> &crate::store::owners::Owners {
+        &self.owners
     }
 
     /// Opens the store with [`crate::store::builder::default_backend`].
@@ -88,7 +99,7 @@ impl Store {
     /// }
     /// ```
     pub fn close(&self) -> StorageResult<()> {
-        self.0.save_now()
+        self.backend.save_now()
     }
 }
 
@@ -100,7 +111,7 @@ impl std::fmt::Debug for Store {
 
 impl PartialEq for Store {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.backend, &other.backend)
     }
 }
 impl Eq for Store {}
@@ -108,7 +119,7 @@ impl Eq for Store {}
 impl std::ops::Deref for Store {
     type Target = dyn StoreBackend;
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &*self.backend
     }
 }
 
@@ -231,7 +242,7 @@ impl Store {
 /// name, so they carry the same warning.
 impl StoreBackend for Store {
     fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
-        self.0.get_raw(path)
+        self.backend.get_raw(path)
     }
     fn set_erased(
         &self,
@@ -239,7 +250,7 @@ impl StoreBackend for Store {
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.0.set_erased(path, value, source)
+        self.backend.set_erased(path, value, source)
     }
     fn set_owned_erased(
         &self,
@@ -247,74 +258,74 @@ impl StoreBackend for Store {
         value: &dyn erased_serde::Serialize,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.0.set_owned_erased(path, value, source)
+        self.backend.set_owned_erased(path, value, source)
     }
     fn get_erased(
         &self,
         path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool> {
-        self.0.get_erased(path, f)
+        self.backend.get_erased(path, f)
     }
     fn decode_erased(
         &self,
         bytes: &[u8],
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
-        self.0.decode_erased(bytes, f)
+        self.backend.decode_erased(bytes, f)
     }
     fn delete_with_source(
         &self,
         path: &StorePath,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.0.delete_with_source(path, source)
+        self.backend.delete_with_source(path, source)
     }
     fn delete(&self, path: &StorePath) -> StorageResult<()> {
-        self.0.delete(path)
+        self.backend.delete(path)
     }
     fn delete_prefix_with_source(
         &self,
         prefix: &StorePath,
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
-        self.0.delete_prefix_with_source(prefix, source)
+        self.backend.delete_prefix_with_source(prefix, source)
     }
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
-        self.0.scan_prefix(prefix)
+        self.backend.scan_prefix(prefix)
     }
     fn visit_prefix(
         &self,
         prefix: &StorePath,
         visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
     ) -> StorageResult<()> {
-        self.0.visit_prefix(prefix, visit)
+        self.backend.visit_prefix(prefix, visit)
     }
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
-        self.0.scan_keys(prefix)
+        self.backend.scan_keys(prefix)
     }
     fn parallel_reads(&self) -> bool {
-        self.0.parallel_reads()
+        self.backend.parallel_reads()
     }
     fn save_now(&self) -> StorageResult<()> {
-        self.0.save_now()
+        self.backend.save_now()
     }
     fn subscribe(&self, kind: crate::SubscriptionKind, callback: StoreCallback) -> SubscriptionId {
-        self.0.subscribe(kind, callback)
+        self.backend.subscribe(kind, callback)
     }
     fn unsubscribe(&self, id: SubscriptionId) {
-        self.0.unsubscribe(id)
+        self.backend.unsubscribe(id)
     }
     fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
-        self.0.flush_prefix(prefix)
+        self.backend.flush_prefix(prefix)
     }
     fn flush_async(&self) -> crate::store::durable::Commit {
-        self.0.flush_async()
+        self.backend.flush_async()
     }
     fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
-        self.0.is_initialized(namespace)
+        self.backend.is_initialized(namespace)
     }
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
-        self.0.set_initialized(namespace, state)
+        self.backend.set_initialized(namespace, state)
     }
 }

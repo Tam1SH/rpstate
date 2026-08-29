@@ -8,6 +8,7 @@ mod error;
 pub mod facts;
 pub mod kv;
 pub mod meta;
+pub mod owners;
 mod primitives_factory;
 mod state_slice;
 pub(crate) mod sync_backend;

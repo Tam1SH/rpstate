@@ -44,6 +44,9 @@ pub enum StorageError {
 
     /// The flush this commit was waiting on did not complete.
     CommitFailed,
+
+    /// Two owners want the same place, so one would write over the other.
+    Claimed,
 }
 
 impl fmt::Display for StorageError {
@@ -60,6 +63,7 @@ impl fmt::Display for StorageError {
             StorageError::Migrate => "the data could not be brought up to the declared schema",
             StorageError::Path => "a name that cannot be a level",
             StorageError::CommitFailed => "the flush this commit was waiting on did not complete",
+            StorageError::Claimed => "two schemas claim the same stored path",
         })
     }
 }

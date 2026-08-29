@@ -351,6 +351,15 @@ impl StorePath {
     }
 
     /// The path one level up, or `None` at the root.
+    /// Whether this subtree and `other`'s hold any key in common.
+    ///
+    /// Two subtrees are nested or apart and never half over each other, so this
+    /// is two containment tests and equality needs no arm of its own -
+    /// [`Subtree::contains`] admits the prefix itself.
+    pub fn overlaps(&self, other: &StorePath) -> bool {
+        self.subtree().contains(other.as_str()) || other.subtree().contains(self.as_str())
+    }
+
     pub fn parent(&self) -> Option<StorePath> {
         (!self.is_root()).then(|| {
             let mut segments = self.segments.to_owned_vec(self.as_str());
@@ -864,11 +873,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// Whether two subtrees hold any key in common.
-    fn overlaps(a: &StorePath, b: &StorePath) -> bool {
-        a.subtree().contains(b.as_str()) || b.subtree().contains(a.as_str())
-    }
-
     /// The same question asked of the levels instead of the joined form: two
     /// subtrees meet exactly when one level list starts the other.
     fn shares_a_key_by_levels(a: &StorePath, b: &StorePath) -> bool {
@@ -897,8 +901,8 @@ mod tests {
 
         for (a, b, want, why) in cases {
             let (a, b) = (StorePath::from_segments(*a), StorePath::from_segments(*b));
-            assert_eq!(overlaps(&a, &b), *want, "{why}: {a} vs {b}");
-            assert_eq!(overlaps(&b, &a), *want, "{why}, the other way round: {b} vs {a}");
+            assert_eq!(a.overlaps(&b), *want, "{why}: {a} vs {b}");
+            assert_eq!(b.overlaps(&a), *want, "{why}, the other way round: {b} vs {a}");
         }
     }
 
@@ -970,14 +974,14 @@ mod tests {
             let (a, b) = (StorePath::from_segments(&a), StorePath::from_segments(&b));
 
             prop_assert_eq!(
-                overlaps(&a, &b),
+                a.overlaps(&b),
                 shares_a_key_by_levels(&a, &b),
                 "the joined form and the levels disagree: {} vs {}", a, b
             );
-            prop_assert_eq!(overlaps(&a, &b), overlaps(&b, &a), "{} vs {}", a, b);
+            prop_assert_eq!(a.overlaps(&b), b.overlaps(&a), "{} vs {}", a, b);
 
             // Nested means the deeper one is itself the shared key.
-            if overlaps(&a, &b) {
+            if a.overlaps(&b) {
                 let deeper = if a.len() >= b.len() { &a } else { &b };
                 prop_assert!(a.subtree().contains(deeper.as_str()));
                 prop_assert!(b.subtree().contains(deeper.as_str()));
@@ -994,7 +998,7 @@ mod tests {
             let a = StorePath::from_segments(&head);
             let b = StorePath::from_segments(head.iter().chain(&tail));
 
-            prop_assert!(overlaps(&a, &b), "{} does not hold {}", a, b);
+            prop_assert!(a.overlaps(&b), "{} does not hold {}", a, b);
             prop_assert!(a.subtree().contains(b.as_str()), "{} vs {}", a, b);
         }
 
@@ -1014,7 +1018,7 @@ mod tests {
             let a = StorePath::from_segments(head.iter().chain([&left]).chain(&left_tail));
             let b = StorePath::from_segments(head.iter().chain([&right]).chain(&right_tail));
 
-            prop_assert!(!overlaps(&a, &b), "siblings met: {} vs {}", a, b);
+            prop_assert!(!a.overlaps(&b), "siblings met: {} vs {}", a, b);
         }
 
         /// The point of the type, at any depth: a name is whatever the caller
