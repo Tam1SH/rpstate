@@ -134,7 +134,7 @@ where
 
     /// The cached entries, in the order a scan lists them.
     pub fn values(&self) -> ReactiveMapResult<Vec<(K, V)>> {
-        Ok(self.core.cache.entries())
+        Ok(self.core.cache.entries().collect())
     }
 
     /// Every entry, sorted by key.

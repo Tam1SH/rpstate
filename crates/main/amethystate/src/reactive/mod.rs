@@ -32,7 +32,7 @@ pub use crate::migration::node::*;
 pub use amethystate_core::change::*;
 pub use amethystate_core::primitives::intercept::*;
 pub use amethystate_core::primitives::map_core::{
-    InterceptorAny, InterceptorKey, SubscriberAny, SubscriberKey,
+    Entries, InterceptorAny, InterceptorKey, SubscriberAny, SubscriberKey, Walk,
 };
 pub use amethystate_core::primitives::signal::{SignalSubscription, SubscriptionMeta};
 pub use cell::*;

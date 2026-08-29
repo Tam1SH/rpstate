@@ -23,7 +23,7 @@ fn keys_containing_the_separator_stay_separate_entries() {
     assert_eq!(map.get("a.exe"), Some(1), "get a.exe");
     assert_eq!(map.get("a.dll"), Some(2), "get a.dll");
     assert_eq!(map.get("b.exe"), Some(3), "get b.exe");
-    assert_eq!(map.keys().len(), 3, "keys");
+    assert_eq!(map.keys().count(), 3, "keys");
     assert_eq!(map.entries().count(), 3, "entries");
     assert_eq!(map.len(), 3, "len");
 

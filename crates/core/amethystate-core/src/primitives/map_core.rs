@@ -7,7 +7,7 @@ use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::SubscriptionMeta;
 use dashmap::DashMap;
 use error_stack::ResultExt;
-use parking_lot::{RwLock, RwLockReadGuard};
+use parking_lot::{ArcRwLockReadGuard, RawRwLock, RwLock, RwLockReadGuard};
 use smol_str::SmolStr;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -62,13 +62,13 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static + Default> 
 /// keys, not `K: Ord`'s `[9, 10, 100]`. The key `K` rides along in the value so
 /// a listing does not have to parse it back.
 pub struct MapCache<K, V> {
-    entries: RwLock<BTreeMap<SmolStr, (K, V)>>,
+    entries: Arc<RwLock<BTreeMap<SmolStr, (K, V)>>>,
 }
 
 impl<K, V> Default for MapCache<K, V> {
     fn default() -> Self {
         Self {
-            entries: RwLock::new(BTreeMap::new()),
+            entries: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 }
@@ -118,23 +118,102 @@ impl<K: Clone, V: Clone> MapCache<K, V> {
     ///
     /// Holds the read lock for as long as the guard lives, so a caller walks
     /// and drops it rather than keeping it across work of its own.
-    pub fn borrow(&self) -> Entries<'_, K, V> {
+    pub fn view(&self) -> Entries<'_, K, V> {
         Entries(self.entries.read())
     }
 
-    /// Every key, in the order the contract promises.
-    pub fn keys(&self) -> Vec<K> {
-        self.borrow().iter().map(|(key, _)| key.clone()).collect()
+    /// Every key, in the order the contract promises, one at a time.
+    pub fn keys(&self) -> Walk<K, V, K> {
+        Walk::new(self.entries.read_arc(), |(key, _)| key.clone())
     }
 
-    /// Every entry, in that order.
-    pub fn entries(&self) -> Vec<(K, V)> {
-        self.borrow().iter().cloned().collect()
+    /// Every entry, in that order, one at a time.
+    pub fn entries(&self) -> Walk<K, V, (K, V)> {
+        Walk::new(self.entries.read_arc(), Clone::clone)
     }
 }
 
+type Held<K, V> = ArcRwLockReadGuard<RawRwLock, BTreeMap<SmolStr, (K, V)>>;
+type Values<'a, K, V> = std::collections::btree_map::Values<'a, SmolStr, (K, V)>;
+
+/// A walk of a [`MapCache`], in order, taking nothing it is not asked for.
+///
+/// The position is the iterator's own, so a whole pass costs one descent and
+/// `take(n)` costs `n`.
+///
+/// The map's read lock is held for as long as the walk lives. Touching the same
+/// map from the thread that is walking it deadlocks - reading as well as
+/// writing, because this is `read` and not `read_recursive`, so `len()` from
+/// inside a walk hangs once a writer is queued. `mem::forget` on a walk leaves
+/// the map read-locked for good.
+pub struct Walk<K: 'static, V: 'static, T> {
+    values: Values<'static, K, V>,
+    take: fn(&(K, V)) -> T,
+    _held: Held<K, V>,
+}
+
+impl<K, V, T> Walk<K, V, T> {
+    fn new(held: Held<K, V>, take: fn(&(K, V)) -> T) -> Self {
+        // SAFETY: three invariants, all of which this module has to keep.
+        //
+        // The guard came from `read_arc`, so it owns a strong reference and the
+        // map lives in the `Arc`'s allocation rather than in the guard. Moving
+        // the guard moves a pointer; the map stays, and outlives every other
+        // owner. That is what lets the type carry no lifetime.
+        //
+        // `_held` is never passed to `ArcRwLockReadGuard::{unlocked,
+        // unlocked_fair, bump, unlock_fair, into_arc, into_arc_fair}`. Those
+        // release the lock while the guard is alive, and any one of them turns
+        // these references into use-after-free. Holding a guard is not the same
+        // as holding the lock, and only this rule makes the two the same here.
+        //
+        // The `'static` never reaches a caller: `new` is private, and `take` is
+        // `for<'x> fn(&'x (K, V)) -> T`, which cannot return its argument. So
+        // no `T` can be a reference into the map, and the only `&'static` that
+        // exists is the temporary inside `next` and `next_back`.
+        let values = unsafe {
+            std::mem::transmute::<Values<'_, K, V>, Values<'static, K, V>>(held.values())
+        };
+
+        Self {
+            values,
+            take,
+            _held: held,
+        }
+    }
+}
+
+impl<K, V, T> Iterator for Walk<K, V, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        self.values.next().map(self.take)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.values.size_hint()
+    }
+}
+
+impl<K, V, T> DoubleEndedIterator for Walk<K, V, T> {
+    fn next_back(&mut self) -> Option<T> {
+        self.values.next_back().map(self.take)
+    }
+}
+
+impl<K, V, T> ExactSizeIterator for Walk<K, V, T> {}
+
 /// A read of a [`MapCache`], in order, held open.
 pub struct Entries<'a, K, V>(RwLockReadGuard<'a, BTreeMap<SmolStr, (K, V)>>);
+
+impl<'e, K, V> IntoIterator for &'e Entries<'_, K, V> {
+    type Item = &'e (K, V);
+    type IntoIter = std::collections::btree_map::Values<'e, SmolStr, (K, V)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.values()
+    }
+}
 
 impl<K, V> Entries<'_, K, V> {
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &(K, V)> {

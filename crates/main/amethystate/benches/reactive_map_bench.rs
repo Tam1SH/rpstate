@@ -194,7 +194,7 @@ fn bench_scans(c: &mut Criterion) {
             b.iter(|| black_box(map.entries().count()))
         });
         group.bench_with_input(BenchmarkId::new("keys", n), &n, |b, _| {
-            b.iter(|| black_box(map.keys().len()))
+            b.iter(|| black_box(map.keys().count()))
         });
         group.bench_with_input(BenchmarkId::new("entries_take1", n), &n, |b, _| {
             b.iter(|| black_box(map.entries().take(1).count()))
@@ -257,13 +257,13 @@ fn bench_windowed_reads(c: &mut Criterion) {
 
         // The floor: sorting the same keys with no value touched.
         group.bench_with_input(BenchmarkId::new("row/keys only", n), &n, |b, _| {
-            b.iter(|| black_box(heavy.keys().len()))
+            b.iter(|| black_box(heavy.keys().count()))
         });
 
         // What a windowed read could be: the order settled once, then only the
         // rows asked for are fetched. A stand-in for the shape, not a proposal
         // for the API.
-        let ordered = heavy.keys();
+        let ordered: Vec<String> = heavy.keys().collect();
         group.bench_with_input(BenchmarkId::new("row/window, order kept", n), &n, |b, _| {
             b.iter(|| {
                 black_box(

@@ -32,7 +32,7 @@ pub use change::{Change, MapChange};
 pub use primitives::field_core::FieldCore;
 pub use primitives::field_ops::*;
 pub use primitives::intercept::{InterceptDisposer, InterceptGuard};
-pub use primitives::map_core::ReactiveMapCore;
+pub use primitives::map_core::{Entries, ReactiveMapCore, Walk};
 pub use primitives::map_ops::*;
 pub use primitives::pipeline::{IntoPipeline, Pipeline, Reactive, ReactiveScope};
 pub use primitives::signal::{Signal, SignalSubscription};

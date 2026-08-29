@@ -729,7 +729,7 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
         distinct.dedup();
 
         prop_assert_eq!(map.len(), distinct.len(), "len");
-        prop_assert_eq!(map.keys().len(), distinct.len(), "keys");
+        prop_assert_eq!(map.keys().count(), distinct.len(), "keys");
         prop_assert_eq!(map.entries().count(), distinct.len(), "entries");
 
         let from_scan: Vec<String> = store
@@ -745,7 +745,7 @@ fn a_map_agrees_with_itself_and_with_a_scan(backend: Backend) {
         prop_assert_eq!(&membership, &distinct, "the scan disagrees with the map");
 
         prop_assert_eq!(
-            &map.keys(),
+            &map.keys().collect::<Vec<_>>(),
             &from_scan,
             "keys came back in an order the scan does not use"
         );

@@ -25,7 +25,7 @@ fn entries_are_sorted_by_key() {
     let (_store, cfg) = seeded(&path);
 
     assert_eq!(
-        cfg.items().keys(),
+        cfg.items().keys().collect::<Vec<_>>(),
         ["alpha", "bravo", "delta", "mike", "zulu"]
     );
 }
@@ -39,9 +39,9 @@ fn entry_order_survives_a_flush() {
     let path = unique_path("order_flush");
     let (store, cfg) = seeded(&path);
 
-    let before = cfg.items().keys();
+    let before: Vec<String> = cfg.items().keys().collect();
     store.save_now().unwrap();
-    let after = cfg.items().keys();
+    let after: Vec<String> = cfg.items().keys().collect();
 
     assert_eq!(before, after);
 }
@@ -53,7 +53,7 @@ fn entries_and_keys_agree() {
 
     let from_entries: Vec<String> = cfg.items().entries().map(|(k, _)| k).collect();
 
-    assert_eq!(from_entries, cfg.items().keys());
+    assert_eq!(from_entries, cfg.items().keys().collect::<Vec<_>>());
 }
 
 /// `keys()` must agree with `entries()` on every backend, including for keys
@@ -65,7 +65,7 @@ fn keys_sees_unflushed_writes() {
 
     cfg.items().insert("zzz".to_string(), &1).unwrap();
 
-    let keys = cfg.items().keys();
+    let keys: Vec<String> = cfg.items().keys().collect();
     assert!(keys.contains(&"zzz".to_string()));
 
     let from_entries: Vec<String> = cfg.items().entries().map(|(k, _)| k).collect();
@@ -80,5 +80,8 @@ fn keys_forgets_a_removed_entry() {
     store.save_now().unwrap();
     cfg.items().remove("mike").unwrap();
 
-    assert_eq!(cfg.items().keys(), ["alpha", "bravo", "delta", "zulu"]);
+    assert_eq!(
+        cfg.items().keys().collect::<Vec<_>>(),
+        ["alpha", "bravo", "delta", "zulu"]
+    );
 }

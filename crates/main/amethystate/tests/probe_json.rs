@@ -1007,7 +1007,7 @@ fn awkward_map_keys() -> Row {
         read: brief(&format!(
             "len={} of {expected}, wrong: {lost:?}, keys={:?}",
             map.len(),
-            map.keys()
+            map.keys().collect::<Vec<_>>()
         )),
         verdict: if lost.is_empty() && map.len() == expected {
             "ok".to_string()
@@ -1066,7 +1066,7 @@ fn cleared_and_refilled() -> Row {
         read: brief(&format!(
             "len={} keys={:?} file after the clear={} leaves now={:?}",
             map.len(),
-            map.keys(),
+            map.keys().collect::<Vec<_>>(),
             brief(&after_clear),
             leaves
         )),

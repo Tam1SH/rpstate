@@ -123,7 +123,7 @@ fn a_map_reads_what_is_stored_below_its_entries_as_those_entries() {
     let map: amethystate::ReactiveMap<String, u32> = store.kv().map("widths").unwrap();
 
     assert_eq!(
-        map.keys(),
+        map.keys().collect::<Vec<_>>(),
         Vec::<String>::new(),
         "`widths.left.px` is not an entry of the map at `widths`, and neither is \
          `left`: the map's entries are the level below it, and nothing is stored \

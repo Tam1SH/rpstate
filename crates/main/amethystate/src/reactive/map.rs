@@ -5,7 +5,9 @@ use crate::store::facts::{Facts, Prefix};
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Durable, StoreBackend};
 use amethystate_core::path::StorePath;
-use amethystate_core::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
+use amethystate_core::{
+    Entries, InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription, Walk,
+};
 use error_stack::{Report, ResultExt};
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display};
@@ -174,9 +176,47 @@ where
     ///
     /// Read from the map's projection, so nothing is decoded and the disk is
     /// not touched. The projection is already in this order, so nothing is
-    /// sorted; the entries are cloned because the iterator outlives the read.
-    pub fn entries(&self) -> impl Iterator<Item = (K, V)> {
-        self.inner.core.cache.entries().into_iter()
+    /// sorted, and nothing is taken that is not asked for: `take(50)` clones
+    /// fifty entries whatever the map holds.
+    ///
+    /// The read lock is held for as long as the walk lives, so writing to this
+    /// map from the thread that is walking it deadlocks.
+    pub fn entries(&self) -> Walk<K, V, (K, V)> {
+        self.inner.core.cache.entries()
+    }
+
+    /// The projection itself, held open, for a caller that wants to look
+    /// rather than to take.
+    ///
+    /// [`ReactiveMap::entries`] clones what it hands out, because `Iterator`
+    /// cannot lend from the thing it is iterating - `Item` is fixed on the
+    /// impl and cannot borrow from `&mut self`. This lends instead: bind it,
+    /// then `iter()`, and nothing is cloned that the caller does not clone.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// let widths = store.kv().map::<String, u64>("columns").unwrap();
+    /// widths.insert("cpu".into(), &120).unwrap();
+    /// widths.insert("mem".into(), &80).unwrap();
+    ///
+    /// let held = widths.view();
+    /// let total: u64 = held.iter().map(|(_, width)| width).sum();
+    ///
+    /// assert_eq!(total, 200);
+    ///
+    /// // A `for` keeps the temporary alive for the whole loop, so the binding
+    /// // is only needed when what is read outlives the loop.
+    /// let mut widest = 0;
+    /// for (_, width) in &widths.view() {
+    ///     widest = widest.max(*width);
+    /// }
+    ///
+    /// assert_eq!(widest, 120);
+    /// ```
+    pub fn view(&self) -> Entries<'_, K, V> {
+        self.inner.core.cache.view()
     }
 
     /// Every key, sorted. Values are neither read nor deserialized.
@@ -198,23 +238,26 @@ where
     /// widths.insert("cpu".into(), &120).unwrap();
     /// widths.insert("disk".into(), &60).unwrap();
     ///
-    /// assert_eq!(widths.keys(), ["cpu", "disk", "mem"]);
+    /// assert_eq!(widths.keys().collect::<Vec<_>>(), ["cpu", "disk", "mem"]);
     ///
     /// // Numeric keys sort as text, so 10 lands before 9.
     /// let ports = store.kv().map::<u16, bool>("ports").unwrap();
     /// ports.insert(9, &true).unwrap();
     /// ports.insert(10, &true).unwrap();
     /// ports.insert(100, &true).unwrap();
-    /// assert_eq!(ports.keys(), [10, 100, 9]);
+    /// assert_eq!(ports.keys().collect::<Vec<_>>(), [10, 100, 9]);
     ///
     /// // A name holding the separator sorts by the key it becomes, so it lands
     /// // where a scan puts it rather than where the bare name would.
     /// let odd = store.kv().map::<String, u8>("odd").unwrap();
     /// odd.insert("a.b".into(), &1).unwrap();
     /// odd.insert("a1b".into(), &2).unwrap();
-    /// assert_eq!(odd.keys(), ["a1b", "a.b"]);
+    /// assert_eq!(odd.keys().collect::<Vec<_>>(), ["a1b", "a.b"]);
     /// ```
-    pub fn keys(&self) -> Vec<K> {
+    ///
+    /// Only the keys asked for are cloned, and the value beside each is not
+    /// touched. The read lock is held for as long as the walk lives.
+    pub fn keys(&self) -> Walk<K, V, K> {
         self.inner.core.cache.keys()
     }
 
