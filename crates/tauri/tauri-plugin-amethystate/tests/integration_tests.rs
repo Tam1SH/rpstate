@@ -33,6 +33,7 @@ async fn test_tauri_plugin_commands() {
         plugin_state,
         "test_root.value".to_string(),
         serde_json::json!(200),
+        None,
     )
     .await;
     assert_eq!(set_res, Ok(()));

@@ -24,9 +24,13 @@ pub async fn amethystate_set(
     store: State<'_, PluginState>,
     key: String,
     value: serde_json::Value,
+    source: Option<uuid::Uuid>,
 ) -> Result<(), String> {
     let path = StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
-    store.store.set(&path, &value).map_err(|e| e.to_string())
+    store
+        .store
+        .set_with_source(&path, &value, source)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -149,7 +153,36 @@ pub async fn amethystate_unsubscribe(
     Ok(())
 }
 #[tauri::command]
-pub async fn amethystate_delete(store: State<'_, PluginState>, key: String) -> Result<(), String> {
+pub async fn amethystate_delete(
+    store: State<'_, PluginState>,
+    key: String,
+    source: Option<uuid::Uuid>,
+) -> Result<(), String> {
     let path = StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
-    store.store.delete(&path).map_err(|e| e.to_string())
+    store
+        .store
+        .delete_with_source(&path, source)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn amethystate_delete_prefix(
+    store: State<'_, PluginState>,
+    prefix: String,
+    source: Option<uuid::Uuid>,
+) -> Result<(), String> {
+    let prefix = StorePath::parse_joined(&prefix).map_err(|e| e.to_string())?;
+    amethystate::StoreBackend::delete_prefix_with_source(&store.store, &prefix, source)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn amethystate_scan_keys(
+    store: State<'_, PluginState>,
+    prefix: String,
+) -> Result<Vec<String>, String> {
+    let prefix = StorePath::parse_joined(&prefix).map_err(|e| e.to_string())?;
+    let keys = amethystate::StoreBackend::scan_keys(&store.store, &prefix)
+        .map_err(|e| e.to_string())?;
+    Ok(keys.iter().map(|k| k.as_str().to_string()).collect())
 }

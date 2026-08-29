@@ -130,6 +130,55 @@ impl AmeBackendAsync for TauriBackend {
         .map_err(|e| commanded(e, COMMAND, path))
     }
 
+    async fn delete_prefix(
+        &self,
+        prefix: &StorePath,
+        source: Option<Uuid>,
+    ) -> Result<(), Report<Self::Error>> {
+        #[derive(Serialize)]
+        struct DeletePrefixArgs<'a> {
+            prefix: &'a str,
+            source: Option<Uuid>,
+        }
+
+        const COMMAND: &str = "plugin:amethystate|amethystate_delete_prefix";
+
+        core::invoke_result::<(), String>(COMMAND, &DeletePrefixArgs {
+            prefix: prefix.as_str(),
+            source,
+        })
+        .await
+        .map_err(|e| commanded(e, COMMAND, prefix))
+    }
+
+    async fn scan_keys(
+        &self,
+        prefix: &StorePath,
+    ) -> Result<Vec<StorePath>, Report<Self::Error>> {
+        #[derive(Serialize)]
+        struct PrefixArgs<'a> {
+            prefix: &'a str,
+        }
+
+        const COMMAND: &str = "plugin:amethystate|amethystate_scan_keys";
+
+        let keys: Vec<String> = core::invoke_result::<_, String>(COMMAND, &PrefixArgs {
+            prefix: prefix.as_str(),
+        })
+        .await
+        .map_err(|e| commanded(e, COMMAND, prefix))?;
+
+        keys.into_iter()
+            .map(|key| {
+                StorePath::parse_joined(&key).map_err(|e| {
+                    Report::new(Error::Serde(e.to_string()))
+                        .attach(format!("prefix: {prefix}"))
+                        .attach(format!("stored key: {key}"))
+                })
+            })
+            .collect()
+    }
+
     async fn scan_prefix(
         &self,
         prefix: &StorePath,

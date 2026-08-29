@@ -102,10 +102,21 @@ pub trait AmeBackendAsync {
         source: Option<Uuid>,
     ) -> Result<(), Report<Self::Error>>;
 
+    /// Removes the whole subtree as one operation, so subscribers hear one
+    /// change at the prefix rather than one per key.
+    async fn delete_prefix(
+        &self,
+        prefix: &StorePath,
+        source: Option<Uuid>,
+    ) -> Result<(), Report<Self::Error>>;
+
     async fn scan_prefix(
         &self,
         prefix: &StorePath,
     ) -> Result<Vec<(StorePath, Self::Raw)>, Report<Self::Error>>;
+
+    async fn scan_keys(&self, prefix: &StorePath)
+    -> Result<Vec<StorePath>, Report<Self::Error>>;
 
     fn decode<T>(&self, raw: &Self::Raw) -> Result<T, Report<Self::Error>>
     where
