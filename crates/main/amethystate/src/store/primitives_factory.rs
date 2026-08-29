@@ -306,15 +306,13 @@ where
     }
 
     let core_clone = core.clone();
-    let map_key = path.joined_arc();
+    let map_path = path.clone();
     let path_for_keys = path.clone();
     let store_clone = store.clone();
     let id = store.subscribe(
         SubscriptionKind::Prefix(path.clone()),
         Arc::new(move |event| {
-            // The map's own path, not anything under it: a subtree deeper down
-            // being removed drops those keys, it does not empty the map.
-            if event.op == StoreOp::DeletePrefix && *event.path == *map_key {
+            if event.op == StoreOp::DeletePrefix && event.path == map_path {
                 core_clone.cache.clear();
                 core_clone.notify(&MapChange::Clear {
                     source: event.source,

@@ -122,16 +122,8 @@ fn committed(tag: &str, n: usize) -> (TempPath, Store, Map) {
     (path, store, map)
 }
 
-/// Committed, with `pending` of its entries written again.
-///
-/// The state a scan actually meets between flushes, and the only one where the
-/// merge merges: [`populated`] leaves the engine side empty and [`committed`]
-/// leaves the buffer side empty, so in both of those the two lists never
-/// interleave and a key is never in both.
-///
-/// The rewritten keys are spread across the range rather than taken from the
-/// front, so the buffer's turn comes throughout the walk instead of once at the
-/// start.
+/// Committed, with `pending` of its entries written again and spread across the
+/// range: the state between flushes, and the only one where the merge merges.
 fn half_flushed(tag: &str, n: usize, pending: usize) -> (TempPath, Store, Map) {
     let (path, store, map) = committed(tag, n);
     let stride = (n / pending.max(1)).max(1);
@@ -289,22 +281,8 @@ fn bench_windowed_reads(c: &mut Criterion) {
     group.finish();
 }
 
-/// Whether the handle needs the `Arc` it is behind.
-///
-/// `ReactiveMap` is `Arc<MapInner>`, and everything in `MapInner` is already
-/// cheap to clone: the core is seven `Arc`s, the path is a `&'static` slice or
-/// one `Arc`, the instance id is `Copy`, the store and the subscription are one
-/// `Arc` each. So the outer `Arc` buys one refcount bump on a clone instead of
-/// about ten, and charges a pointer hop on every field access - which is every
-/// read and every write.
-///
-/// The same trade as `Arc<Signal<T>>` inside a pipeline, which was pure loss.
-/// Here the ratio is different and the answer is not obvious, so: how often is a
-/// handle cloned against how often it is read?
-///
-/// `Flat` stands in for the shape without the wrapper. `Arc<()>` is where the
-/// store subscription would be - it cannot be built from a bench, and one `Arc`
-/// clones like any other.
+/// Whether the handle needs the `Arc` it is behind: one refcount bump on a
+/// clone against a pointer hop on every read, with the handle hot.
 fn bench_handle_shape(c: &mut Criterion) {
     let (_tmp, store) = store("map-handle-shape");
     let path = StorePath::from_segments(["bench", "handle"]);
@@ -355,34 +333,13 @@ fn bench_handle_shape(c: &mut Criterion) {
     group.finish();
 }
 
-/// The same question with the caches ruined, which is the only version that
-/// answers it.
+/// The same question with the handle cold, which is the only version that
+/// answers it: `HANDLES` distinct handles over a working set past any L3.
 ///
-/// `map_handle_shape` measured one handle in a loop: both shapes sat in L1 and
-/// the hop came out at 0.62 ns against 0.67 ns - two cycles either way, which
-/// is a measurement of nothing. A pointer you just dereferenced is free to
-/// dereference again.
-///
-/// So: `HANDLES` distinct handles, walked in a fixed random permutation, with a
-/// working set past any L3. Now the hop is a dependent load that cannot start
-/// until the first load lands - the shape of the cost, if it has one.
-///
-/// The two shapes are not symmetric under this load, and not in the wrapper's
-/// favour: `Flat` is one miss on a large array, `Wrapped` is one access to a
-/// small pointer array plus a dependent miss on `Parts`.
-///
-/// `read a field` walks a fixed permutation, so the iterations are independent
-/// and the processor keeps many misses in flight at once - which is what a real
-/// loop over handles looks like, and which hides some of the second load.
-/// `chase a field` takes the next index out of the field just read, so nothing
-/// overlaps and every hop pays full dependent latency. That is the worst case
-/// the wrapper can ever be put in, and no application produces it.
-///
-/// One handicap in `Flat`'s favour, taken deliberately: all handles share one
-/// core, so the refcount lines a clone touches stay hot. Building `HANDLES`
-/// real cores would be three `DashMap`s each. A real application clones one
-/// map's handle many times over, so hot control blocks are the honest case
-/// anyway - and if `Flat` loses even here, it loses.
+/// `read a field` walks a permutation, so the misses overlap; `chase a field`
+/// takes the next index out of the field just read, so none do. All handles
+/// share one core - building that many real ones is three `DashMap`s each -
+/// which handicaps the wrapper, not the flat shape.
 fn bench_handle_shape_cold(c: &mut Criterion) {
     const HANDLES: usize = 200_000;
 
@@ -491,18 +448,8 @@ fn bench_handle_shape_cold(c: &mut Criterion) {
     group.finish();
 }
 
-/// Which lookup is actually faster, hashed or ordered, at the sizes this
-/// library is built for.
-///
-/// The two lose in different ways and the answer is not the same for both key
-/// types. A hash lookup is one hash and one random probe - one miss, whatever
-/// the size. A `BTreeMap` walk is `log_B(n)` steps, but the root and the level
-/// under it stay resident, so the steps are not all misses; what it pays
-/// instead is a comparison per node, and for a `String` that is a `memcmp` per
-/// node against the default hasher's one pass over the key.
-///
-/// Sizes track the envelope: a hundred thousand entries is the edge of what
-/// this library is for, and ten is the common case.
+/// Which lookup is faster, hashed or ordered, for both key types and at the
+/// sizes this library is built for.
 fn bench_lookup_structure(c: &mut Criterion) {
     use std::collections::{BTreeMap, HashMap};
 

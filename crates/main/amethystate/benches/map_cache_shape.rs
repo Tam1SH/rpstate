@@ -1,32 +1,13 @@
 //! What the map's projection should be: a hash map that sorts on demand, or an
 //! ordered map that never has to.
 //!
-//! `ReactiveMapCore::cache` is a `DashMap`, so `keys()` and `entries()` cannot
-//! answer without building the order first. Today that means, per call: a
-//! `to_string()` for every entry, then a sort whose comparator is `cmp_names`,
-//! which escapes both sides again on every comparison. A hundred thousand
-//! entries is a hundred thousand allocations and about 1.7 million escapes, and
-//! nothing about the map changed between two identical calls.
+//! The contract's order is the escaped name's, not `K: Ord`, so the variants
+//! separate three questions at once - structure, key representation, and lock:
+//! `dash`, a tree keyed by the name with `Ord` through `cmp_names`, a tree
+//! keyed by the escaped name, and that one under a `Mutex`.
 //!
-//! A `BTreeMap` holds the order as an invariant instead. But the order in the
-//! contract is not `K: Ord` - it is the order of the escaped name, so that a
-//! map lists its entries the way a store scan lists the keys they become. A
-//! tree keyed by `K` would still need the sort. So the question is really three
-//! questions at once, and the variants separate them:
-//!
-//! - `dash` - what is there now.
-//! - `btree/name` - ordered, keyed by the name, `Ord` delegating to
-//!   `cmp_names`. No precomputation, but every comparison in every lookup
-//!   escapes both sides.
-//! - `btree/escaped` - ordered, keyed by the escaped name, so comparison is a
-//!   `memcmp` and the tree's order is the contract's order by construction.
-//!   Escaping moves to the write, and to the probe key on a lookup - where it
-//!   is a scan and no allocation unless the name actually holds a separator.
-//! - the same escaped tree under a `Mutex` instead of an `RwLock`, which is the
-//!   only difference between the last two.
-//!
-//! Sizes track the envelope: ten is the common case, a hundred thousand is the
-//! edge of what this library is for.
+//! Sizes track the envelope: ten is the common case, a hundred thousand the
+//! edge.
 
 use amethystate_core::path::cmp_names;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -201,15 +182,8 @@ impl Cache for BtreeName {
     }
 }
 
-/// What the escaped form can be stored as.
-///
-/// All three borrow as `str`, so the probe is a `Cow` and costs no allocation
-/// unless the name really holds a separator. They differ in what a tree node
-/// ends up holding: `String` is 24 bytes and a pointer to follow, `Box<str>` is
-/// 16 and the same pointer, and a `SmolStr` short enough to be inline is 24
-/// bytes with the characters *in* them - so a comparison during a descent hits
-/// the node's own cache line instead of chasing out of it. Every name here is
-/// short enough to be inline.
+/// What the escaped form can be stored as. All three borrow as `str`; they
+/// differ in whether a comparison during a descent leaves the node.
 trait EscapedKey: Ord + Borrow<str> + for<'a> From<&'a str> + Send + Sync + 'static {}
 impl<T: Ord + Borrow<str> + for<'a> From<&'a str> + Send + Sync + 'static> EscapedKey for T {}
 
@@ -408,14 +382,8 @@ fn ordered_ops<C: Cache>(c: &mut Criterion, shape: &str) {
 }
 
 /// The patterns a GUI actually produces: many widgets reading at once, and the
-/// same with one of them writing.
-///
-/// This is where the shapes stop being comparable on structure alone. A
-/// `DashMap` read takes one shard's lock, so readers on different shards never
-/// meet; an `RwLock` read is shared but every reader touches the same word; a
-/// `Mutex` serialises them outright. Under a writer the order reverses in
-/// places - one `DashMap` writer blocks one shard, one `RwLock` writer blocks
-/// everybody.
+/// same with one of them writing, where the lock matters as much as the
+/// structure.
 fn concurrent_ops<C: Cache>(c: &mut Criterion, shape: &str) {
     const THREADS: usize = 4;
     const PER_THREAD: usize = 4096;

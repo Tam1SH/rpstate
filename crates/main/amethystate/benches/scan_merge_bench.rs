@@ -1,34 +1,9 @@
-//! What laying the write buffer over the engine's answer costs, on its own.
+//! Laying the write buffer over the engine's answer, on its own: `allocating`
+//! against `in_place`, and `shipped` for whichever the library runs. Both
+//! algorithms live here so the choice between them stays checkable.
 //!
-//! A scan builds two sorted lists - what the engine holds and what is buffered
-//! over it - and merges them. `reactive_map_bench` times the whole scan, where
-//! the merge is a small part of a large number and its own cost cannot be read
-//! off the total: at a hundred thousand entries a scan is tens of milliseconds
-//! and the spread between samples is wider than the merge.
-//!
-//! So this measures the merge and nothing else, and measures both ways of
-//! doing it against each other:
-//!
-//! - `allocating` - two iterators feeding a third list, asked of the allocator
-//!   on every scan.
-//! - `in_place` - the same walk, backwards, writing into the tail of the list
-//!   the engine's side already owns, then shifting the answer down to the
-//!   front.
-//! - `shipped` - whichever of the two `merge_buffered` currently is, so the
-//!   comparison says something about the code that runs rather than about two
-//!   copies kept here.
-//!
-//! Both algorithms live here rather than one of them living in the library,
-//! because the reason for choosing between them is a measurement and a
-//! measurement needs both sides to still exist. `in_place` lost: removing the
-//! allocation costs a `memmove` of the whole answer at the end, which is worse
-//! than the allocation everywhere the buffer is not empty.
-//!
-//! The shapes are the states a store is actually in. Nothing buffered is the
-//! moment after a flush; a handful buffered is a moment after somebody edited
-//! something; half is what a burst of writes leaves; everything buffered is a
-//! store whose debounce has not fired yet, which is where a bench harness
-//! usually sits.
+//! The shapes are the states a store is in - after a flush, a moment after an
+//! edit, after a burst, and before the first flush.
 
 use amethystate::store::backend::utils::merge_buffered;
 use amethystate_core::path::StorePath;
@@ -69,11 +44,7 @@ fn merge_allocating(committed: Committed, buffered: Buffered) -> Committed {
     out
 }
 
-/// The same walk backwards, writing into the tail of `committed`'s own buffer
-/// and then shifting the answer down to the front.
-///
-/// Backwards because forwards would overwrite entries the walk has not read
-/// yet. The shift at the end is what it costs, and is why it lost.
+/// The same walk backwards into `committed`'s own tail, then shifted down.
 fn merge_in_place(mut committed: Committed, mut buffered: Buffered) -> Committed {
     fn empty_slot() -> (StorePath, Vec<u8>) {
         (StorePath::root(), Vec::new())
@@ -136,19 +107,13 @@ fn key(i: usize) -> StorePath {
     StorePath::from_segments(["bench", &format!("k{i:07}")])
 }
 
-/// A value the size of a small stored struct. The merge moves these rather
-/// than copying their bytes, so the length is about what the allocator was
-/// asked for and not about what the merge does.
+/// A value the size of a small stored struct.
 fn value(i: usize) -> Vec<u8> {
     vec![(i % 251) as u8; 48]
 }
 
 /// `n` committed entries with `pending` of them written again, spread across
-/// the range so the buffer's turn comes throughout the walk rather than once.
-///
-/// `deletes` says how many of the buffered ops remove their key instead of
-/// replacing it, which is the branch that makes the output shorter than either
-/// input.
+/// the range; `deletes` of those remove their key instead of replacing it.
 fn lists(n: usize, pending: usize, deletes: usize) -> (Committed, Buffered) {
     let committed: Committed = (0..n).map(|i| (key(i), value(i))).collect();
 
@@ -170,8 +135,8 @@ fn lists(n: usize, pending: usize, deletes: usize) -> (Committed, Buffered) {
     (committed, buffered)
 }
 
-/// Everything in the buffer and nothing committed, which is a store that has
-/// not flushed yet.
+/// Everything in the buffer and nothing committed: a store before its first
+/// flush.
 fn all_buffered(n: usize) -> (Committed, Buffered) {
     (
         Vec::new(),
@@ -193,10 +158,6 @@ fn bench_merge(c: &mut Criterion) {
             ("all buffered", all_buffered(n)),
         ];
 
-        // Freeing the answer on its own, with nothing else in the way: the
-        // list is built in setup and the routine only drops it. Whatever a
-        // merge costs, a scan pays this too, and it is the same number
-        // whichever algorithm ran.
         {
             let answer: Committed = (0..n).map(|i| (key(i), value(i))).collect();
             group.bench_with_input(BenchmarkId::new("free the answer", n), &n, |b, _| {
@@ -205,13 +166,6 @@ fn bench_merge(c: &mut Criterion) {
         }
 
         for (shape, (committed, buffered)) in shapes {
-            // `in_place` writes past the end of the engine's list, so the room
-            // has to be there before it starts. A caller reserves it while
-            // building the list, where it costs nothing; a `resize` inside the
-            // merge would reallocate and copy, which is the allocation the
-            // whole idea was to avoid. `reserved` says which arm gets it, so
-            // each one is measured under the conditions it would really run
-            // in.
             let arms: [(&str, fn(Committed, Buffered) -> Committed, bool); 3] = [
                 ("allocating", merge_allocating, false),
                 ("in_place", merge_in_place, true),
@@ -227,18 +181,12 @@ fn bench_merge(c: &mut Criterion) {
                     (committed, buffered.clone())
                 };
 
-                // Returning the answer leaves its drop to `iter_batched`,
-                // which frees the batch after it stops the clock. This is the
-                // algorithm and nothing else.
                 group.bench_with_input(
                     BenchmarkId::new(format!("{name}/{shape}"), n),
                     &n,
                     |b, _| b.iter_batched(setup, |(c, f)| merge(c, f), BatchSize::LargeInput),
                 );
 
-                // The same with the answer freed before the clock stops, which
-                // is what a caller does. The difference between the two rows
-                // is the cost of freeing it, measured rather than subtracted.
                 group.bench_with_input(
                     BenchmarkId::new(format!("{name} and free it/{shape}"), n),
                     &n,

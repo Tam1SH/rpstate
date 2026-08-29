@@ -72,11 +72,6 @@ pub fn resolve_instance_short(id: Uuid) -> Option<&'static str> {
     resolve_instance(id).map(short_type_name)
 }
 
-/// Records what a field is, so an inspector can say more than its path.
-///
-/// The name is the path's last level, asked of the path. Splitting the joined
-/// form on a separator would answer past the escaping: a field named `a.b`
-/// under `ui` is stored as `ui.a\.b`, and the split says its name is `b`.
 pub fn register_field<T: 'static>(path: &StorePath, instance_id: Uuid) {
     let struct_type_name = match resolve_instance(instance_id) {
         Some(n) => n,

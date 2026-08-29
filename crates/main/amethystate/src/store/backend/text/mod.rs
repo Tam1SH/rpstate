@@ -78,7 +78,7 @@ macro_rules! define_store_test_suite {
                     .recv_timeout(Duration::from_secs(3))
                     .expect("watcher should emit set event");
 
-                assert_eq!(&*event.path, "ui.theme.dark");
+                assert_eq!(event.path.as_str(), "ui.theme.dark");
                 assert_eq!(event.op, StoreOp::Set);
                 let old_val: bool = store.decode(&event.old.as_ref().unwrap()).unwrap();
                 let new_val: bool = store.decode(&event.new.as_ref().unwrap()).unwrap();
@@ -109,7 +109,7 @@ macro_rules! define_store_test_suite {
                     .recv_timeout(Duration::from_secs(3))
                     .expect("watcher should emit delete event");
 
-                assert_eq!(&*event.path, "ui.theme.dark");
+                assert_eq!(event.path.as_str(), "ui.theme.dark");
                 assert_eq!(event.op, StoreOp::Delete);
                 let old_val: bool = store.decode(&event.old.as_ref().unwrap()).unwrap();
                 assert_eq!(old_val, true);

@@ -71,9 +71,9 @@ pub async fn amethystate_subscribe<R: Runtime>(
     let key_clone = key.clone();
     let store_clone = store.store.clone();
 
-    // The key arrives as text from the front end, so this is the one place the
-    // joined form has to be read back rather than carried.
     let prefix = amethystate::store::StorePath::parse_joined(&key).map_err(|e| e.to_string())?;
+
+    let watched = prefix.clone();
 
     let sub_id = store.store.subscribe(
         amethystate::SubscriptionKind::Prefix(prefix),
@@ -81,8 +81,13 @@ pub async fn amethystate_subscribe<R: Runtime>(
             let event_name = format!("amethystate://{}", key_clone.replace('.', ":"));
             let store_c = store_clone.clone();
 
-            let prefix_dot = format!("{}.", key_clone);
-            if let Some(subkey) = event.path.strip_prefix(&prefix_dot) {
+            let under = event
+                .path
+                .strip_prefix(&watched)
+                .filter(|rest| !rest.is_root());
+
+            if let Some(rest) = under {
+                let subkey = rest.as_str();
                 let old_val = event
                     .old
                     .as_ref()
@@ -119,7 +124,7 @@ pub async fn amethystate_subscribe<R: Runtime>(
                     }),
                 };
                 let _ = app_handle.emit(&event_name, payload);
-            } else if *event.path == *key_clone
+            } else if event.path == watched
                 && let Some(new_bytes) = &event.new
                 && let Ok(val) = store_c.decode::<serde_json::Value>(new_bytes)
             {

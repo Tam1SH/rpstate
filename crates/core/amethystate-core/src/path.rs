@@ -302,10 +302,8 @@ impl StorePath {
         }
     }
 
-    /// This path and everything under it, as the key space sees it.
-    ///
-    /// Building it costs one string, so a scan builds it once and asks it about
-    /// every key rather than the other way round.
+    /// This path and everything under it, as the key space sees it. Costs one
+    /// string, so a scan builds it once and asks it about every key.
     pub fn subtree(&self) -> Subtree<'_> {
         Subtree {
             prefix: self.as_str(),
@@ -313,12 +311,8 @@ impl StorePath {
         }
     }
 
-    /// The same string as a shared handle, for the places that keep one.
-    ///
-    /// A path built at runtime already holds its joined form in an `Arc`, so
-    /// this is a refcount bump rather than a second copy of the bytes. A path
-    /// from the macro holds a `&'static str` and has to make one - which is
-    /// still the allocation a caller would otherwise have made every time.
+    /// The joined form as a shared handle. A runtime path already holds one; a
+    /// path from the macro holds a `&'static str` and makes one.
     pub fn joined_arc(&self) -> Arc<str> {
         match &self.joined {
             Joined::Static(s) => Arc::from(*s),
@@ -385,16 +379,10 @@ impl StorePath {
         level_below(self.as_str(), prefix.as_str(), prefix.is_root())
     }
 
-    /// The name `key` is stored under, below this path.
-    ///
-    /// What a flat engine's scan needs: it hands back whole keys, and a caller
-    /// that addressed a subtree wants the name of each thing in it. `None` when
-    /// `key` is not a path this type could have written, or is not under this
-    /// one.
-    pub fn entry_name(&self, key: &str) -> Option<String> {
-        StorePath::parse_joined(key)
-            .ok()
-            .and_then(|path| path.strip_prefix(self))
+    /// The name `key` is stored under, below this path: the *last* level of
+    /// what remains, where [`StorePath::name_under`] is the first.
+    pub fn entry_name(&self, key: &StorePath) -> Option<String> {
+        key.strip_prefix(self)
             .and_then(|rest| rest.name().map(|name| name.into_owned()))
     }
 
@@ -760,29 +748,14 @@ impl Hash for StorePath {
 }
 
 /// A path and everything under it, in the key space a flat engine ranges over.
-///
-/// The three questions an engine asks about a subtree - is this key in it,
-/// where does it start, where does it stop - are questions about how a path
-/// joins and escapes, which is this module's subject and not a store's. They
-/// were four functions in the storage layer taking a prefix and a bound as
-/// separate arguments that had to agree, with nothing checking that they did,
-/// and the same predicate was written out by hand in three more places. Here
-/// the bound cannot belong to a different prefix, because a subtree is the only
-/// way to get one.
 pub struct Subtree<'a> {
     prefix: &'a str,
-    /// Where the children begin: the prefix and a separator. Absent at the
-    /// root, which has no bound to spell - no key can begin with a separator,
-    /// and everything is under it.
+    /// The prefix and a separator; `None` at the root.
     bound: Option<String>,
 }
 
 impl<'a> Subtree<'a> {
     /// Whether `key` names this path or something under it.
-    ///
-    /// A key belongs when it is the prefix itself or begins with the prefix
-    /// followed by a separator, which is what keeps `uix.width` from counting
-    /// as a child of `ui`.
     pub fn contains(&self, key: &str) -> bool {
         match &self.bound {
             Some(bound) => key == self.prefix || key.starts_with(bound.as_str()),
@@ -790,25 +763,9 @@ impl<'a> Subtree<'a> {
         }
     }
 
-    /// The half-open range the subtree occupies, for an engine that queries by
-    /// comparison rather than by walking.
-    ///
-    /// A pattern would have to escape whatever the pattern language treats as
-    /// special, and a name may hold any of it - `panel[0]` is a name.
-    /// Comparison has no such vocabulary, and an index can serve it.
-    ///
-    /// The top is the separator's byte successor rather than a high character
-    /// after it. `prefix.\u{10FFFF}` reads as "surely nothing sorts above
-    /// that", and a child named `\u{10FFFF}z` does. The root has no top at all,
-    /// for the same reason spelled larger: U+10FFFF is the highest scalar value
-    /// there is, so for any candidate `s` the key `s` plus one more character
-    /// sorts above it, and a sentinel excludes exactly what it was chosen to
-    /// admit.
-    ///
-    /// Neither end is exact on its own. The bottom is the prefix itself, so a
-    /// sibling whose next character sorts below the separator falls inside the
-    /// range; [`Subtree::contains`] is what settles that, and a caller has to
-    /// apply it to what the range hands back.
+    /// The half-open range the subtree occupies. Neither end is exact - the
+    /// caller applies [`Subtree::contains`] to what it hands back - and the
+    /// root has no top.
     pub fn range(&self) -> (&str, Option<String>) {
         if self.bound.is_none() {
             return ("", None);
@@ -820,21 +777,18 @@ impl<'a> Subtree<'a> {
         (self.prefix, Some(high))
     }
 
-    /// Where the children begin, for a caller that compares against it itself.
+    /// Where the children begin; `None` at the root.
     pub fn child_bound(&self) -> Option<&str> {
         self.bound.as_deref()
     }
 
-    /// The joined prefix, for a walk that wants to stop once the keys have
-    /// gone past it entirely.
+    /// The joined prefix.
     pub fn prefix(&self) -> &str {
         self.prefix
     }
 }
 
 impl fmt::Display for Subtree<'_> {
-    /// How the range reads in a failure, with the open top said rather than
-    /// spelled.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.range() {
             (low, Some(high)) => write!(f, "[{low}, {high})"),
@@ -844,10 +798,7 @@ impl fmt::Display for Subtree<'_> {
 }
 
 /// Lets a collection keyed by `StorePath` be probed with the joined string.
-///
-/// [`Borrow`] asks that the borrowed form hash, compare and order exactly as
-/// the owned one does, which holds here by construction: all three delegate to
-/// [`StorePath::as_str`], so the string *is* what those impls look at.
+/// Sound because `Hash`, `Eq` and `Ord` all delegate to [`StorePath::as_str`].
 impl Borrow<str> for StorePath {
     fn borrow(&self) -> &str {
         self.as_str()

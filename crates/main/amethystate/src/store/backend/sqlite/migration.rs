@@ -2,6 +2,7 @@ use super::error::SqliteStoreError;
 use crate::codec::CodecError;
 use crate::migration::AppliedStep;
 use crate::store::error::StorageError;
+use crate::store::facts::Facts;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::{CodecFormat, StorageResult};
@@ -27,24 +28,24 @@ impl<'a> SqliteMigrationBackend<'a> {
             .prepare_cached(&sql)
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("table: {table}"))
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_table(table)
+            .attach_raw_key(key)?;
         let res: Option<Vec<u8>> = stmt
             .query_row([key], |row| row.get(0))
             .optional()
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("table: {table}"))
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_table(table)
+            .attach_raw_key(key)?;
 
         match res {
             Some(bytes) => Ok(Some(
                 sonic_rs::from_slice(&bytes)
                     .map_err(CodecError::from)
                     .change_context(StorageError::Codec)
-                    .attach_with(|| format!("table: {table}"))
-                    .attach_with(|| format!("key: {key}"))
-                    .attach_with(|| format!("value bytes: {}", bytes.len()))?,
+                    .attach_table(table)
+                    .attach_raw_key(key)
+                    .attach_value_bytes(bytes.len())?,
             )),
             None => Ok(None),
         }
@@ -54,8 +55,8 @@ impl<'a> SqliteMigrationBackend<'a> {
         let bytes = sonic_rs::to_vec(value)
             .map_err(CodecError::from)
             .change_context(StorageError::Codec)
-            .attach_with(|| format!("table: {table}"))
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_table(table)
+            .attach_raw_key(key)?;
 
         let sql = format!("REPLACE INTO {} (key, value) VALUES (?, ?)", table);
         let mut stmt = self
@@ -63,13 +64,13 @@ impl<'a> SqliteMigrationBackend<'a> {
             .prepare_cached(&sql)
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("table: {table}"))
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_table(table)
+            .attach_raw_key(key)?;
         stmt.execute(rusqlite::params![key, bytes])
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("table: {table}"))
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_table(table)
+            .attach_raw_key(key)?;
         Ok(())
     }
 }
@@ -85,12 +86,12 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
             .prepare_cached("SELECT value FROM data WHERE key = ?")
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Read)
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_raw_key(key)?;
         stmt.query_row([key], |row| row.get(0))
             .optional()
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Read)
-            .attach_with(|| format!("key: {key}"))
+            .attach_raw_key(key)
     }
 
     fn set(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
@@ -99,12 +100,12 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
             .prepare_cached("REPLACE INTO data (key, value) VALUES (?, ?)")
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Write)
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_raw_key(key)?;
         stmt.execute(rusqlite::params![key, value])
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Write)
-            .attach_with(|| format!("key: {key}"))
-            .attach_with(|| format!("value bytes: {}", value.len()))?;
+            .attach_raw_key(key)
+            .attach_value_bytes(value.len())?;
         Ok(())
     }
 
@@ -114,11 +115,11 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
             .prepare_cached("DELETE FROM data WHERE key = ?")
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Delete)
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_raw_key(key)?;
         stmt.execute([key])
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Delete)
-            .attach_with(|| format!("key: {key}"))?;
+            .attach_raw_key(key)?;
         Ok(())
     }
 
@@ -146,22 +147,22 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
             )
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Scan)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
         let rows = stmt
             .query_map(rusqlite::params![&low, &high], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
             .map_err(SqliteStoreError::from)
             .change_context(StorageError::Scan)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
 
         let mut res = Vec::new();
         for row in rows {
             let (key, value): (String, Vec<u8>) = row
                 .map_err(SqliteStoreError::from)
                 .change_context(StorageError::Scan)
-                .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("rows read: {}", res.len()))?;
+                .attach_prefix(prefix)
+                .attach_read_so_far(res.len())?;
 
             // The range's own bounds are not exact: it opens at the prefix
             // itself and closes above `prefix.`, so a sibling whose next

@@ -4293,6 +4293,34 @@ two levels whose second name held the dots itself - and are now one joined key,
 namespace is the empty string, so its marker was written as a child with no
 name, which is exactly what a scan reports as a name no path can hold.
 
+## A change that came off the disk looks like a change from nobody
+
+`StoreEvent::source` is `Option<Uuid>`, and the `Uuid` is the instance that
+made the write. `None` means no instance was recorded - an internal write
+nobody attributed.
+
+The file watcher's `diff_documents` raises its events with `source: None` too.
+So a subscriber cannot tell "an internal write nobody signed" from "the file
+changed under us", and those are different facts: the second one says another
+process, an editor, or a sync client touched the store. A subscriber
+suppressing its own echo compares against its own id and treats everything else
+alike, which is right for the first and wrong for the second.
+
+A fixed id for it, beside `StoreEvent`:
+
+```rust
+pub const EXTERNAL_EDIT: Uuid = Uuid::from_u128(0x616d_6574_6879_7374_6174_655f_6469_736b);
+```
+
+Those sixteen bytes are `amethystate_disk` in ASCII, so it reads as itself in a
+log or a dump and cannot collide with a `new_v4`. It is not a valid v4 - the
+version and variant bits are wrong - which is the point: a random constant
+would be indistinguishable from a real instance, and this is meant to be
+distinguishable.
+
+Set it at the three `source: None` in `diff_documents`. Nothing else raises an
+event the store did not cause.
+
 ## The text engines take a path apart and put it back on every call
 
 `TextDocument` addresses a node by `&[&str]`, so every `get`, `set` and `delete`

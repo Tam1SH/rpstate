@@ -5,6 +5,7 @@ pub mod default;
 pub mod depth;
 pub mod durable;
 mod error;
+pub mod facts;
 pub mod kv;
 pub mod meta;
 mod primitives_factory;

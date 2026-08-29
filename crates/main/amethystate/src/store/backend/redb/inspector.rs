@@ -4,6 +4,7 @@ use crate::store::CodecFormat;
 use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::error::StorageError;
+use crate::store::facts::Facts;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::RedbStore;
 use crate::{StorageResult, StoreBackend};
@@ -27,31 +28,31 @@ impl InspectorBackend for RedbStore {
             .db()?
             .begin_read()
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("store: {}", self.inner.path.display()))?;
+            .attach_store_file(&self.inner.path)?;
         let table = read_txn
             .open_table(TABLE_SCHEMA_SNAPSHOT)
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("store: {}", self.inner.path.display()))
-            .attach_with(|| format!("table: {}", TABLE_SCHEMA_SNAPSHOT.name()))?;
+            .attach_store_file(&self.inner.path)
+            .attach_table(TABLE_SCHEMA_SNAPSHOT.name())?;
 
         let mut results = Vec::new();
         let entries = table
             .iter()
             .change_context(StorageError::Meta)
-            .attach_with(|| format!("store: {}", self.inner.path.display()))
-            .attach_with(|| format!("table: {}", TABLE_SCHEMA_SNAPSHOT.name()))?;
+            .attach_store_file(&self.inner.path)
+            .attach_table(TABLE_SCHEMA_SNAPSHOT.name())?;
         for entry in entries {
             let (k, v) = entry
                 .change_context(StorageError::Meta)
-                .attach_with(|| format!("store: {}", self.inner.path.display()))
-                .attach_with(|| format!("snapshots read so far: {}", results.len()))?;
+                .attach_store_file(&self.inner.path)
+                .attach_read_so_far(results.len())?;
             let prefix = k.value().to_string();
             let snapshot: SchemaSnapshot = rmp_serde::from_slice(v.value())
                 .map_err(CodecError::from)
                 .change_context(StorageError::Meta)
-                .attach_with(|| format!("store: {}", self.inner.path.display()))
-                .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("snapshot: {} bytes", v.value().len()))?;
+                .attach_store_file(&self.inner.path)
+                .attach_raw_key(&prefix)
+                .attach_value_bytes(v.value().len())?;
             results.push((prefix, snapshot));
         }
         Ok(results)
@@ -67,7 +68,7 @@ impl InspectorBackend for RedbStore {
             &path,
             value,
         )
-        .attach_with(|| format!("store: {}", self.inner.path.display()))
-        .attach_with(|| format!("key: {key}"))
+        .attach_store_file(&self.inner.path)
+        .attach_key(&path)
     }
 }

@@ -1,5 +1,6 @@
 use crate::SubscriptionKind;
 use crate::store::error::{StorageError, StorageResult};
+use crate::store::facts::Facts;
 use crate::store::{StoreEvent, SubscriptionEntry};
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -15,8 +16,7 @@ pub trait Attempted: ResultExt {
 
 impl<R: ResultExt> Attempted for R {
     fn doing(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok> {
-        self.change_context(what)
-            .attach_with(|| format!("file: {}", file.display()))
+        self.change_context(what).attach_store_file(file)
     }
 }
 
@@ -42,35 +42,9 @@ pub fn report_closing_flush(outcome: StorageResult<()>, file: &Path) {
     }
 }
 
-/// Lays the write buffer over what the engine holds, both already sorted.
-///
-/// One pass down two lists rather than a tree built from one and searched by
-/// the other: a buffered write replaces the committed value at its key, a
-/// buffered delete leaves nothing there, and everything keeps the order the
-/// engine ranges in - which is the order a scan promises.
-///
-/// An empty buffer hands the engine's own list straight back, which is every
-/// scan after a flush. That line is where the measurable win is: 9.0 ms
-/// against 12.7 ms at a hundred thousand entries, for doing nothing instead of
-/// building the same answer again.
-///
-/// The merge itself allocates, and that is a decision rather than an
-/// oversight. Merging backwards into room reserved at the end of `committed`
-/// does remove the allocation and is about 10% faster on the shape that
-/// matters - 12.9 ms against 14.3 ms with a small buffer over a hundred
-/// thousand entries (`benches/scan_merge_bench.rs`, which keeps both so the
-/// figure stays checkable). That is 4% of a scan, and it is bought with a
-/// walk whose correctness rests on the write head never overtaking the read
-/// head, a shift of the whole list at the end, two special cases, and an
-/// obligation on every caller to reserve the room first. A caller that forgets
-/// gets a reallocation and a copy, which is worse than what it replaced, and
-/// nothing says so: it compiles and the tests pass.
-///
-/// Four percent is not that price, and a profile of the same benchmark says
-/// why it could not have been more: the heap is 26% of the run and `memcpy` is
-/// 17%, against 6.5% for the merge's own code. That time is spent per element,
-/// not per list - every pair owns a `Vec<u8>` and an `Arc<[Arc<str>]>` - so one
-/// allocation for the list holding them was never the thing to remove.
+/// Lays the write buffer over what the engine holds, both already sorted: a
+/// buffered write replaces the committed value at its key, a buffered delete
+/// leaves nothing there, and the order is the engine's.
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 pub fn merge_buffered(
     committed: Vec<(StorePath, Vec<u8>)>,
@@ -119,7 +93,7 @@ pub fn merge_buffered(
 pub fn stored_path(key: &str) -> StorageResult<StorePath> {
     StorePath::parse_joined(key)
         .change_context(StorageError::Scan)
-        .attach_with(|| format!("stored key: {key}"))
+        .attach_raw_key(key)
         .attach("the store holds a key this library could not have written")
 }
 
@@ -144,11 +118,11 @@ pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent
     }
 }
 
-fn matches_kind(kind: &SubscriptionKind, path: &str) -> bool {
+fn matches_kind(kind: &SubscriptionKind, path: &StorePath) -> bool {
     match kind {
         SubscriptionKind::Any => true,
-        SubscriptionKind::ExactPath(p) => p.as_str() == path,
-        SubscriptionKind::Prefix(prefix) => prefix.subtree().contains(path),
+        SubscriptionKind::ExactPath(p) => p == path,
+        SubscriptionKind::Prefix(prefix) => prefix.subtree().contains(path.as_str()),
     }
 }
 
@@ -191,12 +165,6 @@ mod buffered {
         }
     }
 
-    /// The write buffer, keyed by the path itself.
-    ///
-    /// A `StorePath` clones as a refcount bump and already hashes, compares and
-    /// orders by its joined form, so nothing is paid for holding the path
-    /// rather than a string built from it - and the buffer can then be asked
-    /// the questions a path answers, instead of re-deriving them from text.
     pub type Pending = std::collections::HashMap<StorePath, PendingOp>;
 
     /// Everything buffered under `prefix`, left in place.
@@ -251,7 +219,7 @@ mod buffered {
         emit_events(
             subscriptions,
             StoreEvent {
-                path: key.joined_arc(),
+                path: key.clone(),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(value.to_vec()),

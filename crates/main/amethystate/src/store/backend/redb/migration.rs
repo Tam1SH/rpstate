@@ -5,6 +5,7 @@ use crate::migration::AppliedStep;
 use crate::store::CodecFormat;
 use crate::store::backend::utils;
 use crate::store::error::{StorageError, StorageResult};
+use crate::store::facts::Facts;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
 use amethystate_core::path::StorePath;
@@ -22,15 +23,11 @@ impl<'a> RedbMigrationBackend<'a> {
         Self { txn, path }
     }
 
-    fn store(&self) -> String {
-        format!("store: {}", self.path.display())
-    }
-
     fn data_table(&self) -> StorageResult<redb::Table<'_, &'static str, &'static [u8]>> {
         self.txn
             .open_table(TABLE_DATA)
             .change_context(StorageError::Migrate)
-            .attach_with(|| self.store())
+            .attach_store_file(&self.path)
             .attach_with(|| format!("table: {}", TABLE_DATA.name()))
     }
 }
@@ -71,7 +68,7 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         Ok(table
             .get(key)
             .change_context(StorageError::Migrate)
-            .attach_with(|| self.store())
+            .attach_store_file(&self.path)
             .attach_with(|| format!("key: {key}"))?
             .map(|v| v.value().to_vec()))
     }
@@ -81,7 +78,7 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         table
             .insert(key, value)
             .change_context(StorageError::Migrate)
-            .attach_with(|| self.store())
+            .attach_store_file(&self.path)
             .attach_with(|| format!("key: {key}"))
             .attach_with(|| format!("value: {} bytes", value.len()))?;
         Ok(())
@@ -92,7 +89,7 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         table
             .remove(key)
             .change_context(StorageError::Migrate)
-            .attach_with(|| self.store())
+            .attach_store_file(&self.path)
             .attach_with(|| format!("key: {key}"))?;
         Ok(())
     }
@@ -105,12 +102,12 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
         let entries = table
             .iter()
             .change_context(StorageError::Migrate)
-            .attach_with(|| self.store())
+            .attach_store_file(&self.path)
             .attach_with(|| format!("prefix: {prefix}"))?;
         for entry in entries {
             let (k, v) = entry
                 .change_context(StorageError::Migrate)
-                .attach_with(|| self.store())
+                .attach_store_file(&self.path)
                 .attach_with(|| format!("prefix: {prefix}"))
                 .attach_with(|| format!("entries read so far: {}", result.len()))?;
             let key = k.value();

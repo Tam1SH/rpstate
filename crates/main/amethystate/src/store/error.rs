@@ -9,7 +9,7 @@ use std::fmt;
 /// are attachments put there by whoever knew them. So the variants name the
 /// operation rather than the source: two engines failing to write are the same
 /// kind of failure, told apart by the frames underneath.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageError {
     /// Opening or creating the store.
     Open,

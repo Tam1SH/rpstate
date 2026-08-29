@@ -10,6 +10,7 @@ use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
 use crate::store::depth::{Depth, DepthBudget};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
+use crate::store::facts::Facts;
 use crate::store::traits::MigrationBackendAdapter;
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
@@ -36,8 +37,7 @@ trait InMetaFile: ResultExt {
 
 impl<R: ResultExt> InMetaFile for R {
     fn in_meta(self, what: StorageError, file: &Path) -> StorageResult<Self::Ok> {
-        self.change_context(what)
-            .attach_with(|| format!("meta file: {}", file.display()))
+        self.change_context(what).attach_meta_file(file)
     }
 }
 
@@ -111,7 +111,7 @@ impl<D: TextDocument> StoreFile<D> {
             std::fs::copy(&self.path, &self.backup_path)
                 .map_err(TextStoreError::from)
                 .change_context(StorageError::Open)
-                .attach_with(|| format!("file: {}", self.path.display()))
+                .attach_store_file(&self.path)
                 .attach_with(|| format!("backup: {}", self.backup_path.display()))?;
         }
         Ok(())
@@ -122,8 +122,8 @@ impl<D: TextDocument> StoreFile<D> {
             let content = std::fs::read_to_string(&self.path)
                 .map_err(TextStoreError::from)
                 .change_context(StorageError::Open)
-                .attach_with(|| format!("file: {}", self.path.display()))?;
-            D::parse(&content).attach_with(|| format!("file: {}", self.path.display()))
+                .attach_store_file(&self.path)?;
+            D::parse(&content).attach_store_file(&self.path)
         } else {
             Ok(D::empty())
         }
@@ -142,11 +142,11 @@ impl<D: TextDocument> StoreFile<D> {
             .doc
             .read()
             .serialize()
-            .attach_with(|| format!("file: {}", self.path.display()))?;
+            .attach_store_file(&self.path)?;
         persist_atomic(&self.path, &content, self.write_policy)
             .map_err(TextStoreError::from)
             .change_context(StorageError::Flush)
-            .attach_with(|| format!("file: {}", self.path.display()))?;
+            .attach_store_file(&self.path)?;
         Ok(())
     }
 
@@ -481,7 +481,7 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
         engine
             .run(mset)
             .doing(StorageError::Migrate, &self.inner.files.data.path)
-            .attach_with(|| format!("meta file: {}", self.inner.files.meta.path.display()))
+            .attach_meta_file(&self.inner.files.meta.path)
     }
 }
 
@@ -509,7 +509,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         self.check_debouncer()?;
         self.budget
             .check_path(path)
-            .attach_with(|| format!("file: {}", self.files.data.path.display()))?;
+            .attach_store_file(&self.files.data.path)?;
 
         // One pass: the codec renders the value and the levels are counted on
         // the way past. A refusal comes back as the codec's own error, so which
@@ -549,13 +549,13 @@ impl<D: TextDocument> TextStoreInner<D> {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         let guard = self.files.data.doc.read();
         scan_prefix_impl(&*guard, prefix)
-            .attach_with(|| format!("file: {}", self.files.data.path.display()))
+            .attach_store_file(&self.files.data.path)
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let guard = self.files.data.doc.read();
         scan_keys_impl(&*guard, prefix)
-            .attach_with(|| format!("file: {}", self.files.data.path.display()))
+            .attach_store_file(&self.files.data.path)
     }
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
@@ -590,7 +590,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(path.as_str()),
+                path: path.clone(),
                 op: StoreOp::Delete,
                 old: Some(old_bytes),
                 new: None,
@@ -624,7 +624,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         utils::emit_events(
             &self.subscriptions,
             StoreEvent {
-                path: Arc::from(prefix.as_str()),
+                path: prefix.clone(),
                 op: StoreOp::DeletePrefix,
                 old: None,
                 new: None,
@@ -724,7 +724,7 @@ impl<D: TextDocument> TextStoreInner<D> {
 
         let event = match new_bytes {
             Some(new) => StoreEvent {
-                path: Arc::from(path_str.as_str()),
+                path: path_str.clone(),
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(new),
@@ -736,7 +736,7 @@ impl<D: TextDocument> TextStoreInner<D> {
                     return Ok(());
                 };
                 StoreEvent {
-                    path: Arc::from(path_str.as_str()),
+                    path: path_str.clone(),
                     op: StoreOp::Delete,
                     old: Some(old),
                     new: None,
@@ -779,7 +779,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
         D::with_bytes_de(bytes, f)
-            .attach_with(|| format!("file: {}", self.inner.files.data.path.display()))
+            .attach_store_file(&self.inner.files.data.path)
     }
 
     fn set_erased(
@@ -1075,7 +1075,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                 let new_bytes = D::node_to_bytes(n).ok();
                 if old_bytes != new_bytes {
                     events.push(StoreEvent {
-                        path: Arc::from(key),
+                        path: utils::stored_path(&key)?,
                         op: StoreOp::Set,
                         old: old_bytes,
                         new: new_bytes,
@@ -1086,7 +1086,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
             (Some(o), None) => {
                 let old_bytes = D::node_to_bytes(o).ok();
                 events.push(StoreEvent {
-                    path: Arc::from(key),
+                    path: utils::stored_path(&key)?,
                     op: StoreOp::Delete,
                     old: old_bytes,
                     new: None,
@@ -1096,7 +1096,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
             (None, Some(n)) => {
                 let new_bytes = D::node_to_bytes(n).ok();
                 events.push(StoreEvent {
-                    path: Arc::from(key),
+                    path: utils::stored_path(&key)?,
                     op: StoreOp::Set,
                     old: None,
                     new: new_bytes,

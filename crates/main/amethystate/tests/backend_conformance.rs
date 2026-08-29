@@ -1100,7 +1100,7 @@ fn a_write_emits_one_set_carrying_both_values(backend: Backend) {
     assert_eq!(seen.len(), 2, "one event per write, got {seen:?}");
 
     assert_eq!(seen[0].op, StoreOp::Set);
-    assert_eq!(&*seen[0].path, "ui.width");
+    assert_eq!(seen[0].path.as_str(), "ui.width");
     assert!(seen[0].old.is_none(), "nothing was there to replace");
     assert_eq!(decoded::<u32>(&store, &seen[0].new), Some(10));
 
@@ -1133,7 +1133,7 @@ fn a_delete_emits_one_delete_and_only_when_something_went(backend: Backend) {
         "only the delete that removed something speaks, got {seen:?}"
     );
     assert_eq!(seen[0].op, StoreOp::Delete);
-    assert_eq!(&*seen[0].path, "ui.width");
+    assert_eq!(seen[0].path.as_str(), "ui.width");
     assert_eq!(
         decoded::<u32>(&store, &seen[0].old),
         Some(10),
@@ -1158,7 +1158,7 @@ fn delete_prefix_emits_one_event_at_the_prefix(backend: Backend) {
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 1, "one operation, one event, got {seen:?}");
     assert_eq!(seen[0].op, StoreOp::DeletePrefix);
-    assert_eq!(&*seen[0].path, "ui");
+    assert_eq!(seen[0].path.as_str(), "ui");
 }
 
 /// The store's own bookkeeping is not data.

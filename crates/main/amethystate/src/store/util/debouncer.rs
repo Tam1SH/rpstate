@@ -36,14 +36,6 @@ pub struct FlushPolicy {
 }
 
 impl Debouncer {
-    /// The thread both constructors run: wait out the quiet period, then hand
-    /// the receiver to `run`, which is the only thing that differs between
-    /// them.
-    ///
-    /// The thread holds `guard` for its whole life, so a panic inside the work
-    /// poisons the mutex on the way out and [`Debouncer::is_poisoned`] can see
-    /// it. `run` is given the receiver because a retrying flush keeps reading
-    /// it while it retries.
     fn spawn<F>(interval: Duration, mut run: F) -> Self
     where
         F: FnMut(&mpsc::Receiver<Trigger>) + Send + 'static,
@@ -147,7 +139,6 @@ impl Debouncer {
 
 #[cfg(test)]
 impl Debouncer {
-    /// Blocks until the thread is gone, however it went.
     pub fn wait_dead(&self) {
         let (lock, cvar) = &*self.dead;
         let _unused = cvar.wait_while(lock.lock().unwrap(), |dead| !*dead);
@@ -160,25 +151,12 @@ impl Drop for Debouncer {
     }
 }
 
-/// How the current run of failures is doing - the only thing an attempt
-/// carries into the next one.
-///
-/// The pair it replaces was an `Option<Instant>` and a `bool`, which spelled
-/// four combinations for three states: "escalated, but no streak to have
-/// escalated from" was reachable in the types and not in the code, and the
-/// difference lived in the order of two conditions.
 enum Streak {
-    /// Nothing has failed yet, so the next failure starts the clock.
     Fresh,
-    /// Failing since, and still inside the budget: each attempt warns.
     Failing { since: Instant },
-    /// Past the budget and escalated once. It keeps retrying and stays quiet;
-    /// only landing ends it.
     GaveUp,
 }
 
-/// Escalates a streak that outlived its budget: wakes whoever awaited this
-/// flush with a failure, then asks the policy what writers should be told.
 fn give_up(
     reason: &Arc<error_stack::Report<crate::store::StorageError>>,
     elapsed: Duration,

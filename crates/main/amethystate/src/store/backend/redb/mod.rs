@@ -5,7 +5,7 @@ use crate::store::{
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use migration::RedbMigrationBackend;
-use redb::{Database, ReadableDatabase, TableHandle};
+use redb::{Database, ReadOnlyTable, ReadableDatabase, TableHandle};
 use std::collections::HashSet;
 use std::path::Path;
 use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
@@ -13,6 +13,7 @@ use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
 use crate::store::depth::DepthBudget;
+use crate::store::facts::{Facts, Key, StoreFile};
 use crate::{
     MigrationReport,
     store::error::{StorageError, StorageResult},
@@ -69,11 +70,11 @@ fn apply_pending(
     let mut table = txn
         .open_table(TABLE_DATA)
         .doing(StorageError::Flush, path)
-        .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        .attach_table(TABLE_DATA.name())?;
     let mut meta = txn
         .open_table(TABLE_META)
         .doing(StorageError::Flush, path)
-        .attach_with(|| format!("table: {}", TABLE_META.name()))?;
+        .attach_table(TABLE_META.name())?;
 
     for (key, op) in changes {
         match op {
@@ -81,16 +82,16 @@ fn apply_pending(
                 table
                     .insert(key.as_str(), &b[..])
                     .doing(StorageError::Flush, path)
-                    .attach_with(|| format!("table: {}", TABLE_DATA.name()))
-                    .attach_with(|| format!("key: {key}"))
-                    .attach_with(|| format!("value: {} bytes", b.len()))?;
+                    .attach_table(TABLE_DATA.name())
+                    .attach_key(key)
+                    .attach_value_bytes(b.len())?;
             }
             utils::PendingOp::Delete => {
                 table
                     .remove(key.as_str())
                     .doing(StorageError::Flush, path)
-                    .attach_with(|| format!("table: {}", TABLE_DATA.name()))
-                    .attach_with(|| format!("key: {key}"))?;
+                    .attach_table(TABLE_DATA.name())
+                    .attach_key(key)?;
             }
             utils::PendingOp::Init(seeded) => {
                 let init_key = utils::init_key(key.as_str());
@@ -100,7 +101,7 @@ fn apply_pending(
                     meta.remove(init_key.as_str()).map(|_| ())
                 }
                 .doing(StorageError::Flush, path)
-                .attach_with(|| format!("table: {}", TABLE_META.name()))
+                .attach_table(TABLE_META.name())
                 .attach_with(|| format!("namespace: {key}"))?;
             }
         }
@@ -167,15 +168,15 @@ impl RedbStoreInner {
             .db()?
             .begin_write()
             .doing(StorageError::Flush, &self.path)
-            .attach_with(|| format!("prefix: {prefix}"))
-            .attach_with(|| format!("buffered entries: {}", changes.len()))?;
+            .attach_prefix(prefix)
+            .attach_buffered(changes.len())?;
 
         apply_pending(&txn, &changes, &self.path)?;
 
         txn.commit()
             .doing(StorageError::Flush, &self.path)
-            .attach_with(|| format!("prefix: {prefix}"))
-            .attach_with(|| format!("buffered entries: {}", changes.len()))?;
+            .attach_prefix(prefix)
+            .attach_buffered(changes.len())?;
 
         utils::clear_committed(&mut self.pending.lock(), &changes);
         self.commits.finished(true);
@@ -199,8 +200,29 @@ impl RedbStoreInner {
         self.db.load_full().ok_or_else(|| {
             error_stack::Report::new(StorageError::Read)
                 .attach("the database is being reopened after an I/O failure")
-                .attach(format!("file: {}", self.path.display()))
+                .attach(StoreFile(self.path.to_path_buf()))
         })
+    }
+
+    /// A read transaction and the data table in it.
+    ///
+    /// The transaction comes back with the table because dropping it would end
+    /// the read, and `ReadOnlyTable` does not borrow from it - so it has to be
+    /// held rather than being kept alive by the borrow checker.
+    fn read_data(
+        &self,
+        what: StorageError,
+    ) -> StorageResult<(redb::ReadTransaction, ReadOnlyTable<&'static str, &'static [u8]>)> {
+        let txn = self
+            .db()?
+            .begin_read()
+            .doing(what, &self.path)
+            .attach_table(TABLE_DATA.name())?;
+        let table = txn
+            .open_table(TABLE_DATA)
+            .doing(what, &self.path)
+            .attach_table(TABLE_DATA.name())?;
+        Ok((txn, table))
     }
 
     /// Whether a write may proceed.
@@ -270,7 +292,7 @@ impl RedbStore {
                 let _ = write_txn
                     .open_table(table)
                     .doing(StorageError::Open, &path)
-                    .attach_with(|| format!("table: {}", table.name()))?;
+                    .attach_table(table.name())?;
             }
         }
         write_txn.commit().doing(StorageError::Open, &path)?;
@@ -327,11 +349,11 @@ impl RedbStore {
                     let txn = db
                         .begin_write()
                         .doing(StorageError::Flush, &path_save)
-                        .attach_with(|| format!("buffered entries: {}", changes.len()))?;
+                        .attach_buffered(changes.len())?;
                     apply_pending(&txn, &changes, &path_save)?;
                     txn.commit()
                         .doing(StorageError::Flush, &path_save)
-                        .attach_with(|| format!("buffered entries: {}", changes.len()))
+                        .attach_buffered(changes.len())
                 })();
 
                 match landed {
@@ -377,7 +399,7 @@ impl RedbStore {
         let store = Self { inner };
         let report = store
             .run_migrations(migration_set)
-            .attach_with(|| format!("store: {}", store.inner.path.display()))
+            .attach_store_file(&store.inner.path)
             .attach("opening the store")?;
 
         Ok((store, report))
@@ -393,26 +415,16 @@ impl RedbStore {
     /// otherwise the committed one. Reading the buffer alone reported no old
     /// value once a flush had emptied it, though the key was on disk.
     fn committed_or_buffered(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
-        let path = path.as_str();
         if let Some(op) = self.inner.pending.lock().get(path).filter(|o| o.is_data()) {
             return Ok(op.value().map(Vec::from));
         }
 
-        let read_txn = self
-            .inner
-            .db()?
-            .begin_read()
-            .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?;
-        let table = read_txn
-            .open_table(TABLE_DATA)
-            .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        let (_txn, table) = self.inner.read_data(StorageError::Read).attach_key(path)?;
 
         Ok(table
-            .get(path)
+            .get(path.as_str())
             .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?
+            .attach_key(path)?
             .map(|v| Vec::from(&v.value()[..])))
     }
 }
@@ -456,7 +468,6 @@ impl SchemaAwareStore for RedbStore {
 
 impl StoreBackend for RedbStore {
     fn get_raw(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
-        let path = path.as_str();
         {
             let lock = self.inner.pending.lock();
             if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
@@ -464,20 +475,11 @@ impl StoreBackend for RedbStore {
             }
         }
 
-        let read_txn = self
-            .inner
-            .db()?
-            .begin_read()
-            .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?;
-        let table = read_txn
-            .open_table(TABLE_DATA)
-            .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        let (_txn, table) = self.inner.read_data(StorageError::Read).attach_key(path)?;
         match table
-            .get(path)
+            .get(path.as_str())
             .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?
+            .attach_key(path)?
         {
             Some(access_guard) => Ok(Some(access_guard.value().to_vec())),
             None => Ok(None),
@@ -489,7 +491,6 @@ impl StoreBackend for RedbStore {
         path: &StorePath,
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<bool> {
-        let path = path.as_str();
         {
             let lock = self.inner.pending.lock();
             if let Some(op) = lock.get(path).filter(|o| o.is_data()) {
@@ -497,8 +498,9 @@ impl StoreBackend for RedbStore {
                     Some(bytes) => {
                         self.decode_erased(bytes, f)
                             .change_context(StorageError::Read)
-                            .attach_with(|| format!("store: {}", self.inner.path.display()))
-                            .attach_with(|| format!("key: {path} (unflushed)"))?;
+                            .attach_store_file(&self.inner.path)
+                            .attach_key(path)
+                            .attach("not yet flushed")?;
                         Ok(true)
                     }
                     None => Ok(false),
@@ -506,26 +508,17 @@ impl StoreBackend for RedbStore {
             }
         }
 
-        let read_txn = self
-            .inner
-            .db()?
-            .begin_read()
-            .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?;
-        let table = read_txn
-            .open_table(TABLE_DATA)
-            .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        let (_txn, table) = self.inner.read_data(StorageError::Read).attach_key(path)?;
         match table
-            .get(path)
+            .get(path.as_str())
             .doing(StorageError::Read, &self.inner.path)
-            .attach_with(|| format!("key: {path}"))?
+            .attach_key(path)?
         {
             Some(access_guard) => {
                 self.decode_erased(access_guard.value(), f)
                     .change_context(StorageError::Read)
-                    .attach_with(|| format!("store: {}", self.inner.path.display()))
-                    .attach_with(|| format!("key: {path}"))?;
+                    .attach_store_file(&self.inner.path)
+                    .attach_key(path)?;
                 Ok(true)
             }
             None => Ok(false),
@@ -561,7 +554,7 @@ impl StoreBackend for RedbStore {
         self.inner
             .budget
             .check_path(&path)
-            .attach_with(|| format!("store: {}", self.inner.path.display()))?;
+            .attach_store_file(&self.inner.path)?;
 
         // Counted during the codec's own pass rather than in one of its own.
         // redb needs it most: `rmp_serde` has no ceiling, so a value deep
@@ -593,19 +586,19 @@ impl StoreBackend for RedbStore {
                     self.inner
                         .budget
                         .too_deep(&path)
-                        .attach(format!("store: {}", self.inner.path.display()))
+                        .attach(StoreFile(self.inner.path.to_path_buf()))
                 } else {
                     error_stack::Report::new(e)
                         .change_context(StorageError::Codec)
-                        .attach(format!("store: {}", self.inner.path.display()))
-                        .attach(format!("key: {path}"))
+                        .attach(StoreFile(self.inner.path.to_path_buf()))
+                        .attach(Key(path.clone()))
                 }
             })?;
 
         let old_bytes = self
             .committed_or_buffered(&path)
             .change_context(StorageError::Write)
-            .attach_with(|| format!("key: {path}"))
+            .attach_key(&path)
             .attach("reading the value a subscriber should see as the old one")?;
 
         {
@@ -616,7 +609,7 @@ impl StoreBackend for RedbStore {
         utils::emit_events(
             &self.inner.subscriptions,
             StoreEvent {
-                path: path.joined_arc(),
+                path,
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(bytes),
@@ -646,27 +639,18 @@ impl StoreBackend for RedbStore {
         // stopped fitting in cache.
         let mut committed: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
-        let read_txn = self
-            .inner
-            .db()?
-            .begin_read()
-            .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
-        let table = read_txn
-            .open_table(TABLE_DATA)
-            .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        let (_txn, table) = self.inner.read_data(StorageError::Scan).attach_prefix(prefix)?;
 
         let range = subtree.prefix()..;
         let entries = table
             .range(range)
             .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
         for result in entries {
             let (k, v) = result
                 .doing(StorageError::Scan, &self.inner.path)
-                .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("entries read so far: {}", committed.len()))?;
+                .attach_prefix(prefix)
+                .attach_read_so_far(committed.len())?;
             let key_str = k.value();
             if subtree.contains(key_str) {
                 committed.push((utils::stored_path(key_str)?, Vec::from(&v.value()[..])));
@@ -700,7 +684,6 @@ impl StoreBackend for RedbStore {
         visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
     ) -> StorageResult<()> {
         let subtree = prefix.subtree();
-        let prefix = prefix.as_str();
 
         let mut buffered: Vec<(StorePath, Option<Vec<u8>>)> = {
             let lock = self.inner.pending.lock();
@@ -711,31 +694,22 @@ impl StoreBackend for RedbStore {
         };
         buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        let read_txn = self
-            .inner
-            .db()?
-            .begin_read()
-            .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
-        let table = read_txn
-            .open_table(TABLE_DATA)
-            .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+        let (_txn, table) = self.inner.read_data(StorageError::Scan).attach_prefix(prefix)?;
         let entries = table
-            .range(prefix..)
+            .range(subtree.prefix()..)
             .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
 
         let mut pending = buffered.into_iter().peekable();
 
         for result in entries {
             let (k, v) = result
                 .doing(StorageError::Scan, &self.inner.path)
-                .attach_with(|| format!("prefix: {prefix}"))?;
+                .attach_prefix(prefix)?;
             let key = k.value();
 
             if !subtree.contains(key) {
-                if !key.starts_with(prefix) {
+                if !key.starts_with(subtree.prefix()) {
                     break;
                 }
                 continue;
@@ -773,7 +747,6 @@ impl StoreBackend for RedbStore {
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         let subtree = prefix.subtree();
-        let prefix = prefix.as_str();
         // Values carried as empty vectors so the same merge serves both scans;
         // nothing reads them.
         let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
@@ -783,26 +756,26 @@ impl StoreBackend for RedbStore {
             .db()?
             .begin_read()
             .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
 
         let table = read_txn
             .open_table(TABLE_DATA)
             .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_DATA.name()))?;
+            .attach_table(TABLE_DATA.name())?;
 
         let entries = table
-            .range(prefix..)
+            .range(subtree.prefix()..)
             .doing(StorageError::Scan, &self.inner.path)
-            .attach_with(|| format!("prefix: {prefix}"))?;
+            .attach_prefix(prefix)?;
 
         for result in entries {
             let (k, _) = result
                 .doing(StorageError::Scan, &self.inner.path)
-                .attach_with(|| format!("prefix: {prefix}"))
-                .attach_with(|| format!("keys read so far: {}", keys.len()))?;
+                .attach_prefix(prefix)
+                .attach_read_so_far(keys.len())?;
             let key = k.value();
             if !subtree.contains(key) {
-                if !key.starts_with(prefix) {
+                if !key.starts_with(subtree.prefix()) {
                     break;
                 }
                 continue;
@@ -831,7 +804,7 @@ impl StoreBackend for RedbStore {
         let old_bytes = self
             .committed_or_buffered(path)
             .change_context(StorageError::Delete)
-            .attach_with(|| format!("key: {path}"))
+            .attach_key(path)
             .attach("reading the value a subscriber should see as the old one")?;
 
         let Some(old_bytes) = old_bytes else {
@@ -846,7 +819,7 @@ impl StoreBackend for RedbStore {
         utils::emit_events(
             &self.inner.subscriptions,
             StoreEvent {
-                path: path.joined_arc(),
+                path: path.clone(),
                 op: StoreOp::Delete,
                 old: Some(old_bytes),
                 new: None,
@@ -868,9 +841,8 @@ impl StoreBackend for RedbStore {
         let keys = self
             .scan_prefix(prefix)
             .change_context(StorageError::Delete)
-            .attach_with(|| format!("prefix: {prefix}"))
+            .attach_prefix(prefix)
             .attach("listing the subtree to be removed")?;
-        let prefix = prefix.as_str();
 
         {
             let mut lock = self.inner.pending.lock();
@@ -882,7 +854,7 @@ impl StoreBackend for RedbStore {
         utils::emit_events(
             &self.inner.subscriptions,
             StoreEvent {
-                path: Arc::from(prefix),
+                path: prefix.clone(),
                 op: StoreOp::DeletePrefix,
                 old: None,
                 new: None,
@@ -936,7 +908,7 @@ impl StoreBackend for RedbStore {
         let table = read_txn
             .open_table(TABLE_META)
             .doing(StorageError::Meta, &self.inner.path)
-            .attach_with(|| format!("table: {}", TABLE_META.name()))?;
+            .attach_table(TABLE_META.name())?;
         let found = table
             .get(key.as_str())
             .doing(StorageError::Meta, &self.inner.path)

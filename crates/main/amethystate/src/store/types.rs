@@ -17,21 +17,15 @@ pub enum StoreOp {
 
 #[derive(Debug, Clone)]
 pub struct StoreEvent {
-    pub path: Arc<str>,
+    pub path: StorePath,
     pub op: StoreOp,
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
     pub source: Option<Uuid>,
 }
 
-/// What a subscriber asked to hear about.
-///
-/// `Prefix` means the path and everything under it, by level rather than by
-/// characters: a subscription to `ui` hears `ui.theme` and does not hear
-/// `uix.width`. Which is [`StorePath::subtree`]'s question, and the reason
-/// these hold paths - a subscription made from a path used to keep the string
-/// the path had already joined, and the matching then re-derived by hand what
-/// the path could have been asked.
+/// What a subscriber asked to hear about. `Prefix` matches by level, not by
+/// characters: `ui` hears `ui.theme` and not `uix.width`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscriptionKind {
     Any,
