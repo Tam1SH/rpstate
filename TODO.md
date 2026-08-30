@@ -434,10 +434,56 @@ failure no per-prefix policy lives long enough to see. A store that quarantined
 and started fresh has to say so **to the application**, not only to the log -
 someone will have to explain to a person where their settings went.
 
-**`Refuse` means `new_with` returns `Err`.** Nothing new is needed for it: the
-generated constructor is `fn new_with(store: &Store) -> StorageResult<Self>`
-already. Today an unreadable field quietly takes its default and construction
-succeeds; refusing is declining to hand back an object that looks like it worked.
+**Built, and the middle row was the loosening rather than the tightening.**
+`#[amethystate(on_unreadable = "use_default")]` is in, with `refuse` the default.
+
+The row was written believing an unreadable field quietly took its default and
+construction succeeded. It never did: `field_with_path` reads
+`store.get::<TValue>(&path)?`, so a value that will not decode has always
+propagated and `new_with` has always returned `Err`. Strict was never the thing
+to add. What was missing is the way out - a settings struct that has to open
+even though somebody hand-edited one value into nonsense, which is the support
+ticket this section opens with.
+
+`use_default` takes the field's declared default, leaves the stored value on
+disk for a person to fix, and sets the field's `unreadable` marker at
+construction, so `try_get` answers `Err` from the moment it is built until a
+change decodes. Nothing new was needed for the reporting: that channel already
+existed for the live path. `tests/struct_read_policy.rs` holds it.
+
+`on_delete` is declared the same two ways, with `Keep` the default: a removed
+key leaves the field reporting what it last held rather than snapping to a
+compile-time guess.
+
+**Both are written as variants, not strings**, and the name is taken from the
+last path segment, so `UseDefault` and `OnUnreadable::UseDefault` say the same
+thing and neither needs the type in scope. A typo is a compile error listing
+what is allowed.
+
+**A field may tighten the struct's read policy and never loosen it.** A struct
+that says `Refuse` and a field that answers `UseDefault` is a compile error
+naming the field; `UseDefault` on the struct with `Refuse` on the one path that
+must be readable is the shape that works. The comparison is against what the
+struct *wrote*: with no policy on the struct a field may say either, or the
+implicit `Refuse` would make a field-level `UseDefault` unreachable. `on_delete`
+has no such rule - neither of its answers is stricter than the other.
+
+**A `nested` struct inherits it, because it is addressable like any other
+path.** Every generated constructor has a `new_with_id_under` taking the two
+policies, and `new_with_id` is that with the defaults. A nested field is built
+through it, handed whatever the parent resolved for that field, and what the
+nested struct declared for itself wins over what arrives.
+
+**The pair is checked across that boundary too, while it compiles.** The macro
+never sees the other type's attributes, so what it emits instead is a
+`DeclaredPolicy` impl carrying what each struct wrote as associated consts, and
+a `const _: () = assert!(..)` beside every nested field whose holder promised
+`Refuse`. A nested struct that declares `UseDefault` under it fails to build,
+named, with the span on the holder's attribute. The same `const _` idiom the
+type hashes are pinned with.
+
+Still open on this row: a `ReactiveMap` is built through its own factory and
+carries neither policy.
 
 ### Substituting the default for a value that would not decode is wrong
 
@@ -458,12 +504,13 @@ that moment.
 fires, so the UI actively redraws to the wrong value. Doing nothing at all would
 be strictly better than what happens now.
 
-**It collapses a distinction the rest of the library defends.** A deleted key
-forwards `on_delete`, which is also the default. So "the key is gone" and "the
-value will not decode" become the same observable, and the only way to tell
-them apart is `try_get`, which nothing obliges a caller to reach for. Everything
-else here works hard to keep absent, null and deleted separate - the whole of
-`absent_or_null.rs` is about that - and this hands three states to one value.
+**It collapses a distinction the rest of the library defends.** The deletion
+half of this is built: `on_delete` is a policy now, `Keep` is its default, and a
+removed key leaves the field reporting what it last held. What remains is the
+undecodable *change*, which still forwards the declared default, so a value that
+will not decode is still indistinguishable from one that was never there.
+Everything else here works hard to keep absent, null and deleted separate - the
+whole of `absent_or_null.rs` is about that.
 
 **Keep the last decodable value instead.** It is what is on screen, it is the
 last thing the store actually agreed with, and `try_get` already exists to say
@@ -940,33 +987,28 @@ one-time annoyance on the author's own machine, not a problem to engineer
 around - see the entry on format versioning for what this would take, and why it
 is not being built yet.
 
-## Writing the same value costs a full write
+## Built: an identical write costs a comparison
 
-Nothing compares the incoming value to what is stored. An identical write
-serialises, takes the buffer lock, inserts, wakes every subscriber and schedules
-a flush - all to leave the data exactly as it was. A slider that rounds to the
-same step, a form firing on blur without an edit, a cache revalidated on a
-timer: each of those pays in full.
+All five engines compare the serialised bytes against what is stored - buffered
+or committed - and an identical write returns before anything else happens:
+nothing buffered, no subscriber called, no flush scheduled.
 
-The comparison is nearly free where it belongs. `committed_or_buffered` already
-fetches the old bytes to fill `old` in the `StoreEvent`, so a store-level dedupe
-adds a memcmp to a read that has already happened and cancels everything after
-it.
+It sits where the old bytes were already being read. `committed_or_buffered`
+fetches them to fill `old` in the `StoreEvent`, so the redb and sqlite dedupe is
+a memcmp on a read that had already happened; the text engines compare the
+incoming node's bytes against the stored node's before touching the document.
 
-Compare the serialised bytes, not the values:
+Bytes rather than values, for two reasons that both still hold. A `PartialEq`
+bound would break every value type and would compare what is in memory rather
+than what will be on disk. And it is correct for floats: `NaN != NaN`, so a
+`PartialEq` dedupe fails exactly where it looks like it works, while the msgpack
+encoding of `NaN` compares equal to itself.
 
-- No new bound. A `PartialEq` bound would be a breaking change for every value
-  type, and it would compare what is in memory rather than what will be on disk.
-- It is correct for floats. `NaN != NaN`, so a `PartialEq` dedupe silently fails
-  exactly where it looks like it works; the msgpack encoding of `NaN` is stable
-  and compares equal to itself.
-
-One behaviour changes and must be documented rather than discovered: an
-identical write stops producing an event. Meaning something by rewriting the
-same value - "checked again, still valid" - is a real pattern for a cache, not
-an abuse. It should get an explicit operation instead of riding on whether the
-bytes happened to differ. `ReactiveCache` already separates the two: the value
-dedupes, the stamp lives in the meta space and changes on its own.
+**Rewriting a value is no longer a way to mean anything.** "Checked again, still
+valid" is a real pattern for a cache and it wants an explicit operation rather
+than riding on whether the bytes happened to differ - `ReactiveCache` separates
+the two already, with the stamp in the meta space changing on its own. That
+operation is not built.
 
 This does not fix a GUI binding rendering twice. That is one write and one
 notification coming back to its own author, which is what `Watch::external`

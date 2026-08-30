@@ -715,6 +715,16 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .doing(StorageError::Write, &self.files.data.path)
                 .attach_key(&path_str)
                 .attach("while reading the value being replaced")?;
+
+            let incoming = D::node_to_bytes(&node)
+                .doing(StorageError::Write, &self.files.data.path)
+                .attach_key(&path_str)
+                .attach("while comparing the write against what is already stored")?;
+
+            if old.as_deref() == Some(incoming.as_slice()) {
+                return Ok(());
+            }
+
             guard
                 .set(&parts, node)
                 .doing(StorageError::Write, &self.files.data.path)

@@ -283,6 +283,10 @@ impl SqliteStoreInner {
             .attach_key(&path)
             .attach("reading the value being replaced")?;
 
+        if old_bytes.as_deref() == Some(vec.as_slice()) {
+            return Ok(());
+        }
+
         {
             let mut lock = self.pending.lock();
             lock.insert(path.clone(), utils::PendingOp::Set(vec.clone()));

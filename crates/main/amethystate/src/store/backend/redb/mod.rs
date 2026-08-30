@@ -570,6 +570,10 @@ impl StoreBackend for RedbStore {
             .attach_key(&path)
             .attach("reading the value a subscriber should see as the old one")?;
 
+        if old_bytes.as_deref() == Some(bytes.as_slice()) {
+            return Ok(());
+        }
+
         {
             let mut lock = self.inner.pending.lock();
             lock.insert(path.clone(), utils::PendingOp::Set(bytes.clone()));

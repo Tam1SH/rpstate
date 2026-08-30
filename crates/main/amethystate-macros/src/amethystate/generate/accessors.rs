@@ -153,6 +153,25 @@ pub(crate) fn constructor(
             }
 
             pub fn new_with_id(store: &#crate_name::Store, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                Self::new_with_id_under(
+                    store,
+                    instance_id,
+                    ::std::default::Default::default(),
+                    ::std::default::Default::default(),
+                )
+            }
+
+            /// The same, told what the struct holding this one decided about a
+            /// value it cannot read and a key removed under it.
+            ///
+            /// Whatever this struct declared for itself wins; these are what a
+            /// field falls back to when neither it nor this struct said.
+            pub fn new_with_id_under(
+                store: &#crate_name::Store,
+                instance_id: #crate_name::uuid::Uuid,
+                __ame_on_unreadable: #crate_name::store::OnUnreadable,
+                __ame_on_delete: #crate_name::store::OnDelete,
+            ) -> #crate_name::StorageResult<Self> {
                 use #crate_name::{StoreBackend, StoreExt};
                 let __amethystate_guard = #crate_name::observability::InstanceGuard::new(
                     instance_id,
@@ -176,6 +195,27 @@ pub(crate) fn constructor(
                 store: &#crate_name::Store,
                 namespace: impl #crate_name::store::IntoStorePath,
                 instance_id: #crate_name::uuid::Uuid,
+            ) -> #crate_name::StorageResult<Self> {
+                Self::new_with_id_under(
+                    store,
+                    namespace,
+                    instance_id,
+                    ::std::default::Default::default(),
+                    ::std::default::Default::default(),
+                )
+            }
+
+            /// The same, told what the struct holding this one decided about a
+            /// value it cannot read and a key removed under it.
+            ///
+            /// Whatever this struct declared for itself wins; these are what a
+            /// field falls back to when neither it nor this struct said.
+            pub fn new_with_id_under(
+                store: &#crate_name::Store,
+                namespace: impl #crate_name::store::IntoStorePath,
+                instance_id: #crate_name::uuid::Uuid,
+                __ame_on_unreadable: #crate_name::store::OnUnreadable,
+                __ame_on_delete: #crate_name::store::OnDelete,
             ) -> #crate_name::StorageResult<Self> {
                 use #crate_name::{StoreBackend, StoreExt};
                 let namespace = #crate_name::store::to_path(namespace)?;

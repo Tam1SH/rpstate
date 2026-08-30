@@ -38,10 +38,13 @@ can draw. `try_get` is the same read with the doubt kept.
 
 It answers `Err` when a change arrived that would not decode into this field's
 type - a file edited outside the process, a migration that left something
-behind, a codec that accepted a value it cannot read back. The field falls to
-its declared default at that point, and `get` would hand you that default with
-nothing to distinguish it from a write that worked. `try_get` is where a caller
-that cares finds out.
+behind, a codec that accepted a value it cannot read back.
+
+The field goes on reporting the last value the store agreed with, and nothing
+is delivered to subscribers. What is on screen was true a moment ago; the
+declared default is a compile-time guess and the least likely thing the person
+was looking at. So `get` keeps drawing, and `try_get` is where a caller that
+cares finds out the store has stopped agreeing.
 
 Nothing fails at the moment of asking. What failed happened earlier, and this
 reports it - and answers `Ok` again as soon as a change decodes, so it holds

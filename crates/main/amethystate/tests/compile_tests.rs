@@ -22,6 +22,8 @@ fn test_macro_expansion_compilation() {
     t.pass("tests/expand/map_syntax.rs");
 
     t.compile_fail("tests/fails/subscription_not_clone.rs");
+    t.compile_fail("tests/fails/field_loosens_the_struct_rule.rs");
+    t.compile_fail("tests/fails/nested_loosens_the_holder_rule.rs");
 
     t.compile_fail("tests/fails/prefix_empty.rs");
     t.compile_fail("tests/fails/prefix_root_dot.rs");

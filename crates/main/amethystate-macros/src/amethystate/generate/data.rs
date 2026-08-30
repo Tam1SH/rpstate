@@ -6,10 +6,7 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 pub(crate) fn persistent_fields(entries: &[StoreFieldEntry]) -> Vec<&StoreFieldEntry> {
-    entries
-        .iter()
-        .filter(|e| !e.volatile)
-        .collect()
+    entries.iter().filter(|e| !e.volatile).collect()
 }
 
 #[allow(clippy::too_many_arguments)]

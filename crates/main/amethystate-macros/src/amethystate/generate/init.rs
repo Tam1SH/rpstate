@@ -7,14 +7,45 @@ pub(crate) fn init_fields(
     crate_name: &TokenStream2,
     entries: &[StoreFieldEntry],
     is_root: bool,
+    on_unreadable: Option<&str>,
+    on_delete: Option<&str>,
 ) -> Vec<TokenStream2> {
     entries
         .iter()
-        .map(|e| init_field(crate_name, e, is_root))
+        .map(|e| {
+            let unreadable = match variant(e.on_unreadable.as_ref())
+                .as_deref()
+                .or(on_unreadable)
+            {
+                Some("UseDefault") => quote!(#crate_name::store::OnUnreadable::UseDefault),
+                Some(_) => quote!(#crate_name::store::OnUnreadable::Refuse),
+                None => quote!(__ame_on_unreadable),
+            };
+
+            let deleted = match variant(e.on_delete.as_ref()).as_deref().or(on_delete) {
+                Some("UseDefault") => quote!(#crate_name::store::OnDelete::UseDefault),
+                Some(_) => quote!(#crate_name::store::OnDelete::Keep),
+                None => quote!(__ame_on_delete),
+            };
+
+            init_field(crate_name, e, is_root, &unreadable, &deleted)
+        })
         .collect::<Vec<_>>()
 }
 
-fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> TokenStream2 {
+fn variant(written: Option<&syn::Path>) -> Option<String> {
+    written
+        .and_then(|path| path.segments.last())
+        .map(|segment| segment.ident.to_string())
+}
+
+fn init_field(
+    crate_name: &TokenStream2,
+    e: &StoreFieldEntry,
+    is_root: bool,
+    unreadable: &TokenStream2,
+    deleted: &TokenStream2,
+) -> TokenStream2 {
     let fname = e.ident.as_ref().unwrap();
     let ty = &e.ty;
     let key = e.stored_name();
@@ -23,18 +54,22 @@ fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> 
     if e.nested {
         if is_root {
             quote! {
-                #fname: ::std::sync::Arc::new(#ty::new_with_id(
+                #fname: ::std::sync::Arc::new(#ty::new_with_id_under(
                     store,
                     <Self as #crate_name::StateScope>::PATH.join(&#key_path),
-                    instance_id
+                    instance_id,
+                    #unreadable,
+                    #deleted
                 )?)
             }
         } else {
             quote! {
-                #fname: ::std::sync::Arc::new(#ty::new_with_id(
+                #fname: ::std::sync::Arc::new(#ty::new_with_id_under(
                     store,
                     namespace.join(&#key_path),
-                    instance_id
+                    instance_id,
+                    #unreadable,
+                    #deleted
                 )?)
             }
         }
@@ -75,7 +110,7 @@ fn init_field(crate_name: &TokenStream2, e: &StoreFieldEntry, is_root: bool) -> 
         if e.volatile {
             quote! { #fname: #crate_name::Field::new_volatile_with_id(#path_expr, #def, instance_id) }
         } else {
-            quote! { #fname: #crate_name::store::field_with_path(store, #path_expr, #def, instance_id)? }
+            quote! { #fname: #crate_name::store::field_with_path_where(store, #path_expr, #def, instance_id, #unreadable, #deleted)? }
         }
     }
 }

@@ -10,6 +10,7 @@ use quote::format_ident;
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{Attribute, Expr, Ident, Token, Visibility};
 
 /// A written path, as a value the compiler has already checked.
@@ -51,6 +52,54 @@ pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
 }
 
 /// Whether `ty` is written as `name`, however it is qualified.
+/// The variant an `on_unreadable = ..` names, checked here so a typo is a
+/// compile error that lists the two rather than a path that fails to resolve
+/// somewhere in generated code.
+///
+/// The name is taken from the last segment, so `UseDefault` and
+/// `OnUnreadable::UseDefault` both write the same thing and neither needs the
+/// type in scope.
+pub(crate) fn read_policy(written: Option<&syn::Path>) -> Result<Option<String>, syn::Error> {
+    named_variant(
+        written,
+        &["Refuse", "UseDefault"],
+        "`Refuse` is what happens without one: construction fails and names the path. `UseDefault` takes the declared default and carries on, leaving the stored value where it is for somebody to fix, with `try_get` saying so until they do",
+    )
+}
+
+pub(crate) fn delete_policy(written: Option<&syn::Path>) -> Result<Option<String>, syn::Error> {
+    named_variant(
+        written,
+        &["UseDefault", "Keep"],
+        "`UseDefault` is what happens without one: the field reports its declared default again. `Keep` goes on reporting the last value it held, which is what a value being drawn wants when something else removed the key",
+    )
+}
+
+fn named_variant(
+    written: Option<&syn::Path>,
+    allowed: &[&str],
+    hint: &str,
+) -> Result<Option<String>, syn::Error> {
+    let Some(path) = written else {
+        return Ok(None);
+    };
+
+    let named = path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+        .unwrap_or_default();
+
+    if allowed.contains(&named.as_str()) {
+        return Ok(Some(named));
+    }
+
+    Err(syn::Error::new(
+        path.span(),
+        format!("`{named}` is not one of these. {hint}"),
+    ))
+}
+
 pub(crate) fn names_type(ty: &syn::Type, name: &Ident) -> bool {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => path
@@ -145,7 +194,77 @@ pub fn generate_code(
     );
 
     let struct_fields = accessors::struct_fields(&crate_name, entries);
-    let init_fields = init::init_fields(&crate_name, entries, is_root);
+    let on_unreadable = read_policy(macro_args.on_unreadable.as_ref())
+        .ok()
+        .flatten();
+    let on_delete = delete_policy(macro_args.on_delete.as_ref()).ok().flatten();
+
+    let declared_unreadable = match on_unreadable.as_deref() {
+        Some("UseDefault") => {
+            quote!(::core::option::Option::Some(#crate_name::store::OnUnreadable::UseDefault))
+        }
+        Some(_) => quote!(::core::option::Option::Some(#crate_name::store::OnUnreadable::Refuse)),
+        None => quote!(::core::option::Option::None),
+    };
+    let declared_delete = match on_delete.as_deref() {
+        Some("UseDefault") => {
+            quote!(::core::option::Option::Some(#crate_name::store::OnDelete::UseDefault))
+        }
+        Some(_) => quote!(::core::option::Option::Some(#crate_name::store::OnDelete::Keep)),
+        None => quote!(::core::option::Option::None),
+    };
+
+    let nested_checks = entries
+        .iter()
+        .filter(|e| e.nested)
+        .filter(|e| {
+            read_policy(e.on_unreadable.as_ref())
+                .ok()
+                .flatten()
+                .or_else(|| on_unreadable.clone())
+                .as_deref()
+                == Some("Refuse")
+        })
+        .map(|e| {
+            let ty = &e.ty;
+            let held = e.stored_name();
+            let written = quote!(#ty).to_string();
+            let complaint = syn::LitStr::new(
+                &format!(
+                    "`{name}` declares `on_unreadable = Refuse` over `{held}`, and `{written}` declares `UseDefault` for itself. A struct may demand more than the one holding it and never less: take `UseDefault` off `{written}`, so it inherits, or stop promising `Refuse` here"
+                ),
+                proc_macro2::Span::call_site(),
+            );
+
+            quote! {
+                const _: () = assert!(
+                    !matches!(
+                        <#ty as #crate_name::store::DeclaredPolicy>::ON_UNREADABLE,
+                        ::core::option::Option::Some(#crate_name::store::OnUnreadable::UseDefault)
+                    ),
+                    #complaint
+                );
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let policy_impl = quote! {
+        impl #crate_name::store::DeclaredPolicy for #name {
+            const ON_UNREADABLE: ::core::option::Option<#crate_name::store::OnUnreadable> =
+                #declared_unreadable;
+            const ON_DELETE: ::core::option::Option<#crate_name::store::OnDelete> =
+                #declared_delete;
+        }
+
+        #(#nested_checks)*
+    };
+    let init_fields = init::init_fields(
+        &crate_name,
+        entries,
+        is_root,
+        on_unreadable.as_deref(),
+        on_delete.as_deref(),
+    );
     let node_impl = accessors::node_impl(&crate_name, name, is_root, entries);
     let methods = accessors::methods(&crate_name, entries);
     let scope = accessors::scope(&crate_name, name, prefix.clone());
@@ -376,6 +495,7 @@ pub fn generate_code(
                 #fields_impl
                 #schema_export
                 #slice_impl
+                #policy_impl
             }
         }
         RpMode::Persistent => {
@@ -384,6 +504,7 @@ pub fn generate_code(
                 #fields_impl
                 #schema_export
                 #slice_impl
+                #policy_impl
             }
         }
     }

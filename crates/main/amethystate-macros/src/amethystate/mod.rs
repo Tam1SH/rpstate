@@ -44,6 +44,15 @@ pub fn amethystate_impl(
         }
     };
 
+    let on_struct = match generate::read_policy(macro_args.on_unreadable.as_ref()) {
+        Ok(policy) => policy,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    if let Err(e) = generate::delete_policy(macro_args.on_delete.as_ref()) {
+        return e.to_compile_error().into();
+    }
+
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let struct_vis = &input.vis;
@@ -85,6 +94,30 @@ pub fn amethystate_impl(
                 entry.ty.span(),
                 format!(
                     "`{struct_name}` would build another `{struct_name}` to build itself, and never stop. A node that holds one of its own kind has to be able to stop - `Option<Box<_>>` at `None`, a collection at empty - and neither is built the way a `nested` field is"
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+
+        let on_field = match generate::read_policy(entry.on_unreadable.as_ref()) {
+            Ok(policy) => policy,
+            Err(e) => return e.to_compile_error().into(),
+        };
+
+        if let Err(e) = generate::delete_policy(entry.on_delete.as_ref()) {
+            return e.to_compile_error().into();
+        }
+
+        if on_struct.as_deref() == Some("Refuse")
+            && on_field.as_deref() == Some("UseDefault")
+            && let Some(written) = &entry.on_unreadable
+        {
+            let named = entry.stored_name();
+            return syn::Error::new(
+                written.span(),
+                format!(
+                    "`{struct_name}` declares `on_unreadable = Refuse`, so `{named}` cannot ask for `UseDefault`. A field may demand more than the struct promised and never less: drop this to inherit the struct's rule, or move `UseDefault` up to the struct and write `Refuse` on the fields that must be readable"
                 ),
             )
             .to_compile_error()

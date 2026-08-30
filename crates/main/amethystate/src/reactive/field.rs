@@ -182,9 +182,10 @@ where
     /// `Err` when a change arrived that would not decode into this field's
     /// type - from an edit to the file outside the process, a migration that
     /// left something behind, or a codec that accepted a value it cannot read
-    /// back. The field takes its declared default rather than going on
-    /// reporting the value from before, which would be indistinguishable from
-    /// a write that worked, and this says so.
+    /// back. The field goes on reporting the last value the store agreed with,
+    /// and subscribers hear nothing, because the alternative is waking a
+    /// redraw with a value nobody chose. This is the channel that says the
+    /// store no longer agrees.
     ///
     /// `Ok` again as soon as a change decodes, so it holds for exactly as long
     /// as it is true. Nothing here fails at the moment of asking: what failed

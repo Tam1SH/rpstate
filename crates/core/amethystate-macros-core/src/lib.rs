@@ -15,6 +15,10 @@ pub struct MacroArgs {
     pub target: Option<String>,
     #[darling(default)]
     pub as_root: bool,
+    #[darling(default)]
+    pub on_unreadable: Option<syn::Path>,
+    #[darling(default)]
+    pub on_delete: Option<syn::Path>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +30,8 @@ pub struct StoreFieldEntry {
     pub default: Option<TokenStream2>,
     pub nested: bool,
     pub volatile: bool,
+    pub on_unreadable: Option<syn::Path>,
+    pub on_delete: Option<syn::Path>,
 }
 
 impl StoreFieldEntry {
@@ -52,6 +58,8 @@ impl FromField for StoreFieldEntry {
         let mut default = None;
         let mut nested = false;
         let mut volatile = false;
+        let mut on_unreadable = None;
+        let mut on_delete = None;
 
         for attr in &field.attrs {
             if attr.path().is_ident("amestate") {
@@ -62,6 +70,8 @@ impl FromField for StoreFieldEntry {
                     &mut default,
                     &mut nested,
                     &mut volatile,
+                    &mut on_unreadable,
+                    &mut on_delete,
                 )?;
             }
         }
@@ -74,6 +84,8 @@ impl FromField for StoreFieldEntry {
             default,
             nested,
             volatile,
+            on_unreadable,
+            on_delete,
         })
     }
 }
@@ -101,6 +113,8 @@ fn parse_state_tokens(
     default: &mut Option<TokenStream2>,
     nested: &mut bool,
     volatile: &mut bool,
+    on_unreadable: &mut Option<syn::Path>,
+    on_delete: &mut Option<syn::Path>,
 ) -> darling::Result<()> {
     for item in split_top_level_commas(tokens) {
         let mut iter = item.into_iter().peekable();
@@ -128,10 +142,16 @@ fn parse_state_tokens(
                     let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
                     *key = Some(SpannedValue::new(lit.value(), lit.span()));
                 }
+                "on_unreadable" => {
+                    *on_unreadable = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                }
+                "on_delete" => {
+                    *on_delete = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                }
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
-                        &["default", "key"],
+                        &["default", "key", "on_unreadable", "on_delete"],
                     ));
                 }
             }

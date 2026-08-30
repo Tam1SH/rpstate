@@ -14,6 +14,73 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// What building a struct does about a declared path the store holds a value
+/// for that will not decode into the field's type.
+///
+/// The value got there somehow - a file edited by hand, a migration that left
+/// something behind, a codec that took what it cannot read back - and the two
+/// answers serve different applications rather than one being safer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnUnreadable {
+    /// Construction fails, naming the path. Nothing half-built is handed out.
+    #[default]
+    Refuse,
+
+    /// The field takes its declared default and construction carries on.
+    ///
+    /// The stored value is left where it is, so a person can still fix the file
+    /// by hand, and the field says the store does not agree with what it is
+    /// reporting: [`Field::try_get`](crate::Field::try_get) answers `Err` from
+    /// the moment it is built until a change decodes.
+    UseDefault,
+}
+
+impl OnUnreadable {
+    /// Whether this failure is the one the policy is about.
+    ///
+    /// Only a value that will not decode. A store that cannot be read at all is
+    /// nobody's policy - there is no default to stand in for a file that is not
+    /// there.
+    fn covers(&self, why: &Report<StorageError>) -> bool {
+        matches!(self, OnUnreadable::UseDefault)
+            && why
+                .frames()
+                .filter_map(|frame| frame.downcast_ref::<StorageError>())
+                .any(|context| *context == StorageError::Codec)
+    }
+}
+
+/// What a field does when its key is deleted under it.
+///
+/// A deletion is somebody else's doing - another handle, a migration, a hand
+/// edited file - and the two answers disagree about what a field is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnDelete {
+    /// The field goes on reporting the last value it held.
+    ///
+    /// A deleted key is not a value, and the declared default is a
+    /// compile-time guess - the least likely thing the person was looking at.
+    /// Keeping is also what stops a removal and an undecodable value from
+    /// being the same observable, which everything else here works to keep
+    /// apart.
+    #[default]
+    Keep,
+
+    /// The field reports its declared default again, as if it had never been
+    /// written.
+    UseDefault,
+}
+
+/// What a declared struct wrote about reading, so the struct holding it can be
+/// checked against it while it compiles.
+///
+/// `None` is a struct that said nothing and takes whatever it is built under.
+/// The macro implements this for everything it generates; nothing else should.
+pub trait DeclaredPolicy {
+    const ON_UNREADABLE: Option<OnUnreadable>;
+    const ON_DELETE: Option<OnDelete>;
+}
+
 /// A field under `TScope`'s path, at the levels `key` names.
 pub fn field<TScope, TValue>(
     store: &Store,
@@ -52,28 +119,59 @@ pub fn field_with_path<TValue>(
 where
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
 {
+    field_with_path_where(
+        store,
+        path,
+        default,
+        instance_id,
+        OnUnreadable::Refuse,
+        OnDelete::Keep,
+    )
+}
+
+/// [`field_with_path`] with a say in what a value it cannot read, and a key
+/// removed under it, each do.
+pub fn field_with_path_where<TValue>(
+    store: &Store,
+    path: impl IntoStorePath,
+    default: TValue,
+    instance_id: Uuid,
+    policy: OnUnreadable,
+    on_delete: OnDelete,
+) -> StorageResult<Field<TValue>>
+where
+    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+{
     let path = crate::store::to_path(path)?;
 
     claim(store, &path, instance_id)?;
     register_field::<TValue>(&path, instance_id);
 
-    if store.get::<TValue>(&path)?.is_none() {
-        seed(store, &path, &default)?;
-    }
+    let mut refused: Option<Arc<str>> = None;
 
-    let current = store
-        .get::<TValue>(&path)?
-        .unwrap_or_else(|| default.clone());
+    let current = match store.get::<TValue>(&path) {
+        Ok(Some(stored)) => stored,
+        Ok(None) => {
+            seed(store, &path, &default)?;
+            default.clone()
+        }
+        Err(why) if policy.covers(&why) => {
+            tracing::error!(path = %path, error = %why, "decode failed while building");
+            refused = Some(Arc::from(why.to_string().as_str()));
+            default.clone()
+        }
+        Err(why) => return Err(why),
+    };
+
     let signal = Signal::new(current);
 
     let sig_clone = signal.clone();
     let store_clone = store.clone();
     let path_log = path.clone();
-    let on_delete = default.clone();
+    let deleted = default.clone();
 
-    let unreadable = crate::reactive::field::Unreadable::default();
+    let unreadable = crate::reactive::field::Unreadable::new(std::sync::Mutex::new(refused));
     let unreadable_sub = unreadable.clone();
-    let on_unreadable = default.clone();
 
     let id = store.subscribe(
         SubscriptionKind::ExactPath(path.clone()),
@@ -90,10 +188,12 @@ where
                     if let Ok(mut held) = unreadable_sub.lock() {
                         *held = Some(Arc::from(e.to_string().as_str()));
                     }
-                    sig_clone.set_forwarded(on_unreadable.clone(), event.source)
                 }
             },
-            None => sig_clone.set_forwarded(on_delete.clone(), event.source),
+            None => match on_delete {
+                OnDelete::UseDefault => sig_clone.set_forwarded(deleted.clone(), event.source),
+                OnDelete::Keep => {}
+            },
         }),
     );
 

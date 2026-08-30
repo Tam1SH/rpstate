@@ -15,6 +15,10 @@ Everything below is the shape of that decision: what it buys, what it costs, and
 
 Writes do not reach disk when you make them. `field.set()` puts the value in an in-memory buffer, notifies subscribers, and returns. A debounce timer flushes the buffer to storage a little later, and a burst of writes to one path costs one flush rather than one each.
 
+**A write of the value already stored is not a write.** The bytes are compared against what the store holds — buffered or committed — and an identical one stops there: nothing is buffered, no subscriber is called, no flush is scheduled. A slider that rounds to the step it was already on, a form saving on blur without an edit, a cache revalidated on a timer: each costs the comparison and nothing else. Bytes are compared rather than values, so a `f64` holding `NaN` deduplicates against itself, which `==` would not do.
+
+The consequence to hold on to: **rewriting a value is not a way to signal anything.** A subscriber hears about a change, and an identical write is not one.
+
 Reads are cheap for the same reason. `get()` looks in that buffer first and answers from it, so a value you have been writing every frame is read back from memory, not from storage.
 
 ## What you get
