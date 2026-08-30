@@ -164,16 +164,17 @@ impl TextDocument for TomlDocument {
     ) -> StorageResult<()> {
         let node = Self::bytes_to_node(bytes)?;
         let rendered = match node.as_value() {
-            Some(v) => v.to_string(),
-            None => {
-                let mut doc = toml_edit::DocumentMut::new();
-                doc.as_table_mut().insert("val", node.clone());
-                let inner = doc.to_string();
-                inner
-                    .split_once('=')
-                    .map(|(_, rhs)| rhs.to_string())
-                    .unwrap_or(inner)
-            }
+            Some(value) => value.to_string(),
+            None => match node.clone().into_table() {
+                Ok(table) => toml_edit::Value::InlineTable(table.into_inline_table()).to_string(),
+                Err(other) => {
+                    return Err(Report::new(TextStoreError::Codec(CodecError::Toml(format!(
+                        "a {} is not a value and cannot be read as one",
+                        other.type_name()
+                    ))))
+                    .change_context(StorageError::Codec));
+                }
+            },
         };
         let de: toml_edit::de::ValueDeserializer = rendered
             .trim()
