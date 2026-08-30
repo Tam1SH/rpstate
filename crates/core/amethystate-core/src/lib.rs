@@ -13,6 +13,9 @@ mod state;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
+#[cfg(any(test, feature = "proptest-strategies"))]
+pub mod strategies;
+
 #[cfg(feature = "async")]
 pub use async_impl::*;
 

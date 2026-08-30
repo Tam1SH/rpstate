@@ -84,7 +84,7 @@ uuid = { workspace = true, features = [ "v4", "js", "serde"] }
 [dev-dependencies]
 insta.workspace = true
 serde_json = { workspace = true }
-amethystate-core = { workspace = true, features = ["test-utils"] }
+amethystate-core = { workspace = true, features = ["test-utils", "proptest-strategies"] }
 criterion = { workspace = true }
 futures = { workspace = true }
 proptest = { workspace = true }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// hoping nothing sorts above it.
 pub const SEPARATOR: char = '.';
 
-const ESCAPE: char = '\\';
+pub(crate) const ESCAPE: char = '\\';
 
 /// Where a value lives in the store, as the levels it is under rather than as
 /// one string.
@@ -906,49 +906,18 @@ mod tests {
         }
     }
 
-    /// Weighted towards what turns up in a segment and towards what can break
-    /// one. The letter range is deliberately tiny so that different segments
-    /// collide often; digits get their own arm because a map keyed by a number
-    /// stores exactly those, and `any::<char>()` alone would sample ten of them
-    /// out of a million code points.
+    use crate::strategies::{key as key_strategy, name_holding_the_separator, segment};
+
     fn segment_strategy() -> impl Strategy<Value = String> {
-        prop::collection::vec(
-            prop_oneof![
-                4 => Just(SEPARATOR),
-                4 => Just(ESCAPE),
-                4 => prop::char::range('a', 'c'),
-                4 => prop::char::range('0', '9'),
-                2 => prop_oneof![Just('_'), Just('-'), Just(' '), Just('/')],
-                1 => any::<char>(),
-            ],
-            1..6,
-        )
-        .prop_map(|chars| chars.into_iter().collect())
+        segment()
     }
 
     fn dotted_segment() -> impl Strategy<Value = String> {
-        (segment_strategy(), segment_strategy()).prop_map(|(a, b)| format!("{a}.{b}"))
+        name_holding_the_separator().prop_map(|(_, _, joined)| joined)
     }
 
     fn path_strategy() -> impl Strategy<Value = Vec<String>> {
         prop::collection::vec(segment_strategy(), 1..5)
-    }
-
-    /// Whole keys rather than segments: what a flat engine hands back, which
-    /// includes strings this library never wrote. Weighted the same way as a
-    /// segment and allowed to be empty, since the root's key is.
-    fn key_strategy() -> impl Strategy<Value = String> {
-        prop::collection::vec(
-            prop_oneof![
-                4 => Just(SEPARATOR),
-                4 => Just(ESCAPE),
-                4 => prop::char::range('a', 'c'),
-                4 => prop::char::range('0', '9'),
-                1 => any::<char>(),
-            ],
-            0..8,
-        )
-        .prop_map(|chars| chars.into_iter().collect())
     }
 
     fn hash_of(value: &impl Hash) -> u64 {

@@ -28,12 +28,14 @@ serde_json = { workspace = true, optional = true }
 async-trait = { version = "0.1.89", optional = true }
 uuid = { workspace = true, features = ["v4"] }
 thiserror = "2.0.18"
+proptest = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = [ "v4", "js", "serde"] }
 
 [features]
 test-utils = []
+proptest-strategies = ["dep:proptest"]
 async = ["dep:futures", "dep:serde_json", "dep:async-trait"]
 
 [dev-dependencies]

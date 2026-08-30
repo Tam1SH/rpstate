@@ -55,8 +55,6 @@ fn ns(joined: &str) -> StorePath {
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const SEPARATOR: char = '.';
-const ESCAPE: char = '\\';
 
 /// A store on `backend`, with the debouncer and the watcher pushed far enough
 /// out that nothing lands except when a property asks for it.
@@ -98,24 +96,10 @@ fn config() -> ProptestConfig {
 /// is bytes and an engine that quotes its keys has to survive whatever is in
 /// them.
 fn segment() -> impl Strategy<Value = String> {
-    prop::collection::vec(
-        prop_oneof![
-            4 => Just(SEPARATOR),
-            3 => Just(ESCAPE),
-            6 => prop::char::range('a', 'c'),
-            4 => prop::char::range('0', '9'),
-            3 => prop_oneof![
-                Just('_'), Just('-'), Just(' '), Just('['), Just(']'),
-                Just('*'), Just('%'), Just('"'), Just('\''), Just('/'),
-            ],
-            1 => any::<char>(),
-        ],
-        1..4,
+    amethystate_core::strategies::segment().prop_filter(
+        "a level named `.` has its own test",
+        |name| name != ".",
     )
-    .prop_map(|chars| chars.into_iter().collect::<String>())
-    .prop_filter("a level named `.` is pinned by its own property", |s| {
-        s != "."
-    })
 }
 
 fn path() -> impl Strategy<Value = Vec<String>> {
@@ -170,8 +154,6 @@ fn write_leaves(store: &Store, written: &[StorePath]) {
     }
 }
 
-/// 1. A value written at a path reads back at that path, whatever the names
-///    hold.
 fn a_value_reads_back_where_it_was_written(backend: Backend) {
     proptest!(config(), |(raw in path_set())| {
         let file = TempPath::new("conf_read_back");
@@ -190,9 +172,6 @@ fn a_value_reads_back_where_it_was_written(backend: Backend) {
     });
 }
 
-/// 2. A value written at one path is readable at no other: a path nobody wrote
-///    and nobody wrote under holds nothing.
-///
 /// An ancestor of a written path is excluded, and asked about separately by
 /// `an_ancestor_is_not_a_value` - a tree engine has a node there where a flat
 /// one has no key, and the two answer differently without either being wrong.
@@ -242,7 +221,6 @@ fn an_ancestor_is_not_a_value(backend: Backend) {
     });
 }
 
-/// 3. The last write at a path is the one that reads back, and no earlier one.
 fn the_last_write_is_the_one_that_reads_back(backend: Backend) {
     proptest!(config(), |(target in path(), values in prop::collection::vec(any::<u32>(), 1..8))| {
         let file = TempPath::new("conf_last_write");
@@ -261,8 +239,6 @@ fn the_last_write_is_the_one_that_reads_back(backend: Backend) {
     });
 }
 
-/// 4. Writing a path and then deleting it leaves the store exactly as it was -
-///    the same keys with the same bytes, not merely the same values.
 fn writing_then_deleting_leaves_the_store_as_it_was(backend: Backend) {
     proptest!(config(), |(raw in path_set(), extra in path())| {
         let file = TempPath::new("conf_write_delete");
@@ -291,9 +267,6 @@ fn writing_then_deleting_leaves_the_store_as_it_was(backend: Backend) {
     });
 }
 
-/// 5. Deleting a path nothing was written at is not an error and changes
-///    nothing.
-///
 /// An ancestor of a written path is deliberately not asked about here, though
 /// it is exactly where `delete` and `delete_prefix` could be confused. A
 /// document engine stores a map-valued field as the same node a level with
@@ -325,10 +298,6 @@ fn deleting_what_is_not_there_changes_nothing(backend: Backend) {
     });
 }
 
-/// 6. A scan under a prefix lists exactly the keys written under it - no more,
-///    no fewer, at whatever depth they were written, and never a sibling whose
-///    name merely starts with the same characters.
-///
 /// The sibling is built rather than generated: `uix` is a string away from `ui`
 /// and a whole level away from it, and a generator that had to stumble on that
 /// pair would not.
@@ -376,7 +345,6 @@ fn a_scan_lists_exactly_what_is_under_the_prefix(backend: Backend) {
     });
 }
 
-/// 7. `scan_keys` and `scan_prefix` agree on which keys exist, at every prefix.
 fn scan_keys_and_scan_prefix_agree(backend: Backend) {
     proptest!(config(), |(raw in path_set(), elsewhere in path())| {
         let file = TempPath::new("conf_scan_agree");
@@ -400,7 +368,6 @@ fn scan_keys_and_scan_prefix_agree(backend: Backend) {
     });
 }
 
-/// 8. A scan comes back sorted by key and without repeats.
 fn a_scan_comes_back_sorted(backend: Backend) {
     proptest!(config(), |(raw in path_set(), elsewhere in path())| {
         let file = TempPath::new("conf_scan_sorted");
@@ -422,8 +389,6 @@ fn a_scan_comes_back_sorted(backend: Backend) {
     });
 }
 
-/// 9. Every key a scan hands back is a path this library could have written,
-///    and it is under the prefix that was scanned.
 fn every_key_a_scan_returns_is_a_path_under_the_prefix(backend: Backend) {
     proptest!(config(), |(raw in path_set(), elsewhere in path())| {
         let file = TempPath::new("conf_scan_shape");
@@ -444,8 +409,6 @@ fn every_key_a_scan_returns_is_a_path_under_the_prefix(backend: Backend) {
     });
 }
 
-/// 10. `delete_prefix` removes exactly the subtree and nothing beside it,
-///     including a sibling whose name merely starts with the prefix.
 fn delete_prefix_takes_the_subtree_and_nothing_beside_it(backend: Backend) {
     proptest!(config(), |(
         head in path(),
@@ -508,13 +471,11 @@ fn delete_prefix_takes_the_subtree_and_nothing_beside_it(backend: Backend) {
     });
 }
 
-/// 11. A name holding the separator stays one level through a write, a scan and
-///     a reopen, and never becomes the two levels it looks like.
 fn a_name_holding_the_separator_stays_one_level(backend: Backend) {
-    proptest!(config(), |(outer in segment(), left in segment(), right in segment())| {
+    proptest!(config(), |(outer in segment(), parts in amethystate_core::strategies::name_holding_the_separator())| {
         let file = TempPath::new("conf_dotted_name");
 
-        let dotted = format!("{left}{SEPARATOR}{right}");
+        let (left, right, dotted) = parts;
         let one_level = StorePath::from_segments([&outer, &dotted]);
         let taken_apart = StorePath::from_segments([&outer, &left, &right]);
         let parent = StorePath::segment(&outer);

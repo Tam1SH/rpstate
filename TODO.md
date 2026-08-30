@@ -41,6 +41,46 @@ context rather than reaching for `matches!` on one of them.
 `amethystate::errors`, so reading an attachment costs no dependency of the
 caller's own.
 
+## Reading a node with only children hands back a child's value, on toml
+
+Write `cfg.panels.left = 7` and read `cfg.panels` as a `u32`. Four engines say
+there is nothing there; toml says `7`.
+
+| engine | reading a node that holds only children |
+| --- | --- |
+| redb | `Ok(None)` |
+| sqlite | `Ok(None)` |
+| json | `Err` |
+| ron | `Err` |
+| **toml** | **`Ok(Some(7))`** |
+
+The file is right - `[cfg.panels]` holding `left = 7` is what was asked for - so
+this is the read path, not the write. Reproduced at depths one, two and three,
+with plain names, with generated names, and with digits; nothing narrowed it.
+
+It is the shape that costs most: not an absence a caller notices and not an
+error it can match on, but a plausible number from somewhere else. A field
+declared at a path that has other fields under it reads a sibling's value and
+seeds nothing of its own.
+
+`an_ancestor_is_not_a_value` in `backend_conformance.rs` already asserts exactly
+this and would fail on toml. It has never been run there - see below.
+
+## The conformance suite asks one engine unless told otherwise
+
+`cargo test --test backend_conformance` runs the twenty-nine properties against
+redb and nothing else: the other four engines sit behind their own features, so
+each needs its own invocation. A file whose stated purpose is that "a statement
+that fails on one engine and passes on another is the finding" is, by default,
+asking one engine.
+
+The toml bug above is what that costs. The property was written, the assertion
+was right, and it was never put the question.
+
+Whatever fixes this has to survive being forgotten - a single command that runs
+all five, and something that fails when a new engine is added without joining
+it.
+
 ## `durable()` on one field commits everyone else's unfinished writes
 
 `durable()` on one field also lands every buffered write under the same prefix.
