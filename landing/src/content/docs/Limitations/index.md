@@ -35,11 +35,9 @@ other test does.
 
 ## What earns a page
 
-Something has to be genuinely lost or refused. A difference in how a value is
-spelled in the file is not a limitation if it survives the round trip - a
-question worth answering, but not one for this section, and a page that says
-*all three engines handle this fine* is a page that will be read as a warning
-it is not.
+Something has to be genuinely lost or refused. A value spelled differently in
+one engine's file and read back as the type that went in belongs somewhere else:
+a page here is read as a warning, and every page here should be one.
 
 Each page carries `Tags:` at the top - `toml`, `keys`, `codec`, `choosing an
 engine` - and the search matches on those words, so a question shaped like

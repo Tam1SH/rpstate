@@ -15,9 +15,9 @@ Everything below is the shape of that decision: what it buys, what it costs, and
 
 Writes do not reach disk when you make them. `field.set()` puts the value in an in-memory buffer, notifies subscribers, and returns. A debounce timer flushes the buffer to storage a little later, and a burst of writes to one path costs one flush rather than one each.
 
-**A write of the value already stored is not a write.** The bytes are compared against what the store holds — buffered or committed — and an identical one stops there: nothing is buffered, no subscriber is called, no flush is scheduled. A slider that rounds to the step it was already on, a form saving on blur without an edit, a cache revalidated on a timer: each costs the comparison and nothing else. Bytes are compared rather than values, so a `f64` holding `NaN` deduplicates against itself, which `==` would not do.
+**An identical write stops at the comparison.** The bytes go against what the store holds, buffered or committed, and a match ends it there: nothing buffered, no subscriber called, no flush scheduled. A slider that rounds to the step it was already on, a form saving on blur without an edit, a cache revalidated on a timer — each costs one memcmp. The comparison is on bytes, so a `f64` holding `NaN` deduplicates against itself.
 
-The consequence to hold on to: **rewriting a value is not a way to signal anything.** A subscriber hears about a change, and an identical write is not one.
+**Subscribers hear about changes.** Writing the same value again is silent, so anything that needs to say *checked, still valid* needs its own place to say it.
 
 Reads are cheap for the same reason. `get()` looks in that buffer first and answers from it, so a value you have been writing every frame is read back from memory, not from storage.
 
@@ -84,9 +84,9 @@ state.port().durable().set_async(9090).await?;
 
 Reach for these at points where losing the last few hundred milliseconds actually matters — before launching an external process, after a step the user cannot repeat. Calling them on every write gives back the cheap writes you came for.
 
-### A durable write is not a narrow one
+### A durable write commits its neighbours
 
-It commits its neighbours too. `port` below is written durably, and `host` — buffered a moment earlier and never asked to be durable — is on disk when the call returns:
+`port` below is written durably, and `host` — buffered a moment earlier and never asked to be durable — is on disk when the call returns:
 
 <!-- shown: what else a durable write commits -->
 ```rust

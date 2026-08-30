@@ -58,14 +58,13 @@ Those six are the whole set; anything else is a compile error naming the six.
 
 ### What a value going wrong does
 
-A stored value can go wrong in three moments, and they are not one question.
+Three moments, each with its own answer.
 
 **Opening.** A declared path holding something that will not decode into the
-field's type refuses construction and names the path. That is `Refuse`, and it
-is what happens when nothing is written down. `UseDefault` is for the
-application that has to start anyway: the field takes its declared default, the
-stored value is left on disk for somebody to fix, and
-[`try_get`](/amethystate/primitives/field/) answers `Err` from construction
+field's type refuses construction and names the path. That is `Refuse`, the
+default. `UseDefault` is for the application that has to start anyway: the field
+takes its declared default, the stored value stays on disk for somebody to fix,
+and [`try_get`](/amethystate/primitives/field/) answers `Err` from construction
 until a change decodes.
 
 <!-- shown: a struct that opens over a value it cannot read -->
@@ -81,17 +80,15 @@ pub struct Mixed {
 ```
 <!-- /shown -->
 
-**A field may demand more than the struct promised, and never less.** Above, the
-settings open even with a broken `port`, and a `licence` that will not read
-stops the whole thing. The reverse - `Refuse` on the struct and `UseDefault` on
-a field - does not compile, and says so naming the field. A `nested` struct
-inherits its holder's answer, may tighten it the same way, and is checked
-against the holder while it compiles.
+**A field may tighten what its struct wrote.** Above, the settings open with a
+broken `port`, and a `licence` that will not read stops the whole thing.
+`Refuse` on the struct with `UseDefault` on a field is a compile error naming
+the field. A `nested` struct inherits its holder's answer, tightens it the same
+way, and is checked against the holder while it compiles.
 
 **A key deleted under a live field.** The field goes on reporting what it last
-held. A deleted key is not a value, and the declared default is a compile-time
-guess - the least likely thing the person was looking at. `UseDefault` asks for
-that guess anyway:
+held: that is what was on screen a moment ago, and the declared default is a
+compile-time guess. `UseDefault` asks for the guess:
 
 <!-- shown: a field that wants the default back when its key goes -->
 ```rust
@@ -106,10 +103,9 @@ pub struct MixedDelete {
 ```
 <!-- /shown -->
 
-**A live change that will not decode** is not a policy. The field keeps the last
-value the store agreed with and no subscriber is called, because the alternative
-is waking a redraw with a value nobody chose. `try_get` is where that is
-reported, and it clears itself as soon as a change decodes.
+**A live change that will not decode.** The field keeps the last value the store
+agreed with and no subscriber is called. `try_get` reports it, and clears itself
+as soon as a change decodes. There is nothing to declare here.
 
 ## #[derive(AmeType)]
 

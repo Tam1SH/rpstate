@@ -72,8 +72,7 @@ let prefixes: Vec<&Prefix> = facts::all::<Prefix, _>(&refused).collect();
 that will not open over one bad entry says which entry, and that is the part a
 `{}` print discards.
 
-Asking for a fact the report does not carry is not an error - there is simply
-nothing of that type in it:
+Asking for a fact the report does not carry hands back nothing:
 
 <!-- shown: asking for a fact the report does not carry -->
 ```rust
