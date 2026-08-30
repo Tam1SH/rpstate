@@ -27,8 +27,6 @@ fn ratio_path() -> StorePath {
     StorePath::from_segments(["nonfinite", "ratio"])
 }
 
-/// Every format that can spell it, spells it: the handle keeps the value and a
-/// typed read of the same path agrees.
 #[cfg(any(feature = "redb", feature = "toml", feature = "ron"))]
 #[test]
 fn a_format_that_can_hold_it_keeps_it() {
@@ -64,26 +62,6 @@ fn a_format_that_can_hold_it_keeps_it() {
     );
 }
 
-/// JSON takes a write it cannot store, and the write is lost between the store
-/// and the handle.
-///
-/// `serde_json` maps a non-finite float to `null` rather than refusing it, so
-/// the write returns `Ok` and the document holds `null`. The field's own
-/// subscription then cannot decode what it is handed, logs it, and leaves the
-/// signal alone - so the handle goes on reporting **the value it held before**,
-/// which is an ordinary number indistinguishable from one that was written.
-/// Only a typed read of the same path fails. The same bytes mean two things
-/// depending on which read reaches them.
-///
-/// The handle no longer reports the value from before, which was the worst of
-/// it: a field last set to `5.0` went on saying `5.0` about a store holding
-/// `null`, and that is indistinguishable from a write that worked. It takes
-/// its declared default instead - what the next startup would read - and
-/// `Field::unreadable` says why.
-///
-/// What is still not right is the write: `set` returns `Ok` for a value the
-/// format cannot hold. A read tolerates and a write complains, so the repair
-/// belongs in the codec, where the caller still has the value.
 #[cfg(all(feature = "json", not(feature = "redb")))]
 #[test]
 fn json_takes_a_write_it_cannot_store() {
@@ -106,13 +84,13 @@ fn json_takes_a_write_it_cannot_store() {
     );
     assert_eq!(
         state.ratio().get(),
-        0.0,
-        "the handle takes its default rather than going on reporting 5.0"
+        5.0,
+        "the handle keeps the last value the store agreed with"
     );
     assert!(
         state.ratio().try_get().is_err(),
-        "and says so, where `get` tolerates, so the default is not mistaken \
-         for a written value"
+        "and says the store no longer agrees, which is what separates it \
+         from a write that worked"
     );
     assert!(
         StoreExt::get::<f64>(&store, ratio_path()).is_err(),
@@ -136,12 +114,6 @@ fn json_takes_a_write_it_cannot_store() {
     );
 }
 
-/// sqlite loses it too, and nothing about the engine says why.
-///
-/// It encodes values as JSON - `sonic_rs` rather than `serde_json`, with the
-/// same answer for a float JSON cannot spell. So this is a property of the
-/// format and not of the file it ends up in: two of the five engines carry
-/// JSON, and one of them is not named for it.
 #[cfg(all(feature = "sqlite", not(feature = "redb")))]
 #[test]
 fn sqlite_loses_it_too_because_it_stores_json() {
@@ -160,8 +132,8 @@ fn sqlite_loses_it_too_because_it_stores_json() {
     assert!(state.ratio().set(f64::NAN).is_ok(), "the write is accepted");
     assert_eq!(
         state.ratio().get(),
-        0.0,
-        "the handle takes its default rather than going on reporting 5.0"
+        5.0,
+        "the handle keeps the last value the store agreed with"
     );
     assert!(
         state.ratio().try_get().is_err(),
