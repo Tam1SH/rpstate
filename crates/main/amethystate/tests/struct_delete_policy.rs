@@ -17,6 +17,7 @@ pub struct Holds {
     pub width: u32,
 }
 
+//@show a field that wants the default back when its key goes
 #[amethystate(prefix = "mixed_delete")]
 pub struct MixedDelete {
     #[amestate(default = 800u32)]
@@ -25,6 +26,7 @@ pub struct MixedDelete {
     #[amestate(default = 600u32, on_delete = UseDefault)]
     pub height: u32,
 }
+//@show-end
 
 #[test]
 fn use_default_reports_the_declared_default_again() -> Result<(), Box<dyn Error + Send + Sync>> {

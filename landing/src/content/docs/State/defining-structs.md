@@ -21,6 +21,8 @@ pub struct NetworkState { ... }
 | `version` | `u32` | Schema version for migrations. Defaults to `0`. |
 | `mode` | `String` | Code generation mode: `"reactive"` (default), `"persistent"`, or `"both"`. |
 |`as_root`| `flag` | If specified, fields are written directly to the store root without a namespace. |
+| `on_unreadable` | variant | What opening does about a stored value that will not decode. `Refuse` (the default) or `UseDefault`. |
+| `on_delete` | variant | What a field does when its key is deleted under it. `Keep` (the default) or `UseDefault`. |
 
 Structs without `prefix` are nested components, intended to be embedded in other structs via `nested`.
 
@@ -49,8 +51,65 @@ pub struct AppState {
 | `key` | `String` | Overrides the storage key. Defaults to the field name. |
 | `nested` | flag | Marks field as an embedded `#[amethystate]` struct. |
 | `volatile` | flag | In-memory only. Never read from or written to the store. Resets to default on every restart. |
+| `on_unreadable` | variant | This field's answer, overriding the struct's. |
+| `on_delete` | variant | The same for a deleted key. |
 
-Those four are the whole set; anything else is a compile error naming the four.
+Those six are the whole set; anything else is a compile error naming the six.
+
+### What a value going wrong does
+
+A stored value can go wrong in three moments, and they are not one question.
+
+**Opening.** A declared path holding something that will not decode into the
+field's type refuses construction and names the path. That is `Refuse`, and it
+is what happens when nothing is written down. `UseDefault` is for the
+application that has to start anyway: the field takes its declared default, the
+stored value is left on disk for somebody to fix, and
+[`try_get`](/amethystate/primitives/field/) answers `Err` from construction
+until a change decodes.
+
+<!-- shown: a struct that opens over a value it cannot read -->
+```rust
+#[amethystate(prefix = "mixed", on_unreadable = UseDefault)]
+pub struct Mixed {
+    #[amestate(default = 8080u16)]
+    pub port: u16,
+
+    #[amestate(default = "".to_string(), on_unreadable = Refuse)]
+    pub licence: String,
+}
+```
+<!-- /shown -->
+
+**A field may demand more than the struct promised, and never less.** Above, the
+settings open even with a broken `port`, and a `licence` that will not read
+stops the whole thing. The reverse - `Refuse` on the struct and `UseDefault` on
+a field - does not compile, and says so naming the field. A `nested` struct
+inherits its holder's answer, may tighten it the same way, and is checked
+against the holder while it compiles.
+
+**A key deleted under a live field.** The field goes on reporting what it last
+held. A deleted key is not a value, and the declared default is a compile-time
+guess - the least likely thing the person was looking at. `UseDefault` asks for
+that guess anyway:
+
+<!-- shown: a field that wants the default back when its key goes -->
+```rust
+#[amethystate(prefix = "mixed_delete")]
+pub struct MixedDelete {
+    #[amestate(default = 800u32)]
+    pub width: u32,
+
+    #[amestate(default = 600u32, on_delete = UseDefault)]
+    pub height: u32,
+}
+```
+<!-- /shown -->
+
+**A live change that will not decode** is not a policy. The field keeps the last
+value the store agreed with and no subscriber is called, because the alternative
+is waking a redraw with a value nobody chose. `try_get` is where that is
+reported, and it clears itself as soon as a change decodes.
 
 ## #[derive(AmeType)]
 

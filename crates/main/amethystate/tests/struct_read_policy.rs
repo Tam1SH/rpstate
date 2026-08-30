@@ -24,6 +24,7 @@ pub struct Lenient {
     pub host: String,
 }
 
+//@show a struct that opens over a value it cannot read
 #[amethystate(prefix = "mixed", on_unreadable = UseDefault)]
 pub struct Mixed {
     #[amestate(default = 8080u16)]
@@ -32,6 +33,7 @@ pub struct Mixed {
     #[amestate(default = "".to_string(), on_unreadable = Refuse)]
     pub licence: String,
 }
+//@show-end
 
 #[test]
 fn an_undecodable_change_leaves_the_last_value_alone() -> Result<(), Box<dyn Error + Send + Sync>> {

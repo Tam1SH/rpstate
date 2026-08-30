@@ -50,6 +50,10 @@ Nothing fails at the moment of asking. What failed happened earlier, and this
 reports it - and answers `Ok` again as soon as a change decodes, so it holds
 for exactly as long as it is true.
 
+A value that was already unreadable when the struct opened is a different
+moment, and one the declaration decides:
+[what a value going wrong does](/amethystate/state/defining-structs/#what-a-value-going-wrong-does).
+
 ## Writing
 
 `update` and `modify` are read-modify-write and are **not atomic**. Two of them
