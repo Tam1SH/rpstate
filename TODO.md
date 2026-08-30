@@ -9,11 +9,14 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
-## The book never says what an error is
+## Done: the book says what an error is
 
-There is no page on errors, and the book leaves the reader to assume an enum.
-It is a `Report`: a chain of contexts, each carrying attachments that name the
-thing that failed. A map refusing to open over one bad entry reports
+`landing/src/content/docs/Concepts/errors.md`, out of `tests/book_errors.rs`,
+including three real refusals printed by the run that fills the page. What it
+had to say, and why the page was worth the space:
+
+An error here is a `Report`: a chain of contexts, each carrying attachments that
+name the thing that failed. A map refusing to open over one bad entry reports
 
 ```
 the store could not carry out the write
@@ -26,13 +29,17 @@ the store could not carry out the write
 
 so the `Display` alone - "the store could not carry out the write" - is the
 least of what is there, and a caller that prints it throws away the part that
-says which entry. That is the page: what a report carries, how to read one, and
-how to reach an attachment rather than formatting the whole thing. It belongs in
-Concepts.
+says which entry.
 
-`RFC-limits.md` and `landing/src/content/docs/Store/limits.md` already lean on
-attachments - the refusal that says where the depth budget went - so the page
-has a second caller before it is written.
+Two things the writing turned up, both fixed with it. `StorageError::Depth`,
+because a path past the cap announced itself as `a name that cannot be a level`
+while the facts under it said the names were fine. And `WriteError` now derives
+`PartialEq`, which `StorageError` always had, so a caller can compare either
+context rather than reaching for `matches!` on one of them.
+
+`error_stack` is re-exported, with `Report` and `facts` under
+`amethystate::errors`, so reading an attachment costs no dependency of the
+caller's own.
 
 ## `durable()` on one field commits everyone else's unfinished writes
 
