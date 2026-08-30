@@ -3494,7 +3494,12 @@ are things a reader following the book cannot make work:
   since the rename. One section is built entirely on it.
 - `StoreBuilder::collect_migrations` and `amethystate::Result` do not exist.
 - The migration pages destructure a report out of `build()`, which returns a
-  store.
+  store. `Migrations/overview.md` also documents a `~` row - `field 'port':
+  u16 -> u32` - in the drift output, which `log_to_tracing` cannot print: the
+  diff is `added` and `removed` only, and a type change under one name nags with
+  no field named at all. That is deliberate and pinned by
+  `a_type_that_changed_under_one_name_nags_without_a_diff`; only the page
+  disagrees.
 - `Concepts/reactive-cell.md` documents the owning cell throughout: it teaches
   building cells and dropping the struct they came from, which now yields a map
   of dead cells, and never mentions `into_cell`, `into_entry_cell` or
