@@ -41,30 +41,67 @@ context rather than reaching for `matches!` on one of them.
 `amethystate::errors`, so reading an attachment costs no dependency of the
 caller's own.
 
-## Reading a node with only children hands back a child's value, on toml
+## toml reads a table by splitting its rendering on the first `=`
 
-Write `cfg.panels.left = 7` and read `cfg.panels` as a `u32`. Four engines say
-there is nothing there; toml says `7`.
+`TomlDoc::with_bytes_de` renders a node it cannot treat as a value and takes the
+right-hand side of the first `=` in the result:
+
+```rust
+None => {
+    let mut doc = toml_edit::DocumentMut::new();
+    doc.as_table_mut().insert("val", node.clone());
+    let inner = doc.to_string();          // "[val]\nleft = 7\n"
+    inner.split_once('=')
+        .map(|(_, rhs)| rhs.to_string()) // " 7\n"
+        .unwrap_or(inner)
+}
+```
+
+A table renders as several lines, so what comes back is the first child's value
+wearing the parent's name.
+
+**Two symptoms, one cause, depending on what is asked for.**
+
+Ask for a scalar and the answer is a plausible number from somewhere else. Write
+`cfg.panels.left = 7`, read `cfg.panels` as a `u32`:
 
 | engine | reading a node that holds only children |
 | --- | --- |
-| redb | `Ok(None)` |
-| sqlite | `Ok(None)` |
-| json | `Err` |
-| ron | `Err` |
+| redb, sqlite | `Ok(None)` |
+| json, ron | `Err` |
 | **toml** | **`Ok(Some(7))`** |
 
-The file is right - `[cfg.panels]` holding `left = 7` is what was asked for - so
-this is the read path, not the write. Reproduced at depths one, two and three,
-with plain names, with generated names, and with digits; nothing narrowed it.
+Ask for a struct and the mangled fragment will not parse. Reading the document
+root, which is a table like any other:
 
-It is the shape that costs most: not an absence a caller notices and not an
-error it can match on, but a plausible number from somewhere else. A field
-declared at a path that has other fields under it reads a sibling's value and
-seeds nothing of its own.
+| engine | the root as a struct |
+| --- | --- |
+| json, ron | `Ok(Cfg { .. })` |
+| **toml** | **`Err`** |
 
-`an_ancestor_is_not_a_value` in `backend_conformance.rs` already asserts exactly
-this and would fail on toml. It has never been run there - see below.
+**Only `Item::Table` reaches that branch, so no written value passes through
+it.** A struct is stored as an inline table - `panel = { width = 800 }` - which
+is a `Value`, takes the good branch, reads back as itself, and refuses a `u32`
+with "invalid type: map, expected u32". The broken branch is reached only by a
+node that exists because something was nested under it.
+
+**The fix is to stop manufacturing a value**, and specifically not to refuse
+instead: json does not refuse a branch, it hands the node to serde and lets the
+type decide, so reading `{"left": 7}` as a struct with a `left` field succeeds
+there. Rendering the table as an inline table and passing that on gives toml the
+same behaviour - `Err` for the `u32`, `Ok` for a struct that matches - rather
+than a third answer of its own.
+
+**It unblocks six ignored tests.** Both in `confy_compat.rs` and four in
+`confy_migration.rs` name this: "a stored config cannot be read back", "toml
+decodes the document root wrongly", "same root decode failure as the flat case",
+"the document root does not survive a round trip". Reading a whole document as
+one struct is what `confy` compatibility *is*, and it is the root case of this
+bug. The remaining two ignores are other causes - the extension following the
+backend, and an empty file becoming defaults.
+
+`an_ancestor_is_not_a_value` in `backend_conformance.rs` already asserts the
+scalar half and would fail on toml. It has never been run there - see below.
 
 ## The conformance suite asks one engine unless told otherwise
 
