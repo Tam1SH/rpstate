@@ -2138,47 +2138,12 @@ having again the moment something downstream can accept ownership - which is
 exactly what `Pending` keyed by `StorePath` would be, in the entry above on the
 write buffer. Reintroduce it then, with a consumer.
 
-## `.pipe()` keeps its sources alive with two of them and drops them with one
+## A bare `SignalSubscription` does not keep its source alive
 
-`IntoPipeline for R: Reactive<T>` (`core/primitives/pipeline.rs:250`) subscribes
-to the source and drops it, keeping only `keepalive()` - which is `None` for
-`Field` and `ReactiveMap`. The tuple impl (`:290`) captures a clone of every
-source, so those live. One method name, opposite ownership. Confirmed by
-running it:
-
-| built as | after the source is dropped |
-| --- | --- |
-| `port.pipe().map(..)` | frozen at the old value |
-| `(host, port).pipe().map(..)` | still live |
-| `port.into_cell().pipe().map(..)` | frozen |
-| `port.subscribe(cb)`, handle held | dead, no callback |
-
-The third row is the worst: `into_cell` and `Kv::cell` exist precisely to be the
-handle that owns, and `.pipe()` throws that away - `ReactiveCell::keepalive`
-does not include `_owner`. The README's own pattern is affected: a component
-that pipes one field and lets go of the state struct shows the right first value
-and never updates again, with nothing to warn it.
-
-**Done with the first half, which made the second unnecessary.** `pipe` pushes
-`Arc::new(self)` into `keepalive`, so a pipeline holds the source and not only
-whatever the source was holding. The prescription here also called for
-`ReactiveCell::keepalive` to carry `_owner` - it does not need to. Once the
-pipeline keeps the cell itself, the cell's own `_owner` lives with it, and the
-test written for that case passes with the cell untouched. Written down because
-the second change looked necessary until the first one landed.
-
-The tuple form never had the bug, and now the two agree for the same reason
-rather than by accident: it kept its sources through the closure that re-reads
-them all.
-
-`tests/pipe_keeps_its_source.rs` writes through the store rather than through a
-field handle, because a `Field` clone shares one inner - holding one to write
-with would keep the subscription alive by itself and the test would pass either
-way. Checked by reverting the fix: the one-source case goes back to reporting
-the value it started with.
-
-That a bare `SignalSubscription` does not keep its source alive is still a real
-choice and still undocumented.
+Holding the handle is not holding the value: drop the `Field` and the callback
+stops, with the handle still in hand and nothing to say so. That is a real
+choice - a subscription is a listener, not an owner - and it is written down
+nowhere a caller would look.
 
 ## `fork` is documented as a moment, and it is not one
 
@@ -3520,19 +3485,6 @@ load-bearing - during an open - and is overwritten by the broken file it exists
 to replace. That one is a defect in the scope described here, not an argument
 for widening it.
 
-## `LocalScope::clear` does the opposite of what it says
-
-The doc reads "drops the queued values without delivering them, leaving the
-subscriptions in place". The body clears `subs` and `pumps` - the subscriptions
-unsubscribe on drop, and the queued values live in the pumps' captured buffers,
-so it drops exactly what it promises to keep and keeps nothing it promises to
-drop.
-
-Which side is the bug is a decision: there is currently no way to discard a
-backlog without unsubscribing, and the name suggests there should be.
-`LocalScope::len` and `is_empty` document a queue length too and return the
-subscription count.
-
 ## The book documents a library that is no longer there
 
 Found by reading it end to end against the sources. Not a list of typos - these
@@ -4435,8 +4387,8 @@ watcher, so what they measure is the machine as much as the store.
 ## Documentation
 
 The public API is documented with runnable, asserted examples: `Field`,
-`ReactiveMap`, `ReactiveCell`, `Kv`, `Store`, `StoreBuilder`, `Watch`,
-`LocalScope`, and the migration builder and context. The macros keep `ignore`
+`ReactiveMap`, `ReactiveCell`, `Kv`, `Store`, `StoreBuilder`, `Watch`, and the
+migration builder and context. The macros keep `ignore`
 examples - `#[amethystate]` cannot expand inside this crate's own doctests,
 because the macro resolves the crate to `crate` and a doctest compiles as a
 separate crate where that means something else. Examples reach the same types
