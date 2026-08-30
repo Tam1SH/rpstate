@@ -42,6 +42,13 @@ pub enum StorageError {
     /// A name that cannot be a level, so nothing can be stored under it.
     Path,
 
+    /// A path or a value that nests deeper than this store reads back.
+    ///
+    /// Told apart from [`StorageError::Path`] because the names are all fine:
+    /// what is wrong is how many of them there are, and the facts say which
+    /// budget ran out and by how much.
+    Depth,
+
     /// The flush this commit was waiting on did not complete.
     CommitFailed,
 
@@ -62,6 +69,7 @@ impl fmt::Display for StorageError {
             StorageError::Meta => "the schema bookkeeping could not be read or written",
             StorageError::Migrate => "the data could not be brought up to the declared schema",
             StorageError::Path => "a name that cannot be a level",
+            StorageError::Depth => "deeper than this store reads back",
             StorageError::CommitFailed => "the flush this commit was waiting on did not complete",
             StorageError::Claimed => "two schemas claim the same stored path",
         })

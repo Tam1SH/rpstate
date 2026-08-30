@@ -16,10 +16,10 @@
 
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::field_with_path;
+#[cfg(feature = "json")]
+use amethystate::store::{StoreBackend, StoreLayout};
 use amethystate::uuid::Uuid;
 use amethystate_core::test_utils::TempPath;
-#[cfg(feature = "json")]
-use std::path::Path;
 #[cfg(feature = "json")]
 use std::sync::Arc;
 #[cfg(feature = "json")]
@@ -81,13 +81,6 @@ fn assert_saw_enough(observed: usize, floor: usize, what: &str, seed: u64) {
          anything - the test would pass whether the write path were atomic or not \
          (seed {seed:#x})"
     );
-}
-
-/// The file the store actually writes, and the one beside it holding what the
-/// schema says. A copy of the pair is a store; a copy of one of them is not.
-#[cfg(feature = "json")]
-fn meta_of(path: &Path) -> std::path::PathBuf {
-    path.with_extension("meta")
 }
 
 /// A reader that is not the store, looking at the store's file at moments the
@@ -384,13 +377,16 @@ fn a_holder_coming_and_going_never_leaves_a_broken_file() {
 fn the_metadata_file_is_never_half_written_either() {
     let seed = seed();
     let path = TempPath::new("stress_meta");
-    let meta = meta_of(path.path());
 
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
         .debounce(Duration::from_millis(1))
         .build()
         .unwrap();
+
+    let Some(StoreLayout::Sidecars { meta, .. }) = StoreBackend::files(&store) else {
+        panic!("a text store keeps its bookkeeping in a file of its own");
+    };
 
     let running = Arc::new(AtomicBool::new(true));
     let reader = {

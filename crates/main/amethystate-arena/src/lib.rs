@@ -4,10 +4,8 @@ mod primitives;
 mod native;
 
 mod framework;
-mod pipeline;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
-pub use pipeline::*;
 
 pub use framework::*;
 

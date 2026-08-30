@@ -77,7 +77,7 @@ fn test_embedded_map_migration() {
         store.save_now().unwrap();
     }
 
-    let (store, _) = StoreBuilder::new(&path).build_with_report().unwrap();
+    let (store, _) = StoreBuilder::new(&path).build_with_migration().unwrap();
 
     let config = ProxyConfig::new_with(&store).unwrap();
 

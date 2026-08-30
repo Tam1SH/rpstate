@@ -1,7 +1,7 @@
 ---
 title: Migrating from confy
 sidebar:
-  order: 8
+  order: 23
 ---
 
 `amethystate` includes a compatibility adapter that reimplements the `confy` API on top of its own storage backend. You can switch to it by replacing the `confy` import — existing call sites stay unchanged.
@@ -11,13 +11,13 @@ sidebar:
 Add the feature flag to your `Cargo.toml`:
 
 ```toml
-amethystate = { version = "*", default-features = false, features = ["toml", "confy-compat"] }
+amethystate = { version = "0.20", default-features = false, features = ["toml", "confy-compat-2"] }
 ```
 
 For projects using confy 0.6:
 
 ```toml
-amethystate = { version = "*", default-features = false, features = ["toml", "confy-compat-0-6"] }
+amethystate = { version = "0.20", default-features = false, features = ["toml", "confy-compat-0-6"] }
 ```
 
 Then replace the import:

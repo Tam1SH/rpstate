@@ -12,6 +12,27 @@ use error_stack::{Report, ResultExt};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
+/// Where a store keeps what it keeps.
+///
+/// A shape rather than a list, so reaching a particular file is a match and
+/// not a search: an engine that has no separate bookkeeping cannot be asked
+/// for it, and one that has cannot be missing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreLayout {
+    /// One file holds the values and the bookkeeping together, and the engine
+    /// keeps whatever else it needs inside it.
+    Single { data: std::path::PathBuf },
+
+    /// Values and bookkeeping in files of their own, each with the copy kept
+    /// while it is rewritten so a rewrite that fails partway can be put back.
+    Sidecars {
+        data: std::path::PathBuf,
+        meta: std::path::PathBuf,
+        data_backup: std::path::PathBuf,
+        meta_backup: std::path::PathBuf,
+    },
+}
+
 /// The path a caller named, or why what they gave is not one.
 ///
 /// Every typed entry point takes `impl IntoStorePath` and has to make the same
@@ -163,6 +184,23 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// calling thread, which is what they did before the question was asked.
     fn parallel_reads(&self) -> bool {
         false
+    }
+
+    /// Where this store keeps what it keeps.
+    ///
+    /// A caller that has to reach a store's files - a backup tool, an
+    /// uninstaller, a test - would otherwise rebuild their names from the one
+    /// it was given, which means writing down a rule the engine owns. The
+    /// engine says it instead.
+    ///
+    /// Paths, not contents: a file is named whether or not it exists right
+    /// now, because a backup exists only while a rewrite is in flight and its
+    /// name is wanted either way.
+    ///
+    /// `None` for a backend implemented outside this crate, which need not
+    /// answer.
+    fn files(&self) -> Option<StoreLayout> {
+        None
     }
 
     fn save_now(&self) -> StorageResult<()>;

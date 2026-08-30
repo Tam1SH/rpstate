@@ -102,25 +102,10 @@ rsx! {
 
 ### use_read_only_field
 
-Returns a `ReadSignal<T>` for a read-only field or a `lookup` field without `export_mut`:
+Returns a `ReadSignal<T>` for any field, with no setter beside it - for a value the component displays and never writes:
 
 ```rust
 let host = use_read_only_field(state.host);
-```
-
-### use_pipeline
-
-Derives a signal from one or more fields. The pipeline is registered in the arena and cleaned up when the component unmounts:
-
-```rust
-let address = use_pipeline(move || {
-    (state.username, state.counter)
-        .pipe()
-        .map(|(u, c)| format!("{u}:{c}"))
-        .dedupe()
-});
-
-rsx! { p { "{address}" } }
 ```
 
 ### use_map

@@ -24,8 +24,8 @@ use uuid::Uuid;
 /// drift is not tracked - that is what the typed structs are for.
 ///
 /// What comes back is an ordinary [`ReactiveCell`] or [`ReactiveMap`], so
-/// subscriptions, local delivery and pipelines work exactly as they do for
-/// declared fields. Only the addressing differs.
+/// subscriptions and local delivery work exactly as they do for declared
+/// fields. Only the addressing differs.
 pub struct Kv {
     store: Store,
     instance_id: Uuid,

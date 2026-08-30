@@ -1,16 +1,13 @@
-//! Two owners cannot have one place on disk.
-//!
-//! A path can be arrived at more than one way - a dotted `key`, a dotted
-//! `prefix`, a struct rooted where another stores a value - and until the
-//! claims table nothing compared them. The last writer won, silently, and the
-//! damage only showed on the next start when the signals had to come off the
-//! disk again.
-
+use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::owners::Claimed;
+use amethystate::{StorageResult, Store};
 use amethystate_core::facts::all;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
+
+mod common;
+use common::shape;
 
 #[amethystate(prefix = "coll", version = 1)]
 pub struct Outer {
@@ -22,6 +19,12 @@ pub struct Outer {
 pub struct Panels {
     #[amestate(key = "left.visible", default = true)]
     pub left_visible: bool,
+}
+
+#[amethystate(prefix = "coll.panels.left", version = 1)]
+pub struct Left {
+    #[amestate(default = true)]
+    pub visible: bool,
 }
 
 #[amethystate(prefix = "typed", version = 1)]
@@ -36,33 +39,144 @@ pub struct TypedPanels {
     pub left_visible: u32,
 }
 
-/// A dotted `key` under one prefix and a plain field under a dotted `prefix`
-/// compose to the same path. The second construction is refused, and the report
-/// names both schemas rather than leaving the two to share a slot.
-#[test]
-fn two_structs_cannot_claim_the_same_stored_path() {
-    let path = TempPath::new("prefix_overlap");
+fn contested(
+    at: &str,
+    first: fn(&Store) -> StorageResult<()>,
+    second: fn(&Store) -> StorageResult<()>,
+) -> String {
+    let path = TempPath::new(at);
     let store = StoreBuilder::new(path.path()).build().unwrap();
 
-    let _outer = Outer::new_with(&store).unwrap();
-    let refused = Panels::new_with(&store).unwrap_err();
+    first(&store).expect("the first spelling is free to take it");
+    let refused = second(&store).expect_err("the second wanted the same place");
 
-    let named: Vec<String> = all::<Claimed, _>(&refused)
-        .map(|claim| claim.by.to_string())
-        .collect();
+    assert_eq!(
+        refused.current_context(),
+        &StorageError::Claimed,
+        "refused, but not as a claim: {refused:?}"
+    );
 
-    assert_eq!(named.len(), 2, "the report names both: {refused:?}");
-    assert!(
-        named.iter().any(|by| by.contains("Outer"))
-            && named.iter().any(|by| by.contains("Panels")),
-        "and names them by their schemas: {named:?}"
+    let claims: Vec<&Claimed> = all::<Claimed, _>(&refused).collect();
+
+    assert_eq!(claims.len(), 2, "the report names both: {refused:?}");
+    for claim in &claims {
+        assert_eq!(
+            claim.path.as_str(),
+            "coll.panels.left.visible",
+            "the refusal is about the place all three spell: {refused:?}"
+        );
+    }
+    assert_ne!(
+        claims[0].by, claims[1].by,
+        "and attributes it to two different schemas: {refused:?}"
+    );
+
+    shape(&refused)
+}
+
+#[test]
+fn a_dotted_key_and_a_dotted_prefix_reach_one_place() {
+    insta::assert_snapshot!(
+        "overlap_key_against_prefix",
+        contested(
+            "overlap_key_prefix",
+            |s| Outer::new_with(s).map(|_| ()),
+            |s| Panels::new_with(s).map(|_| ()),
+        )
     );
 }
 
-/// Types that disagree used to surface as a decode failure while the second
-/// struct was being built - a codec error standing in for a name collision.
-/// It is the same refusal as when they agree, because the claim is about the
-/// path and not about what is stored at it.
+#[test]
+fn a_dotted_key_and_a_prefix_all_the_way_down_reach_one_place() {
+    insta::assert_snapshot!(
+        "overlap_key_against_deep_prefix",
+        contested(
+            "overlap_key_deep",
+            |s| Outer::new_with(s).map(|_| ()),
+            |s| Left::new_with(s).map(|_| ()),
+        )
+    );
+}
+
+#[test]
+fn two_prefixes_of_different_depth_reach_one_place() {
+    insta::assert_snapshot!(
+        "overlap_prefix_against_deep_prefix",
+        contested(
+            "overlap_prefix_deep",
+            |s| Panels::new_with(s).map(|_| ()),
+            |s| Left::new_with(s).map(|_| ()),
+        )
+    );
+}
+
+#[test]
+fn one_claim_refuses_every_other_spelling_not_only_the_next() {
+    let path = TempPath::new("overlap_chain");
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+
+    Outer::new_with(&store).unwrap();
+
+    for refused in [
+        Panels::new_with(&store).map(|_| ()).unwrap_err(),
+        Left::new_with(&store).map(|_| ()).unwrap_err(),
+    ] {
+        let by: Vec<&str> = all::<Claimed, _>(&refused).map(|claim| claim.by).collect();
+
+        assert_eq!(by.len(), 2, "two claims, not a pile: {refused:?}");
+        assert!(
+            by.iter().any(|by| by.ends_with("Outer")),
+            "the standing claim is still Outer's: {refused:?}"
+        );
+    }
+
+    Outer::new_with(&store).expect("a refusal must not disturb the claim it refused for");
+}
+
+#[test]
+fn the_chain_refuses_in_either_order() {
+    let path = TempPath::new("overlap_chain_reversed");
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+
+    Left::new_with(&store).unwrap();
+
+    assert!(Panels::new_with(&store).is_err(), "the middle spelling");
+    assert!(Outer::new_with(&store).is_err(), "the shallow spelling");
+
+    Left::new_with(&store).expect("a refusal must not disturb the claim it refused for");
+}
+
+#[test]
+fn a_prefix_is_refused_by_a_field_already_under_it() {
+    let path = TempPath::new("root_is_a_leaf_reversed");
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+
+    Branch::new_with(&store).unwrap();
+    let refused = Root::new_with(&store).unwrap_err();
+
+    let claims: Vec<&str> = all::<Claimed, _>(&refused)
+        .map(|claim| claim.path.as_str())
+        .collect();
+
+    assert!(
+        claims.contains(&"root.b") && claims.contains(&"root.b.x"),
+        "both places are named whichever was claimed first: {refused:?}"
+    );
+}
+
+#[test]
+fn a_claim_outlives_the_handle_that_made_it() {
+    let path = TempPath::new("overlap_dropped");
+    let store = StoreBuilder::new(path.path()).build().unwrap();
+
+    drop(Outer::new_with(&store).unwrap());
+
+    assert!(
+        Panels::new_with(&store).is_err(),
+        "dropping the first struct must not free the place it claimed"
+    );
+}
+
 #[test]
 fn an_overlap_between_different_types_is_reported_as_an_overlap() {
     let path = TempPath::new("prefix_overlap_typed");
@@ -90,9 +204,6 @@ pub struct Branch {
     pub x: u32,
 }
 
-/// One struct stores a value at `root.b`, another roots itself there. A field
-/// owns what is under it - that is the inside of its value - so the branch is
-/// refused rather than left to put a level where a leaf already is.
 #[test]
 fn a_prefix_may_not_land_on_another_structs_field() {
     let path = TempPath::new("root_is_a_leaf");
@@ -111,10 +222,6 @@ fn a_prefix_may_not_land_on_another_structs_field() {
     );
 }
 
-/// A map owns the level below it and nothing further, so a key two levels down
-/// is somebody else's. Reading it as an entry gave the shallower name the
-/// deeper value's bytes, and a second key under the same name displaced the
-/// first by the scan's order. Now the map refuses to open and says which key.
 #[test]
 fn a_map_will_not_open_over_keys_deeper_than_its_entries() {
     let path = TempPath::new("map_swallows_below");

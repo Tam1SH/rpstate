@@ -60,13 +60,9 @@ mod ts_mapping;
 /// | Option | Type | Description |
 /// | :--- | :--- | :--- |
 /// | `default` | `Expr` | Initial value if not present in store. Required for leaf fields. |
+/// | `key` | `String` | Overrides the storage key (defaults to field name). |
 /// | `nested` | `bool` | Marks field as another `#[amethystate]` struct. |
 /// | `volatile` | `bool` | In-memory only. Never saved to or loaded from disk. |
-/// | `export_mut` | `bool` | Allows this field to be mutated via `lookup` from other structs. |
-/// | `key` | `String` | Overrides the storage key (defaults to field name). |
-/// | `lookup` | `String` | Links to a leaf field in a `parent` struct. Supports dot-notation. |
-/// | `lookup_node` | `String` | Links to a nested struct node in a `parent` struct. |
-/// | `parent` | `Type` | The source `amethystate` struct for `lookup` or `lookup_node`. |
 ///
 /// # Examples
 ///
@@ -104,25 +100,6 @@ mod ts_mapping;
 /// // cfg.save()?;                       // Immediate synchronous flush to disk
 /// ```
 ///
-/// ### Lookups and Permissions
-/// ```rust,ignore
-/// #[amethystate(prefix = "database")]
-/// pub struct DatabaseState {
-///     #[amestate(default = 10, export_mut)]
-///     pub pool_size: u32,
-/// }
-///
-/// #[amethystate(prefix = "ui")]
-/// pub struct Dashboard {
-///     // Links to DatabaseState.pool_size (read-only by default)
-///     #[amestate(lookup = "pool_size", parent = DatabaseState)]
-///     pub view_limit: u32,
-///
-///     // Links to DatabaseState.pool_size (writable)
-///     #[amestate(lookup = "pool_size", parent = DatabaseState, export_mut)]
-///     pub edit_limit: u32,
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
     amethystate::amethystate_impl(args, input)
@@ -131,7 +108,7 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Declares a migration step, discovered wherever it is written.
 ///
 /// The function takes the old shape and returns the new one; the engine finds
-/// it through [`StoreBuilder::build_with_report`], so nothing has to register
+/// it through [`StoreBuilder::build_with_migration`], so nothing has to register
 /// it by hand. `#[rename(old => new)]` moves a key whose value survives
 /// unchanged, so the body does not have to copy it.
 ///
@@ -253,7 +230,7 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// let (store, report) = StoreBuilder::new(path)
 ///     .provide(LegacyDefaults { port: 8080 })
-///     .build_with_report()?;
+///     .build_with_migration()?;
 ///
 /// #[migrate]
 /// fn migrate_settings_v1_to_v2(

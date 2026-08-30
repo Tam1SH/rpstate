@@ -29,7 +29,7 @@ pub struct PrefixMigrationBuilder<'a> {
 impl MigrationBuilder {
     /// Picks up every step declared with `#[migrate]` anywhere in the binary.
     ///
-    /// [`StoreBuilder::build_with_report`](crate::StoreBuilder::build_with_report)
+    /// [`StoreBuilder::build_with_migration`](crate::StoreBuilder::build_with_migration)
     /// calls this; a store opened with plain
     /// [`build`](crate::StoreBuilder::build) runs only the steps added by hand.
     ///
@@ -220,7 +220,7 @@ impl PrefixMigrationBuilder<'_> {
     ///                 ctx.set("initials", &initials)
     ///             });
     ///     })
-    ///     .build_with_report()?;
+    ///     .build_with_migration()?;
     /// ```
     pub fn step<F>(&mut self, target_version: u32, description: &str, run: F) -> &mut Self
     where

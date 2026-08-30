@@ -1,4 +1,4 @@
-#![cfg(any(feature = "confy-compat", feature = "confy-compat-0-6"))]
+#![cfg(any(feature = "confy-compat-2", feature = "confy-compat-0-6"))]
 //! The `confy` layer through the calls a `confy` user makes.
 //!
 //! These are the only tests in the suite that leave the temporary directory,
@@ -35,8 +35,7 @@ impl Default for TestConfig {
         feature = "toml",
         not(feature = "redb"),
         not(feature = "json"),
-        not(feature = "sqlite"),
-        not(feature = "sqlite-bundled")
+        not(feature = "sqlite")
     ),
     ignore = "known: on the toml backend a stored config cannot be read back - see confy_migration.rs"
 )]
@@ -107,8 +106,7 @@ fn clean_up_files(file_path: &Path) {
         feature = "toml",
         not(feature = "redb"),
         not(feature = "json"),
-        not(feature = "sqlite"),
-        not(feature = "sqlite-bundled")
+        not(feature = "sqlite")
     ),
     ignore = "known: on the toml backend a stored config cannot be read back - see confy_migration.rs"
 )]
@@ -181,8 +179,7 @@ fn test_confy_amethystate_coexistence() {
     not(feature = "redb"),
     not(feature = "json"),
     not(feature = "ron"),
-    not(feature = "sqlite"),
-    not(feature = "sqlite-bundled")
+    not(feature = "sqlite")
 ))]
 fn test_compare_real_confy_and_amethystate() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");

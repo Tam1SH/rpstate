@@ -9,7 +9,7 @@ use std::fmt;
 /// below this one in the report, and the particulars - which path, which file -
 /// are attachments put there by whoever knew them. A variant carries data only
 /// where that data *is* the failure rather than the circumstances of it.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WriteError {
     /// The store refused the write or could not carry it out.
     Storage,

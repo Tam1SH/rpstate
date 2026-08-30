@@ -83,7 +83,7 @@ impl DepthBudget {
         if let Some(cap) = self.key_depth
             && levels > cap
         {
-            return Err(Report::new(StorageError::Path)
+            return Err(Report::new(StorageError::Depth)
                 .attach(format!("path: {path}"))
                 .attach(format!("levels: {levels}, and the limit is {cap}"))
                 .attach("set by: limits(|l| l.key_depth(..))")

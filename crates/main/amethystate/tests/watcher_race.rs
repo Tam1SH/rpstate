@@ -26,7 +26,7 @@ fn a_write_is_never_rolled_back_by_the_watcher() {
     let store = StoreBuilder::new(&path)
         .backend(text_backend())
         .debounce(Duration::from_millis(5))
-        .watch_interval(Duration::from_millis(5))
+        .watch_debounce(Duration::from_millis(5))
         .build()
         .unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
@@ -60,7 +60,7 @@ fn a_write_during_a_persist_still_reaches_the_file() {
         let store = StoreBuilder::new(&path)
             .backend(text_backend())
             .debounce(Duration::from_millis(10))
-            .watch_interval(Duration::from_millis(5))
+            .watch_debounce(Duration::from_millis(5))
             .build()
             .unwrap();
         let cfg = Cfg::new_with(&store).unwrap();

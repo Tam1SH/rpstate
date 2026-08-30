@@ -54,7 +54,7 @@ fn renaming_a_field_that_carries_a_key_moves_its_stored_value() {
         .migrations(|m| {
             m.collect_codegen();
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     let v2 = Keyed::new_with(&store).unwrap();
@@ -111,7 +111,7 @@ fn dropping_a_field_that_carries_a_key_removes_its_stored_value() {
         .migrations(|m| {
             m.collect_codegen();
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     assert_eq!(
@@ -162,7 +162,7 @@ fn dropping_a_plain_field_removes_its_stored_value() {
         .migrations(|m| {
             m.collect_codegen();
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     assert_eq!(

@@ -75,7 +75,7 @@ impl<'a> MigrationContext<'a> {
     ///             ctx.set("port", &legacy.port)
     ///         });
     ///     })
-    ///     .build_with_report()
+    ///     .build_with_migration()
     ///     .unwrap();
     ///
     /// assert!(!report.has_failures());
@@ -97,7 +97,7 @@ impl<'a> MigrationContext<'a> {
     ///             Ok(())
     ///         });
     ///     })
-    ///     .build_with_report()
+    ///     .build_with_migration()
     ///     .unwrap();
     ///
     /// assert!(report.has_failures());

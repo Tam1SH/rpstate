@@ -5,13 +5,13 @@ use crate::path::{StorePath, escape_name};
 use crate::primitives::error::{ReactiveMapResult, WriteError};
 use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::SubscriptionMeta;
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use error_stack::ResultExt;
-use parking_lot::{ArcRwLockReadGuard, RawRwLock, RwLock, RwLockReadGuard};
+use rpds::RedBlackTreeMapSync;
 use smol_str::SmolStr;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 use std::panic::Location;
@@ -61,14 +61,19 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static + Default> 
 /// is the order a scan hands the keys back in - `[10, 100, 9]` for numeric
 /// keys, not `K: Ord`'s `[9, 10, 100]`. The key `K` rides along in the value so
 /// a listing does not have to parse it back.
+///
+/// A read takes a version and holds nothing, so a walk neither blocks a writer
+/// nor waits for one, whatever thread either is on. A write publishes a new
+/// version that shares every node it did not touch. What that costs, and why
+/// the shape is not selectable, is in `RFC-map-locking.md`.
 pub struct MapCache<K, V> {
-    entries: Arc<RwLock<BTreeMap<SmolStr, (K, V)>>>,
+    entries: ArcSwap<Snapshot<K, V>>,
 }
 
 impl<K, V> Default for MapCache<K, V> {
     fn default() -> Self {
         Self {
-            entries: Arc::new(RwLock::new(BTreeMap::new())),
+            entries: ArcSwap::from_pointee(RedBlackTreeMapSync::new_sync()),
         }
     }
 }
@@ -84,99 +89,99 @@ impl<K: Clone, V: Clone> MapCache<K, V> {
 
     pub fn get<Q: Display + ?Sized>(&self, key: &Q) -> Option<V> {
         self.entries
-            .read()
+            .load()
             .get(escaped_key(key).as_str())
             .map(|(_, value)| value.clone())
     }
 
     pub fn contains_key<Q: Display + ?Sized>(&self, key: &Q) -> bool {
-        self.entries.read().contains_key(escaped_key(key).as_str())
+        self.entries.load().contains_key(escaped_key(key).as_str())
     }
 
     /// The key as the map holds it, for a caller that looked one up by
     /// something it borrows from and needs the owned form back.
     pub fn owned_key<Q: Display + ?Sized>(&self, key: &Q) -> Option<K> {
         self.entries
-            .read()
+            .load()
             .get(escaped_key(key).as_str())
             .map(|(key, _)| key.clone())
     }
 
     pub fn len(&self) -> usize {
-        self.entries.read().len()
+        self.entries.load().size()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.read().is_empty()
+        self.entries.load().is_empty()
     }
 
     pub fn clear(&self) {
-        self.entries.write().clear();
+        self.entries
+            .store(Arc::new(RedBlackTreeMapSync::new_sync()));
     }
 
     /// The entries themselves, in order, without copying any of them.
     ///
-    /// Holds the read lock for as long as the guard lives, so a caller walks
-    /// and drops it rather than keeping it across work of its own.
-    pub fn view(&self) -> Entries<'_, K, V> {
-        Entries(self.entries.read())
+    /// The version is taken when the view is, so writes that land afterwards
+    /// are not in it however long it is held.
+    pub fn view(&self) -> Entries<K, V> {
+        Entries {
+            held: self.entries.load_full(),
+        }
     }
 
     /// Every key, in the order the contract promises, one at a time.
     pub fn keys(&self) -> Walk<K, V, K> {
-        Walk::new(self.entries.read_arc(), |(key, _)| key.clone())
+        Walk::new(self.entries.load_full(), |(key, _)| key.clone())
     }
 
     /// Every entry, in that order, one at a time.
     pub fn entries(&self) -> Walk<K, V, (K, V)> {
-        Walk::new(self.entries.read_arc(), Clone::clone)
+        Walk::new(self.entries.load_full(), Clone::clone)
     }
 }
 
-type Held<K, V> = ArcRwLockReadGuard<RawRwLock, BTreeMap<SmolStr, (K, V)>>;
-type Values<'a, K, V> = std::collections::btree_map::Values<'a, SmolStr, (K, V)>;
+type Snapshot<K, V> = RedBlackTreeMapSync<SmolStr, (K, V)>;
+type Held<K, V> = Arc<Snapshot<K, V>>;
+type Pairs<'a, K, V> = <&'a Snapshot<K, V> as IntoIterator>::IntoIter;
+type Values<'a, K, V> =
+    std::iter::Map<Pairs<'a, K, V>, fn((&'a SmolStr, &'a (K, V))) -> &'a (K, V)>;
+
+fn value_of<'a, K, V>((_, entry): (&'a SmolStr, &'a (K, V))) -> &'a (K, V) {
+    entry
+}
 
 /// A walk of a [`MapCache`], in order, taking nothing it is not asked for.
 ///
 /// The position is the iterator's own, so a whole pass costs one descent and
 /// `take(n)` costs `n`.
 ///
-/// The map's read lock is held for as long as the walk lives. Touching the same
-/// map from the thread that is walking it deadlocks - reading as well as
-/// writing, because this is `read` and not `read_recursive`, so `len()` from
-/// inside a walk hangs once a writer is queued. `mem::forget` on a walk leaves
-/// the map read-locked for good.
+/// The walk owns the version it started on. Writing to the same map while it is
+/// alive is allowed from any thread, the walk included, and the walk keeps
+/// handing back what its own version holds.
 pub struct Walk<K: 'static, V: 'static, T> {
-    values: Values<'static, K, V>,
+    pairs: Pairs<'static, K, V>,
     take: fn(&(K, V)) -> T,
     _held: Held<K, V>,
 }
 
 impl<K, V, T> Walk<K, V, T> {
     fn new(held: Held<K, V>, take: fn(&(K, V)) -> T) -> Self {
-        // SAFETY: three invariants, all of which this module has to keep.
+        // SAFETY: two invariants, both of which this module has to keep.
         //
-        // The guard came from `read_arc`, so it owns a strong reference and the
-        // map lives in the `Arc`'s allocation rather than in the guard. Moving
-        // the guard moves a pointer; the map stays, and outlives every other
-        // owner. That is what lets the type carry no lifetime.
-        //
-        // `_held` is never passed to `ArcRwLockReadGuard::{unlocked,
-        // unlocked_fair, bump, unlock_fair, into_arc, into_arc_fair}`. Those
-        // release the lock while the guard is alive, and any one of them turns
-        // these references into use-after-free. Holding a guard is not the same
-        // as holding the lock, and only this rule makes the two the same here.
+        // The map lives in the `Arc`'s allocation and `_held` owns a strong
+        // reference to it, so it outlives every borrow taken here however the
+        // walk is moved. That is what lets the type carry no lifetime.
         //
         // The `'static` never reaches a caller: `new` is private, and `take` is
         // `for<'x> fn(&'x (K, V)) -> T`, which cannot return its argument. So
         // no `T` can be a reference into the map, and the only `&'static` that
         // exists is the temporary inside `next` and `next_back`.
-        let values = unsafe {
-            std::mem::transmute::<Values<'_, K, V>, Values<'static, K, V>>(held.values())
-        };
+        let pairs =
+            unsafe { std::mem::transmute::<Pairs<'_, K, V>, Pairs<'static, K, V>>(held.iter()) };
 
         Self {
-            values,
+            pairs,
             take,
             _held: held,
         }
@@ -187,70 +192,77 @@ impl<K, V, T> Iterator for Walk<K, V, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
-        self.values.next().map(self.take)
+        self.pairs.next().map(|(_, entry)| (self.take)(entry))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.values.size_hint()
+        self.pairs.size_hint()
     }
 }
 
 impl<K, V, T> DoubleEndedIterator for Walk<K, V, T> {
     fn next_back(&mut self) -> Option<T> {
-        self.values.next_back().map(self.take)
+        self.pairs.next_back().map(|(_, entry)| (self.take)(entry))
     }
 }
 
 impl<K, V, T> ExactSizeIterator for Walk<K, V, T> {}
 
-/// A read of a [`MapCache`], in order, held open.
-pub struct Entries<'a, K, V>(RwLockReadGuard<'a, BTreeMap<SmolStr, (K, V)>>);
+/// One version of a [`MapCache`], in order, borrowed rather than copied.
+pub struct Entries<K, V> {
+    held: Held<K, V>,
+}
 
-impl<'e, K, V> IntoIterator for &'e Entries<'_, K, V> {
+impl<'e, K, V> IntoIterator for &'e Entries<K, V> {
     type Item = &'e (K, V);
-    type IntoIter = std::collections::btree_map::Values<'e, SmolStr, (K, V)>;
+    type IntoIter = Values<'e, K, V>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.values()
+        self.held.iter().map(value_of as fn(_) -> _)
     }
 }
 
-impl<K, V> Entries<'_, K, V> {
+impl<K, V> Entries<K, V> {
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &(K, V)> {
-        self.0.values()
+        self.held.iter().map(|(_, entry)| entry)
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.held.size()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.held.is_empty()
     }
 }
 
 impl<K: Display + Clone, V: Clone> MapCache<K, V> {
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        self.entries
-            .write()
-            .insert(escaped_key(&key), (key, value))
-            .map(|(_, old)| old)
+        let escaped = escaped_key(&key);
+
+        let replaced = self
+            .entries
+            .rcu(|current| current.insert(escaped.clone(), (key.clone(), value.clone())));
+
+        replaced.get(escaped.as_str()).map(|(_, old)| old.clone())
     }
 
     pub fn remove<Q: Display + ?Sized>(&self, key: &Q) -> Option<(K, V)> {
-        self.entries.write().remove(escaped_key(key).as_str())
+        let escaped = escaped_key(key);
+
+        let previous = self.entries.rcu(|current| current.remove(escaped.as_str()));
+
+        previous.get(escaped.as_str()).cloned()
     }
 }
 
 impl<K: Debug, V: Debug> Debug for MapCache<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.entries.try_read() {
-            Some(entries) => f
-                .debug_map()
-                .entries(entries.values().map(|(k, v)| (k, v)))
-                .finish(),
-            None => f.write_str("<locked>"),
-        }
+        let held = self.entries.load();
+
+        f.debug_map()
+            .entries(held.iter().map(|(_, (k, v))| (k, v)))
+            .finish()
     }
 }
 

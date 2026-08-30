@@ -8,9 +8,9 @@ use uuid::Uuid;
 pub trait AmeStateNode: Sized {
     /// Nothing to read: evaluating it is the check.
     ///
-    /// Constructing a node constructs every node it declares - a `nested` field
-    /// or a `lookup_node` one - so a cycle among them is a constructor that
-    /// never returns. The generated value reads this same constant from each of
+    /// Constructing a node constructs every node it declares - a `nested`
+    /// field - so a cycle among them is a constructor that never returns. The
+    /// generated value reads this same constant from each of
     /// those types, which makes a cycle a cycle in const evaluation, and that is
     /// a compile error rather than a stack overflow at startup.
     ///

@@ -140,7 +140,7 @@ fn open(file: &TempPath, backend: Backend) -> Result<Store, String> {
     StoreBuilder::new(file.path())
         .backend(backend)
         .debounce(Duration::from_secs(60))
-        .watch_interval(Duration::from_secs(60))
+        .watch_debounce(Duration::from_secs(60))
         .build()
         .map_err(|e| brief(&format!("{e:#}")))
 }

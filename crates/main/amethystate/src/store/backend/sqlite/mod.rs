@@ -11,7 +11,7 @@ use crate::store::depth::DepthBudget;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::facts::{Facts, Key, StoreFile};
-use crate::store::traits::MigrationBackendAdapter;
+use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
     InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
@@ -716,6 +716,12 @@ impl StoreBackend for SqliteStore {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.inner.set_owned_erased(path, value, source)
+    }
+
+    fn files(&self) -> Option<StoreLayout> {
+        Some(StoreLayout::Single {
+            data: self.inner.path.clone(),
+        })
     }
 
     fn save_now(&self) -> StorageResult<()> {

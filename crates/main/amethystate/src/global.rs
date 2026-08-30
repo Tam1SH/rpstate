@@ -45,11 +45,11 @@ pub trait IntoGlobalStore: Sized {
     /// closes it.
     ///
     /// Runs the migrations declared by hand and no others.
-    /// [`IntoGlobalStore::init_global_with_report`] is the one that also picks
+    /// [`IntoGlobalStore::init_global_with_migration`] is the one that also picks
     /// up every `#[migrate]` step in the binary, and says what the pass did -
     /// the same split as
     /// [`build`](crate::StoreBuilder::build) and
-    /// [`build_with_report`](crate::StoreBuilder::build_with_report).
+    /// [`build_with_migration`](crate::StoreBuilder::build_with_migration).
     #[must_use = "dropped here, the global store is closed here - bind it in `main` \
                   (`let _ame = ...`) so the last writes are flushed on the way out"]
     fn init_global(self) -> GlobalStoreGuard {
@@ -66,10 +66,10 @@ pub trait IntoGlobalStore: Sized {
 
     /// [`IntoGlobalStore::init_global`], with every `#[migrate]` step in the
     /// binary collected as well, and what the pass did.
-    fn init_global_with_report(self) -> (MigrationReport, GlobalStoreGuard) {
+    fn init_global_with_migration(self) -> (MigrationReport, GlobalStoreGuard) {
         let (store, report) = self
             .into_store_builder()
-            .build_with_report()
+            .build_with_migration()
             .unwrap_or_else(|err| {
                 panic!(
                     "amethystate: Failed to build global StoreBackend.\n\
@@ -129,10 +129,10 @@ pub fn init_global<T: IntoGlobalStore>(source: T) -> GlobalStoreGuard {
 
 /// [`init_global`], with every `#[migrate]` step in the binary collected as
 /// well, and what the pass did.
-pub fn init_global_with_report<T: IntoGlobalStore>(
+pub fn init_global_with_migration<T: IntoGlobalStore>(
     source: T,
 ) -> (MigrationReport, GlobalStoreGuard) {
-    source.init_global_with_report()
+    source.init_global_with_migration()
 }
 
 pub fn global_store() -> Store {

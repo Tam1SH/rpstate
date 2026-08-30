@@ -1,5 +1,5 @@
 use crate::Store;
-use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::reactive::watch::{Watch, Watchable};
 use crate::store::StoreSubscription;
 use crate::store::facts::{Facts, Prefix};
 use crate::store::sync_backend::SyncBridge;
@@ -33,24 +33,6 @@ pub(crate) struct MapInner<K, V> {
 /// That residency is the trade this type makes, and it sets the size it is for:
 /// thousands of entries, not millions. A map that will not fit in memory wants
 /// the database directly.
-///
-/// # What the opening scan takes
-///
-/// A map's entries are the level below its path, so the depth a scan reaches
-/// never matters here - but what the store holds under that path was not
-/// necessarily written by a map:
-///
-/// | what is stored under the path | what the map does |
-/// | --- | --- |
-/// | an entry the map wrote | held |
-/// | the map's own path, left behind by a `clear` | passed over |
-/// | a name no path can hold, on json, toml or ron | never reaches the map; see [`StoreBackend::scan_keys`] |
-/// | a name that is not a `K` | opening the map fails, naming the entry |
-/// | a value that is not a `V` | opening the map fails, naming the entry |
-///
-/// The last two are how a hand-edited file stops a struct from being built at
-/// all, which is worth knowing before putting a map behind a config a person
-/// edits.
 pub struct ReactiveMap<K, V> {
     pub(crate) inner: Arc<MapInner<K, V>>,
 }
@@ -94,7 +76,7 @@ where
     ///
     /// Provenance travels with the id, so a subscription can tell its own
     /// writes from someone else's. [`Clone`] keeps the id instead; the book
-    /// covers the pair in [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
+    /// covers the pair in [clone and fork](https://uniproc-dev.github.io/amethystate/concepts/subscriptions/#clone-and-fork).
     pub fn fork(&self) -> Self {
         self.fork_with_id(Uuid::new_v4())
     }
@@ -179,8 +161,8 @@ where
     /// sorted, and nothing is taken that is not asked for: `take(50)` clones
     /// fifty entries whatever the map holds.
     ///
-    /// The read lock is held for as long as the walk lives, so writing to this
-    /// map from the thread that is walking it deadlocks.
+    /// The walk owns the version it started on, so writing to this map while it
+    /// is alive is allowed and the walk goes on handing back what it took.
     pub fn entries(&self) -> Walk<K, V, (K, V)> {
         self.inner.core.cache.entries()
     }
@@ -215,7 +197,7 @@ where
     ///
     /// assert_eq!(widest, 120);
     /// ```
-    pub fn view(&self) -> Entries<'_, K, V> {
+    pub fn view(&self) -> Entries<K, V> {
         self.inner.core.cache.view()
     }
 
@@ -256,7 +238,7 @@ where
     /// ```
     ///
     /// Only the keys asked for are cloned, and the value beside each is not
-    /// touched. The read lock is held for as long as the walk lives.
+    /// touched. The walk owns the version it started on.
     pub fn keys(&self) -> Walk<K, V, K> {
         self.inner.core.cache.keys()
     }
@@ -376,7 +358,7 @@ where
     ///
     /// Map changes are events rather than a state, so pair `local` with
     /// [`Watch::every`] unless dropping the intermediate ones is what you want.
-    pub fn subscription_with(&self) -> Watch<Self, Immediate> {
+    pub fn subscription_with(&self) -> Watch<Self> {
         Watch::new(self.clone())
     }
 }

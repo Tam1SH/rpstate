@@ -8,9 +8,21 @@
 //!
 //! Run with `cargo test -p amethystate --features toml --test probe_toml --
 //! --nocapture` to see the tables.
+//!
+//! ## What toml cannot represent
+//!
+//! **There is no null.** A key that holds nothing is a key that is not
+//! written, so `set(None)` and `delete` leave the same document. The other
+//! engines keep those two apart - json writes `null`, ron writes `None`.
+//!
+//! **An empty table is a value.** A level with nothing under it is written and
+//! read back, which is not the same as a level that is absent. So toml can say
+//! "this level exists and is empty" while it cannot say "this key exists and
+//! holds nothing".
 
 use amethystate::Store;
 use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -139,7 +151,7 @@ fn open(path: &std::path::Path) -> amethystate::StorageResult<Store> {
 
 fn root_keys(store: &Store) -> Vec<String> {
     store
-        .scan_keys(Vec::<String>::new())
+        .scan_keys(StorePath::root())
         .map(|keys| keys.iter().map(|k| k.as_str().to_string()).collect())
         .unwrap_or_else(|e| vec![format!("<scan failed: {}>", why(&e))])
 }

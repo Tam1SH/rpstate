@@ -1,6 +1,5 @@
 use crate::MapSignal;
 use amethystate::MapChange;
-use amethystate::Pipeline;
 use amethystate::client::{AsyncSubscriptionBackend, Field, ReactiveMap};
 use amethystate::core::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
 use amethystate::reactive::FieldValue;
@@ -23,38 +22,6 @@ where
             let (tx, mut rx) = mpsc::unbounded::<T>();
 
             let sub = field.subscribe(move |val| {
-                let _ = tx.unbounded_send(val.clone());
-            });
-
-            spawn_local(async move {
-                use futures::StreamExt;
-                while let Some(val) = rx.next().await {
-                    value.set(val);
-                }
-            });
-
-            move || drop(sub)
-        });
-    }
-
-    (*value).clone()
-}
-
-#[hook]
-pub fn use_pipeline<T, F>(f: F) -> T
-where
-    T: Clone + Send + Sync + PartialEq + 'static,
-    F: FnOnce() -> Pipeline<T> + 'static,
-{
-    let pipeline = use_state(f);
-    let value = use_state(|| pipeline.get());
-
-    {
-        let value = value.clone();
-        use_effect_with((), move |_| {
-            let (tx, mut rx) = mpsc::unbounded::<T>();
-
-            let sub = pipeline.subscribe(move |val| {
                 let _ = tx.unbounded_send(val.clone());
             });
 

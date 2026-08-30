@@ -15,7 +15,8 @@ members = [
     "crates/adapters/amethystate-dioxus",
     "crates/adapters/amethystate-yew",
     "crates/adapters/amethystate-slint",
-    "crates/amethystate-cli"
+    "crates/amethystate-cli",
+    "xtask"
 ]
 
 [workspace.package]
@@ -53,6 +54,7 @@ paste = "1.0.15"
 petgraph = "0.8.3"
 redb = "4.0"
 rmp-serde = "1.3.1"
+rpds = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 smol_str = "0.3.6"
@@ -77,7 +79,6 @@ proc-macro-crate = "3.5.0"
 
 # dev
 criterion = "0.8.2"
-macrotest = "1.2.1"
 proptest = "1.11.0"
 rand = "0.10.1"
 rayon = "1.12.0"

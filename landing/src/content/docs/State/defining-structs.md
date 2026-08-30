@@ -24,6 +24,11 @@ pub struct NetworkState { ... }
 
 Structs without `prefix` are nested components, intended to be embedded in other structs via `nested`.
 
+A `prefix` claims the place it names and everything under it, so two structs
+cannot be declared over the same place - the second one to open is refused. That
+is a whole subject of its own, and the one that decides how a `prefix` and a
+dotted `key` interact: [Who owns which place](/amethystate/concepts/claims/).
+
 ### Field attributes
 
 Field attributes are optional. A field with no `#[amestate]` annotation uses `Default::default()` as its value and the field name as its storage key.
@@ -41,19 +46,22 @@ pub struct AppState {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `default` | `Expr` | Initial value on first run. If omitted, uses `Default::default()`. |
+| `key` | `String` | Overrides the storage key. Defaults to the field name. |
 | `nested` | flag | Marks field as an embedded `#[amethystate]` struct. |
 | `volatile` | flag | In-memory only. Never read from or written to the store. Resets to default on every restart. |
-| `export_mut` | flag | Allows this field to be mutated via `lookup` from other structs. |
-| `key` | `String` | Overrides the storage key. Defaults to the field name. |
-| `lookup` | `String` | Links to a field in a `parent` struct. Supports dot-notation. |
-| `lookup_node` | `String` | Links to a nested struct node in a `parent` struct. |
-| `parent` | `Type` | The source struct for `lookup` or `lookup_node`. |
+
+Those four are the whole set; anything else is a compile error naming the four.
 
 ## #[derive(AmeType)]
 
-The `#[derive(AmeType)]` macro is used to implement schema tracking for plain Rust structs (e.g., custom data types used as fields inside your `#[amethystate]` containers).
+`#[derive(AmeType)]` is what lets a plain Rust struct be used as the value of an
+`#[amethystate]` field. It computes a compile-time `TYPE_HASH` from the type's
+shape, and that number is what the migration pass compares to notice that a
+declaration has changed since the data was written.
 
-It calculates a unique compile-time `TYPE_HASH` representing the structure of your data.
+The hash is a summary, not an identity: distinct shapes can land on the same
+number, and where they do, a change goes unnoticed and no drift is reported.
+Bumping `version` when a shape changes is the thing that does not depend on it.
 
 ```rust
 #[derive(Debug, AmeType)]
@@ -96,48 +104,14 @@ pub struct SystemSettings {
 }
 ```
 
-## Cross-struct references
+## Sharing one place between two structs
 
-Fields can share storage with fields in another struct via `lookup`. References are verified at compile time — a wrong field name or type mismatch is a compile error.
-
-```rust
-#[amethystate(prefix = "net")]
-pub struct NetworkState {
-    #[amestate(default = 8080, export_mut)]
-    pub port: u16,
-
-    #[amestate(default = "127.0.0.1".to_string())]
-    pub host: String,
-}
-
-#[amethystate(prefix = "ui")]
-pub struct UiState {
-    // Read-write link
-    #[amestate(lookup = "port", parent = NetworkState, export_mut)]
-    pub proxy_port: u16,
-
-    // Read-only link
-    #[amestate(lookup = "host", parent = NetworkState)]
-    pub proxy_host: String,
-}
-```
-
-Compile-time guarantees:
-
-- Wrong field name → `no associated item named '__schema_field_porrt'`
-- Wrong type → `TypeCheck<String>` is not implemented for `ReadOnly<u16>`
-- Writing a read-only link → `no method named 'perform_set' found for ReadOnly<T>`
-
-`lookup_node` links an entire nested struct instead of a single field:
-
-```rust
-#[amethystate(prefix = "ui.inspector")]
-pub struct InspectorState {
-    #[amestate(lookup_node = "db", parent = SystemSettings)]
-    pub db_view: DatabaseConfig,
-    // accessed as state.db_view().host().get()
-}
-```
+Two structs cannot both declare the same place - the second to open is refused.
+Where one value has to be reachable from two sides, address it by path from the
+one that did not declare it: [Kv](/amethystate/primitives/kv/) reads and writes
+anywhere no struct has claimed, and
+[Who owns which place](/amethystate/concepts/claims/) is what decides where that
+line falls.
 
 ## Root-level storage (`as_root`)
 

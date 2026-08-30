@@ -26,7 +26,7 @@ use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
-use crate::store::traits::MigrationBackendAdapter;
+use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use crate::store::util::debouncer::Debouncer;
 use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
@@ -592,6 +592,12 @@ impl StoreBackend for RedbStore {
 
     fn parallel_reads(&self) -> bool {
         self.inner.parallel_reads
+    }
+
+    fn files(&self) -> Option<StoreLayout> {
+        Some(StoreLayout::Single {
+            data: self.inner.path.to_path_buf(),
+        })
     }
 
     fn save_now(&self) -> StorageResult<()> {

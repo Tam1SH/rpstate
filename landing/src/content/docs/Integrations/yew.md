@@ -10,7 +10,7 @@ title: Yew
 
 ```toml
 [dependencies]
-amethystate-yew = { version = "*", features = ["tauri"] }
+amethystate-yew = { version = "0.20", features = ["tauri"] }
 ```
 
 ## Defining state
@@ -132,34 +132,13 @@ set_prof.emit(p);
 
 ### use_read_only_field
 
-Returns a `T` for a read-only field or a `lookup` field without `export_mut`.
+Returns a `T` for any field, with no setter beside it - for a value the component displays and never writes.
 
 ```rust
 let host = use_read_only_field(state.host.clone());
 
 html! {
     <p>{"Connected to: "}{host}</p>
-}
-```
-
-### use_pipeline
-
-Derives a value from one or more fields. The pipeline recomputes automatically when any input changes and is cleaned up when the component unmounts.
-
-```rust
-let address = use_pipeline({
-    let username_handle = props.state.username.clone();
-    let counter_handle = props.state.counter.clone();
-    move || {
-        (username_handle, counter_handle)
-            .pipe()
-            .map(|(u, c)| format!("{u}:{c}"))
-            .dedupe()
-    }
-});
-
-html! {
-    <p>{"Pipeline → "}<strong>{address}</strong></p>
 }
 ```
 

@@ -17,6 +17,7 @@ arc-swap.workspace = true
 dashmap.workspace = true
 error-stack.workspace = true
 parking_lot.workspace = true
+rpds.workspace = true
 smol_str.workspace = true
 serde.workspace = true
 tracing.workspace = true

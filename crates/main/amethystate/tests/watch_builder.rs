@@ -1,8 +1,6 @@
 use amethystate::store::builder::StoreBuilder;
-use amethystate::{LocalScope, MapChange, ReactiveMap, amethystate};
+use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 #[amethystate(prefix = "w")]
@@ -37,8 +35,6 @@ fn immediate_register_behaves_like_subscribe() {
     assert_eq!(*seen.lock().unwrap(), vec![1, 2]);
 }
 
-/// `external` and `with_source` could not be combined before: each pair of
-/// axes was its own method, and this pair had none.
 #[test]
 fn external_and_with_source_compose() {
     let (_s, cfg) = cfg();
@@ -66,98 +62,6 @@ fn external_and_with_source_compose() {
 }
 
 #[test]
-fn local_callback_need_not_be_send() {
-    let (_s, cfg) = cfg();
-    let mut ui = LocalScope::new();
-
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let cap = Rc::clone(&seen);
-
-    cfg.counter()
-        .subscription_with()
-        .local(&mut ui)
-        .register(move |v: &u64| cap.borrow_mut().push(*v));
-
-    cfg.counter().set(5).unwrap();
-    assert!(seen.borrow().is_empty(), "nothing runs before a drain");
-
-    ui.drain();
-    assert_eq!(*seen.borrow(), vec![5]);
-}
-
-#[test]
-fn local_coalesces_by_default() {
-    let (_s, cfg) = cfg();
-    let mut ui = LocalScope::new();
-
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let cap = Rc::clone(&seen);
-
-    cfg.counter()
-        .subscription_with()
-        .local(&mut ui)
-        .register(move |v: &u64| cap.borrow_mut().push(*v));
-
-    for n in 1..=4 {
-        cfg.counter().set(n).unwrap();
-    }
-    ui.drain();
-
-    assert_eq!(*seen.borrow(), vec![4]);
-}
-
-#[test]
-fn every_keeps_the_intermediate_changes() {
-    let (_s, cfg) = cfg();
-    let mut ui = LocalScope::new();
-
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let cap = Rc::clone(&seen);
-
-    cfg.counter()
-        .subscription_with()
-        .local(&mut ui)
-        .every()
-        .register(move |v: &u64| cap.borrow_mut().push(*v));
-
-    for n in 1..=4 {
-        cfg.counter().set(n).unwrap();
-    }
-    ui.drain();
-
-    assert_eq!(*seen.borrow(), vec![1, 2, 3, 4]);
-}
-
-#[test]
-fn map_changes_reach_a_local_subscriber() {
-    let (_s, cfg) = cfg();
-    let mut ui = LocalScope::new();
-
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let cap = Rc::clone(&seen);
-
-    cfg.items()
-        .subscription_with()
-        .local(&mut ui)
-        .every()
-        .register(move |change: &MapChange<String, u64>| {
-            cap.borrow_mut().push(match change {
-                MapChange::Insert { .. } => "insert",
-                MapChange::Update { .. } => "update",
-                MapChange::Remove { .. } => "remove",
-                MapChange::Clear { .. } => "clear",
-            });
-        });
-
-    cfg.items().insert("a".into(), &1).unwrap();
-    cfg.items().update("a", &2).unwrap();
-    cfg.items().remove("a").unwrap();
-    ui.drain();
-
-    assert_eq!(*seen.borrow(), vec!["insert", "update", "remove"]);
-}
-
-#[test]
 fn a_single_key_can_be_watched() {
     let (_s, cfg) = cfg();
     let seen = Arc::new(Mutex::new(0usize));
@@ -177,9 +81,6 @@ fn a_single_key_can_be_watched() {
     assert_eq!(*seen.lock().unwrap(), 1);
 }
 
-/// `external` on a map keeps the rule the flat methods had: only `Update` is
-/// filtered, because a key appearing or disappearing changes what the map holds
-/// and goes to everyone.
 #[test]
 fn external_on_a_map_filters_updates_only() {
     let (_s, cfg) = cfg();
@@ -204,7 +105,6 @@ fn external_on_a_map_filters_updates_only() {
     assert_eq!(*seen.lock().unwrap(), vec!["insert", "remove"]);
 }
 
-/// A field has no such carve-out: every one of its own writes is filtered.
 #[test]
 fn external_on_a_field_filters_everything_of_its_own() {
     let (_s, cfg) = cfg();

@@ -1,29 +1,31 @@
-//! Trying to break the write path rather than exercise it.
-//!
-//! Killing the process is not among the attempts, and deliberately: the whole
-//! document goes to a temporary file and only then replaces the target, so a
-//! dead process cannot tear the file. What that arrangement does not cover is
-//! power loss - the replacement can reach the disk while the contents are still
-//! in the write-back cache - and no test reproduces that. It is a reading of
-//! the write path, not something asserted here.
-//!
-//! Every claim is about a store rather than one engine, so each test runs
-//! against whatever is compiled in. A test that fails is the finding and says
-//! so in its `#[ignore]`, the way the `tamper_*` suite does.
-
 use amethystate::amethystate;
 use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use amethystate::store::config::{FileWritePolicy, WriteAttempts};
+use amethystate::store::{StoreBackend, StoreLayout};
+use amethystate_core::facts::{StoreFile, all};
 use amethystate_core::test_utils::TempPath;
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use std::fs::OpenOptions;
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use std::time::Instant;
 
-#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 mod common;
+use common::{per_engine, shape};
+
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
+fn sidecars(store: &amethystate::Store) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    match StoreBackend::files(store) {
+        Some(StoreLayout::Sidecars {
+            data,
+            meta,
+            data_backup,
+            ..
+        }) => (data, meta, data_backup),
+        other => panic!("a text store keeps its bookkeeping beside its data, got {other:?}"),
+    }
+}
 
 #[amethystate(prefix = "atomic")]
 pub struct Held {
@@ -34,20 +36,10 @@ pub struct Held {
     pub b: u32,
 }
 
-/// A path the store cannot use is refused where it is opened, and the refusal
-/// says which file and why.
-///
-/// The `Ok` arm this test used to carry - open, write, expect the flush to fail
-/// - was unreachable: with a directory on the store's own path every engine
-/// fails at `build`. What was left was a boolean and a substring search for the
-/// path, which any `Open` failure satisfies.
 #[test]
 fn a_path_that_cannot_be_written_is_reported() {
     let path = TempPath::new("atomic_unwritable");
 
-    // The store's own path, occupied by a directory: every write to it fails at
-    // the filesystem, which is the cheapest stand-in for a full disk or a
-    // permission error.
     std::fs::create_dir_all(path.path()).unwrap();
 
     let report = StoreBuilder::new(path.path())
@@ -60,32 +52,19 @@ fn a_path_that_cannot_be_written_is_reported() {
         "a path that cannot be used is an open failure, not a read or a codec one"
     );
 
-    let rendered = format!("{report:?}");
-    assert!(
-        rendered.contains(&path.path().display().to_string()),
-        "the report must name the file it could not use: {rendered}"
+    let named: Vec<&StoreFile> = all::<StoreFile, _>(&report).collect();
+    assert_eq!(
+        named,
+        vec![&StoreFile(path.path().to_path_buf())],
+        "the report must name the file it could not use, as a fact: {report:?}"
     );
+
+    insta::assert_snapshot!(per_engine("open_refused_by_a_directory"), shape(&report));
 }
 
-/// A write that lands leaves no temporary file behind.
-///
-/// The whole document goes to a file of its own before replacing the target, so
-/// a write that finished must have moved that file rather than copied it. A
-/// leak here is quiet - the store keeps working, and the user's config
-/// directory fills up with `.tmpXXXXXX` a byte at a time.
-///
-/// This used to litter the directory with invented names and assert the store
-/// still opened, which proved nothing: no engine enumerates its own directory,
-/// it opens the path it was given. The litter could not have been noticed
-/// whatever the write path did.
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
 fn a_write_that_landed_leaves_no_temporary_behind() {
-    // A directory of its own. The temporary file `persist_atomic` makes is
-    // named by `NamedTempFile`, so it shares nothing with the store's own name
-    // and cannot be found by matching against it - only by having nothing else
-    // in the directory to confuse it with. The shared temp directory is where
-    // the rest of this file's stores live, and they write while this one does.
     let base = TempPath::new("atomic_leftover");
     let dir = base.path().with_extension("dir");
     std::fs::create_dir_all(&dir).unwrap();
@@ -101,36 +80,36 @@ fn a_write_that_landed_leaves_no_temporary_behind() {
         store.save_now().unwrap();
     }
 
-    let mut left: Vec<String> = std::fs::read_dir(&dir)
+    let mut found: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
-        .filter_map(Result::ok)
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|name| !name.starts_with("settings"))
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
         .collect();
-    left.sort();
+    found.sort();
+
+    let (data, meta, _) = sidecars(&store);
+    let mut expected: Vec<String> = [data, meta]
+        .iter()
+        .map(|file| file.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    expected.sort();
 
     drop(store);
     let _ = std::fs::remove_dir_all(&dir);
 
-    assert!(
-        left.is_empty(),
-        "eight writes left {left:?} beside the store; the temporary file is \
-         meant to become the target, not to accumulate next to it"
+    assert_eq!(
+        found, expected,
+        "eight writes left more beside the store than the store's own two files; \
+         the temporary file is meant to become the target, not to accumulate next to it"
     );
 }
 
-/// The text engines copy the data file to `.bak` on open, so a failed migration
-/// can put it back. A process that dies *during* a migration therefore leaves a
-/// good backup beside a half-migrated file - and the next open must not treat
-/// that file as the thing worth backing up.
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-#[ignore = "known: `create_backups` on open copies the data file over the backup \
-            before anything reads either, so a process killed mid-migration loses \
-            the only good copy on the next start"]
-fn a_backup_is_not_overwritten_by_the_file_it_exists_to_replace() {
+fn a_half_written_file_is_recovered_from_the_backup_beside_it() {
     let path = TempPath::new("atomic_backup");
 
+    let data;
+    let backup;
     {
         let store = StoreBuilder::new(path.path())
             .backend(common::text_backend())
@@ -139,37 +118,39 @@ fn a_backup_is_not_overwritten_by_the_file_it_exists_to_replace() {
         let held = Held::new_with(&store).unwrap();
         held.a().set(99).unwrap();
         store.save_now().unwrap();
+
+        let (found, _, found_backup) = sidecars(&store);
+        data = found;
+        backup = found_backup;
     }
 
-    let good = std::fs::read_to_string(path.path()).unwrap();
+    let good = std::fs::read_to_string(&data).unwrap();
 
-    // What a process killed mid-migration leaves behind: the backup it took on
-    // open, and a data file that never finished being rewritten.
-    // `backup_of` appends `.bak` to the whole file name.
-    let mut backup_name = path.path().file_name().unwrap().to_os_string();
-    backup_name.push(".bak");
-    let backup = path.path().with_file_name(backup_name);
+    //@show what a process killed mid-migration leaves behind
     std::fs::write(&backup, &good).unwrap();
-    std::fs::write(path.path(), "{ this never finished").unwrap();
+    std::fs::write(&data, "{ this never finished").unwrap();
+    //@show-end
 
-    let _ = StoreBuilder::new(path.path())
-        .backend(common::text_backend())
-        .build();
+    {
+        let reopened = StoreBuilder::new(path.path())
+            .backend(common::text_backend())
+            .build()
+            .expect("a half-written file with a good backup beside it must still open");
 
-    let backup_now = std::fs::read_to_string(&backup).unwrap_or_default();
+        assert_eq!(
+            Held::new_with(&reopened).unwrap().a().get(),
+            99,
+            "the value from the backup did not reach the reopened store"
+        );
+    }
+
     assert_eq!(
-        backup_now, good,
+        std::fs::read_to_string(&data).unwrap(),
+        good,
         "the only good copy was overwritten by the broken file it was there to replace"
     );
 }
 
-/// An antivirus, an indexer or a cloud client holding the target file open is
-/// the ordinary Windows failure, and it is a different class from a disk error:
-/// the same call succeeds a moment later. Opening the target with no sharing at
-/// all is exactly what those look like from here.
-///
-/// Only the text engines replace a file to write it; redb and sqlite hold their
-/// own handle and write through it, so there is no replacement to block.
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 #[test]
 fn a_file_held_by_someone_else_does_not_cost_the_old_contents() {
@@ -187,9 +168,6 @@ fn a_file_held_by_someone_else_does_not_cost_the_old_contents() {
 
     let before = std::fs::read(path.path()).unwrap();
 
-    // FILE_SHARE_READ and nothing else: replacing the file needs the existing
-    // handle to permit deletion, so this blocks the replacement while still
-    // letting the test read what survived.
     const FILE_SHARE_READ: u32 = 1;
     let blocker = OpenOptions::new()
         .read(true)
@@ -218,16 +196,6 @@ fn a_file_held_by_someone_else_does_not_cost_the_old_contents() {
     assert_ne!(std::fs::read(path.path()).unwrap(), before);
 }
 
-/// The reason the replacement is retried at all: the holder is transient, and
-/// letting go a moment later is the ordinary case. So a single `save_now` has to
-/// span the holder, not fail and leave the caller to try again - which is what
-/// makes this different from the test above, where the file is free by the time
-/// the second save starts.
-///
-/// The holder lets go half a budget in: late enough that the first attempt has
-/// already failed, early enough that attempts are left. A budget of one passes
-/// every other test in this file and fails this one, which is the whole point
-/// of it.
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 #[test]
 fn a_holder_that_lets_go_mid_write_does_not_cost_the_write() {
@@ -273,12 +241,6 @@ fn a_holder_that_lets_go_mid_write_does_not_cost_the_write() {
     );
 }
 
-/// The other end of the same budget. A holder that never lets go must not hang
-/// the caller, and the failure must name the file and carry what the OS said -
-/// otherwise `is_err()` above would accept an error from anywhere.
-///
-/// The elapsed time is asserted because it is the only evidence the attempts
-/// happened at all: a path that gives up immediately reports the same error.
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 #[test]
 fn a_holder_that_never_lets_go_is_given_up_on() {
@@ -330,10 +292,6 @@ fn a_holder_that_never_lets_go_is_given_up_on() {
     );
 }
 
-/// The two tests above read the default policy, so a store that ignored the
-/// configuration entirely would still pass them. This one asks for a budget
-/// nobody would arrive at by accident: no retry at all, which turns the same
-/// blocked write into an immediate failure.
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 #[test]
 fn a_policy_that_says_not_to_retry_is_obeyed() {
@@ -369,8 +327,6 @@ fn a_policy_that_says_not_to_retry_is_obeyed() {
     );
 }
 
-/// Content that parses as far as it goes and then turns to rubbish. A store
-/// that reads the good prefix and stops has accepted a file nobody wrote.
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
 fn valid_content_followed_by_rubbish_is_refused() {

@@ -6,8 +6,6 @@ use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
 use crate::{Change, FieldCore, InterceptDisposer, Signal, SignalSubscription};
 use error_stack::{Report, ResultExt};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -176,22 +174,5 @@ where
         F: Fn(Change<T>) -> Option<Change<T>> + Send + Sync + 'static,
     {
         self.core.intercept(self.path.clone(), callback)
-    }
-}
-
-impl<T, B> crate::pipeline::Reactive<T> for Field<T, B>
-where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    B: AsyncSubscriptionBackend,
-{
-    fn get(&self) -> T {
-        self.core.get()
-    }
-
-    fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
-    where
-        F: for<'a> Fn(&'a T, Option<Uuid>) + Send + Sync + 'static,
-    {
-        self.core.subscribe_with_source(callback)
     }
 }

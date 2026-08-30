@@ -62,8 +62,7 @@ quietly rewriting the snapshot.
 One difference from the GitHub workflow worth knowing: that one excludes
 `amethystate-gpui`, which needs a toolchain the hosted runners lack.
 
-`sqlite` compiles SQLite in; `sqlite-bundled` is the old name for it and now
-means the same thing.
+`sqlite` compiles SQLite in from source, so building it needs a C toolchain.
 
 ## Documentation examples
 
@@ -84,18 +83,22 @@ and both sides need updating together.
 
 ## Tests worth knowing about
 
-`tests/expand/` holds macro expansion goldens checked by `macrotest`, and
-`tests/fails/` holds `trybuild` cases with expected compiler output. Both are
+`tests/fails/` holds `trybuild` cases with the compiler output each one is
+expected to produce, and `tests/expand/` holds declarations that must keep
+compiling. Both run from `compile_tests.rs`. The `.stderr` files are
 regenerated rather than edited by hand:
 
 ```bash
-MACROTEST=overwrite cargo test -p amethystate --test root
 TRYBUILD=overwrite cargo test -p amethystate --test compile_tests
 ```
 
-Regenerate them only after reading the diff — they are the record of what the
-macro emits and of the errors users see, so a change there is a change to the
-public surface.
+Regenerate them only after reading the diff — they are the record of the errors
+users see, so a change there is a change to the public surface.
+
+What the macro expands *into* is not pinned. Every test file in the suite
+declares a struct through it, so a change that matters shows up as a failure
+somewhere that means something; a snapshot of the emitted tokens only records
+that the tokens changed.
 
 The trybuild goldens quote rustc diagnostics, which qualify type paths
 differently depending on what else is in scope, so they are checked in the

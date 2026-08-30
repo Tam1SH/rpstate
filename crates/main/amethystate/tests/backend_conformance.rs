@@ -123,7 +123,7 @@ fn open(backend: Backend, file: &TempPath) -> Store {
     StoreBuilder::new(file.path())
         .backend(backend)
         .debounce(Duration::from_secs(60))
-        .watch_interval(Duration::from_secs(60))
+        .watch_debounce(Duration::from_secs(60))
         .build()
         .expect("the store opened")
 }

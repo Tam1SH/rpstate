@@ -213,7 +213,7 @@ pub type PersistFailureCallback = Arc<dyn Fn(&Report<StorageError>) -> AfterGivi
 pub struct StoreConfig {
     pub path: PathBuf,
     pub save_debounce: Duration,
-    pub watch_interval: Duration,
+    pub watch_debounce: Duration,
     pub retry_policy: RetryPolicy,
 
     /// What one write to one file is worth, as against [`retry_policy`], which
@@ -247,7 +247,7 @@ impl StoreConfig {
         Self {
             path: path.into(),
             save_debounce: Duration::from_millis(300),
-            watch_interval: Duration::from_millis(500),
+            watch_debounce: Duration::from_millis(500),
             retry_policy: RetryPolicy {
                 interval: Duration::from_secs(5),
                 budget: Duration::from_secs(60),

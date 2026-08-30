@@ -44,7 +44,7 @@ fn a_failed_migration_leaves_the_snapshot_for_the_next_run() {
         store.save_now().unwrap();
     }
 
-    let (_store, report) = StoreBuilder::new(&path).build_with_report().unwrap();
+    let (_store, report) = StoreBuilder::new(&path).build_with_migration().unwrap();
 
     assert!(
         report.has_failures(),

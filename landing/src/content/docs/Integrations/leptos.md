@@ -12,7 +12,7 @@ Field handles are `Copy` indices, so they can be passed down through component p
 
 ```toml
 [dependencies]
-amethystate-leptos = { version = "*", features = ["tauri"] }
+amethystate-leptos = { version = "0.20", features = ["tauri"] }
 ```
 
 ## Defining state
@@ -104,30 +104,13 @@ view! {
 
 ### use_read_only_field
 
-Returns a `ReadSignal<T>` for a read-only field or a `lookup` field without `export_mut`.
+Returns a `ReadSignal<T>` for any field, with no setter beside it - for a value the component displays and never writes.
 
 ```rust
 let host = use_read_only_field(state.host);
 
 view! {
     <p>"Connected to: " {host}</p>
-}
-```
-
-### use_pipeline
-
-Derives a signal from one or more fields. The pipeline recomputes automatically when any input changes. It is cleaned up when the component unmounts.
-
-```rust
-let address = use_pipeline(move || {
-    (state.host, state.port)
-        .pipe()
-        .map(|(h, p)| format!("{h}:{p}"))
-        .dedupe()
-});
-
-view! {
-    <p>"Proxy Address: " <strong>{address}</strong></p>
 }
 ```
 

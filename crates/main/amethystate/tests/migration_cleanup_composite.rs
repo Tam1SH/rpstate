@@ -58,7 +58,7 @@ fn dropping_a_reactive_map_field_removes_its_entries() {
         .migrations(|m| {
             m.collect_codegen();
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     let _v2 = DropMap::new_with(&store).unwrap();
@@ -118,7 +118,7 @@ fn dropping_a_scalar_field_removes_its_value() {
         .migrations(|m| {
             m.collect_codegen();
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     let _v2 = DropScalar::new_with(&store).unwrap();
@@ -184,7 +184,7 @@ fn dropping_a_nested_struct_field_removes_its_leaves() {
         .migrations(|m| {
             m.collect_codegen();
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     let _v2 = DropNested::new_with(&store).unwrap();

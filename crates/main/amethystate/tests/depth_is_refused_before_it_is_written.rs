@@ -143,8 +143,8 @@ fn a_key_depth_cap_is_the_store_s_own(backend: Backend, label: &str) {
 
     assert_eq!(
         report.current_context(),
-        &StorageError::Path,
-        "a path deeper than allowed is about the path, not the value"
+        &StorageError::Depth,
+        "every name is a name a store can hold; there are too many of them"
     );
 
     insta::assert_snapshot!(named("refuses_past_the_key_cap", backend), shape(&report));

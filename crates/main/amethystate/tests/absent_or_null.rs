@@ -1,3 +1,7 @@
+//! Tags: option, toml, json, ron, choosing an engine
+//!
+//! Features: json, toml, ron
+//!
 //! What each engine writes for a value that is there and holds nothing.
 //!
 //! `{}` and `null` are different documents, and an absent key is a third thing
@@ -5,13 +9,11 @@
 //! schema can say about it: a property that may be null is not a property that
 //! may be missing, and the two are written differently.
 //!
-//! Measured rather than assumed, and the engines answer in two ways:
+//! The engines answer in two ways, and the run below says which is which.
 //!
-//! | engine | the document for `None` | `get::<Option<T>>` |
-//! | --- | --- | --- |
-//! | json | `"note": null` | `Some(None)` |
-//! | ron | `"note": None` | `Some(None)` |
-//! | toml | no such key | `None` |
+//! Note what the two that do have a null still do differently: ron spells the
+//! `Option` in the document, so a hand-edited file has to say `Some(...)`,
+//! while json writes the value bare and lets `null` carry the absence.
 //!
 //! TOML has no null, so a key holding nothing is a key that is not written.
 //! That is how every TOML config expresses an optional setting, and it means
@@ -23,6 +25,7 @@ use amethystate::store::StoreBackend;
 use amethystate::store::builder::{Backend, StoreBuilder, default_backend};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use std::error::Error;
 
 mod common;
 
@@ -36,7 +39,6 @@ fn note_path() -> StorePath {
     StorePath::from_segments(["maybe", "note"])
 }
 
-/// Whether the engine can write a key that is there and holds nothing.
 fn holds_nothing(backend: Backend) -> Option<Option<String>> {
     if backend.extension() == "toml" {
         None
@@ -45,63 +47,77 @@ fn holds_nothing(backend: Backend) -> Option<Option<String>> {
     }
 }
 
-/// The document engines write the file, so the file is the answer.
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn what_a_document_holds_for_nothing() {
-    let path = TempPath::new("absent_or_null");
-    let backend = common::text_backend();
-    let store = StoreBuilder::new(path.path())
-        .backend(backend)
-        .build()
-        .unwrap();
+fn what_a_document_holds_for_nothing() -> Result<(), Box<dyn Error + Send + Sync>> {
+    for backend in common::text_backends() {
+        let path = TempPath::new(&format!("absent_or_null_{}", backend.extension()));
+        let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
-    let held = Held::new_with(&store).unwrap();
-    held.note().set(Some("here".to_string())).unwrap();
-    store.save_now().unwrap();
-    let with_value = std::fs::read_to_string(path.path()).unwrap();
+        //@act
+        let held = Held::new_with(&store)?;
 
-    held.note().set(None).unwrap();
-    store.save_now().unwrap();
-    let with_nothing = std::fs::read_to_string(path.path()).unwrap();
+        //@show a value
+        held.note().durable().set(Some("here".to_string()))?;
+        let with_value = std::fs::read_to_string(path.path())?;
+        //@show-end
 
-    println!("--- some ---\n{with_value}");
-    println!("--- none ---\n{with_nothing}");
+        //@show the same key set to nothing
+        held.note().durable().set(None)?;
+        let with_nothing = std::fs::read_to_string(path.path())?;
+        //@show-end
 
-    assert_ne!(
-        with_value, with_nothing,
-        "a value and its absence must not write the same document"
-    );
+        let read: Option<Option<String>> = store.get(note_path())?;
+        //@end
 
-    let read: Option<Option<String>> = store.get(note_path()).unwrap();
-    assert_eq!(
-        read,
-        holds_nothing(backend),
-        "what the engine reads back for a value set to nothing"
-    );
+        common::measured(&[
+            ("engine", backend.extension()),
+            ("get::<Option<String>>", &format!("{read:?}")),
+            ("a value", with_value.replace("\r\n", "\n").trim()),
+            (
+                "the same key set to nothing",
+                with_nothing.replace("\r\n", "\n").trim(),
+            ),
+            ("lang", backend.extension()),
+        ]);
+
+        assert_ne!(
+            with_value, with_nothing,
+            "on {}: a value and its absence must not write the same document",
+            backend.extension()
+        );
+        assert_eq!(
+            read,
+            holds_nothing(backend),
+            "on {}: what the engine reads back for a value set to nothing",
+            backend.extension()
+        );
+    }
+
+    Ok(())
 }
 
-/// And a key that was deleted is a fourth state, which the engines that have a
-/// null keep apart from the third.
 #[test]
-fn nothing_and_gone_are_different() {
+fn nothing_and_gone_are_different() -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("absent_or_gone");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path()).build()?;
 
-    let held = Held::new_with(&store).unwrap();
-    held.note().set(None).unwrap();
+    let held = Held::new_with(&store)?;
+    held.note().set(None)?;
 
     assert_eq!(
-        store.get::<Option<String>>(note_path()).unwrap(),
+        store.get::<Option<String>>(note_path())?,
         holds_nothing(default_backend()),
         "set to nothing"
     );
 
-    StoreBackend::delete(&store, &note_path()).unwrap();
+    StoreBackend::delete(&store, &note_path())?;
 
     assert_eq!(
-        store.get::<Option<String>>(note_path()).unwrap(),
+        store.get::<Option<String>>(note_path())?,
         None,
         "deleted: there is no key"
     );
+
+    Ok(())
 }

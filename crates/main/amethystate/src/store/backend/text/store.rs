@@ -11,7 +11,7 @@ use crate::store::config::{FileWritePolicy, StoreConfig};
 use crate::store::depth::{Depth, DepthBudget};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::facts::{Facts, Key, StoreFile as StoreFileFact};
-use crate::store::traits::MigrationBackendAdapter;
+use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use crate::store::util::debouncer::Debouncer;
 use crate::store::{
     EXTERNAL_EDIT, InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback,
@@ -69,22 +69,6 @@ impl<D> Clone for StoreFile<D> {
     }
 }
 
-/// The copy a store keeps of one of its own files while rewriting it.
-///
-/// The whole name is kept and `.bak` added, rather than the extension swapped:
-/// swapping it gives `store.bak` for both `store.db` and `store.meta`, so the
-/// second copy lands on the first and the data has no backup left. It also
-/// names a file the store did not create - a `store.bak` a person put there
-/// themselves - and overwrites it.
-fn backup_of(path: &Path) -> PathBuf {
-    let mut name = match path.file_name() {
-        Some(name) => name.to_os_string(),
-        None => return path.with_extension("bak"),
-    };
-    name.push(".bak");
-    path.with_file_name(name)
-}
-
 /// One record's key in the metadata file, which is flat.
 ///
 /// Reading the data file needs the schema, and the schema is in here - so this
@@ -96,7 +80,14 @@ pub(super) fn meta_key(kind: &str, path: &StorePath) -> StorePath {
 
 impl<D: TextDocument> StoreFile<D> {
     pub fn new(path: PathBuf, initial_doc: D, write_policy: FileWritePolicy) -> Self {
-        let backup_path = backup_of(&path);
+        let backup_path = match path.file_name() {
+            Some(name) => {
+                let mut name = name.to_os_string();
+                name.push(".bak");
+                path.with_file_name(name)
+            }
+            None => path.with_extension("bak"),
+        };
         Self {
             path,
             backup_path,
@@ -115,6 +106,49 @@ impl<D: TextDocument> StoreFile<D> {
                 .attach_with(|| format!("backup: {}", self.backup_path.display()))?;
         }
         Ok(())
+    }
+
+    /// Reads the file, and backs up only what it could read.
+    ///
+    /// The backup is taken after the read rather than before it, because the
+    /// copy exists to hold a readable file: a previous open that died partway
+    /// through a migration leaves a good backup beside a half-written data
+    /// file, and copying that file over the backup destroys the only intact
+    /// copy - in exactly the case the backup is kept for.
+    ///
+    /// So a file that will not parse leaves the backup alone and is recovered
+    /// from it when it holds something readable.
+    pub fn load_and_back_up(&self) -> StorageResult<D> {
+        match self.load_or_empty() {
+            Ok(doc) => {
+                self.create_backup()?;
+                Ok(doc)
+            }
+            Err(unreadable) => match self.recover_from_backup() {
+                Some(doc) => {
+                    warn!(
+                        path = %self.path.display(),
+                        backup = %self.backup_path.display(),
+                        "the file could not be read and was restored from the backup a \
+                         previous open left behind"
+                    );
+                    Ok(doc)
+                }
+                None => Err(unreadable),
+            },
+        }
+    }
+
+    fn recover_from_backup(&self) -> Option<D> {
+        if !self.backup_path.exists() {
+            return None;
+        }
+
+        let content = std::fs::read_to_string(&self.backup_path).ok()?;
+        let doc = D::parse(&content).ok()?;
+        std::fs::copy(&self.backup_path, &self.path).ok()?;
+
+        Some(doc)
     }
 
     pub fn load_or_empty(&self) -> StorageResult<D> {
@@ -183,12 +217,16 @@ impl<D: TextDocument> Clone for StoreFiles<D> {
 }
 
 impl<D: TextDocument> StoreFiles<D> {
-    pub fn create_backups(&self) -> StorageResult<()> {
-        self.data.create_backup().attach("role: the store's data")?;
-        self.meta
-            .create_backup()
+    pub fn load_and_back_up(&self) -> StorageResult<(D, D)> {
+        let data = self
+            .data
+            .load_and_back_up()
+            .attach("role: the store's data")?;
+        let meta = self
+            .meta
+            .load_and_back_up()
             .attach("role: the store's schema bookkeeping")?;
-        Ok(())
+        Ok((data, meta))
     }
 
     pub fn persist(&self) -> StorageResult<()> {
@@ -283,16 +321,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             meta: StoreFile::new(meta_path, D::empty(), config.file_write),
         };
 
-        files.create_backups()?;
-
-        let initial_data = files
-            .data
-            .load_or_empty()
-            .attach("role: the store's data")?;
-        let initial_meta = files
-            .meta
-            .load_or_empty()
-            .attach("role: the store's schema bookkeeping")?;
+        let (initial_data, initial_meta) = files.load_and_back_up()?;
 
         *files.data.doc.write() = initial_data.clone();
         *files.meta.doc.write() = initial_meta.clone();
@@ -356,7 +385,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let persisted_watch = persisted.clone();
         let meta_path = files.meta.path.clone();
 
-        let watch_debouncer = Arc::new(Debouncer::new(config.watch_interval, move || {
+        let watch_debouncer = Arc::new(Debouncer::new(config.watch_debounce, move || {
             sync_external_changes::<D>(
                 &files_watch.data,
                 &watch_subs,
@@ -781,6 +810,18 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
 
     fn save_now(&self) -> StorageResult<()> {
         self.inner.save_now()
+    }
+
+    fn files(&self) -> Option<StoreLayout> {
+        let data = &self.inner.files.data;
+        let meta = &self.inner.files.meta;
+
+        Some(StoreLayout::Sidecars {
+            data: data.path.clone(),
+            meta: meta.path.clone(),
+            data_backup: data.backup_path.clone(),
+            meta_backup: meta.backup_path.clone(),
+        })
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {

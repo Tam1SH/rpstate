@@ -2,7 +2,7 @@
 //!
 //! `Signal<T>` stores `Arc<T>` and hands subscribers `&T`. So a layer that
 //! forwards a change onwards - a store subscription applying a committed write,
-//! a pipeline pushing to a downstream signal - clones the `T` it was lent and
+//! a callback pushing to a downstream signal - clones the `T` it was lent and
 //! the next hop allocates a fresh `Arc` for it. Every hop pays a clone and a
 //! malloc.
 //!
@@ -47,7 +47,7 @@ impl<T: Send + Sync + 'static> ArcSignal<T> {
 
 /// A chain of `hops` signals, each forwarding to the next.
 ///
-/// The shape a pipeline has: a value arrives at the head and is handed on.
+/// The shape forwarding has: a value arrives at the head and is handed on.
 fn today<T: Clone + Send + Sync + 'static>(initial: T, hops: usize) -> Signal<T> {
     let head = Signal::new(initial.clone());
     let mut current = head.clone();
@@ -118,7 +118,7 @@ fn a_write_with_nobody_listening(c: &mut Criterion) {
     group.finish();
 }
 
-/// Three hops, which is an ordinary pipeline: a field, a mapped view, a sink.
+/// Three hops, which is an ordinary chain: a field, a derived view, a sink.
 fn a_write_travelling_a_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("signal/set/three hops");
 
@@ -164,7 +164,7 @@ fn the_allocation_by_itself(c: &mut Criterion) {
 ///
 /// `Signal::get` is `self.value.load().as_ref().clone()`, so every read copies
 /// the whole value. A retain-mode UI does that per frame per field, and a
-/// pipeline hop does it once per source to build its own value - which is why
+/// forwarding hop does it once per source to build its own value - which is why
 /// the chain above costs what it does, and why `set` taking an `Arc` would only
 /// have fixed the smaller half.
 ///

@@ -105,7 +105,7 @@ fn open(file: &TempPath) -> Result<Store, String> {
     StoreBuilder::new(file.path())
         .backend(Backend::Json)
         .debounce(Duration::from_secs(60))
-        .watch_interval(Duration::from_secs(60))
+        .watch_debounce(Duration::from_secs(60))
         .build()
         .map_err(|e| brief(&format!("{e:#}")))
 }

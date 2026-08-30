@@ -9,6 +9,31 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
+## The book never says what an error is
+
+There is no page on errors, and the book leaves the reader to assume an enum.
+It is a `Report`: a chain of contexts, each carrying attachments that name the
+thing that failed. A map refusing to open over one bad entry reports
+
+```
+the store could not carry out the write
+├╴prefix: ports
+╰─▶ the value could not be encoded or decoded
+    ├╴prefix: ports
+    ├╴entry: http
+    ╰╴key type: u16
+```
+
+so the `Display` alone - "the store could not carry out the write" - is the
+least of what is there, and a caller that prints it throws away the part that
+says which entry. That is the page: what a report carries, how to read one, and
+how to reach an attachment rather than formatting the whole thing. It belongs in
+Concepts.
+
+`RFC-limits.md` and `landing/src/content/docs/Store/limits.md` already lean on
+attachments - the refusal that says where the depth budget went - so the page
+has a second caller before it is written.
+
 ## `durable()` on one field commits everyone else's unfinished writes
 
 `durable()` on one field also lands every buffered write under the same prefix.
@@ -279,7 +304,7 @@ repository, its tests, its examples and the book:
 | --- | --- |
 | `backend` | 85 |
 | `debounce` | 25 |
-| `watch_interval` | 9 |
+| `watch_debounce` | 9 |
 | `parallel_reads` | 6 |
 | `retry_interval` | 0 |
 | `retry_budget` | 0 |
@@ -312,7 +337,7 @@ Returning the parent with `.done()` is the shape to avoid: it needs a back
 pointer, makes indentation load-bearing, and cannot be reused.
 
 **`disk`, not `persist`**, because the group is honestly two-way: `debounce`,
-`retry_*` and `on_persist_failure` are about writing, `watch_interval` is about
+`retry_*` and `on_persist_failure` are about writing, `watch_debounce` is about
 noticing somebody else's write.
 
 **What stays flat, and why it is not the same reason.** `backend` because 85
@@ -327,9 +352,10 @@ is right there: the threshold below which splitting costs more than it saves,
 today the hardcoded `PARALLEL_MIN_LEN = 1024`. If that never comes out, leave
 `parallel_reads` flat rather than keep a group for it.
 
-**Cost:** `debounce`, `watch_interval` and `parallel_reads` move, which is forty
+**Cost:** `debounce`, `watch_debounce` and `parallel_reads` move, which is forty
 call sites in this repository alone and every caller outside it. Breaking, and
 not the kind a one-line changelog entry covers - it wants a before-and-after.
+
 
 ## A value coming in from the disk passes through nothing
 
@@ -413,6 +439,41 @@ generated constructor is `fn new_with(store: &Store) -> StorageResult<Self>`
 already. Today an unreadable field quietly takes its default and construction
 succeeds; refusing is declining to hand back an object that looks like it worked.
 
+### Substituting the default for a value that would not decode is wrong
+
+Both answers above are about opening. A field that has been running and then
+meets an undecodable *change* - the file edited from outside, a migration
+leaving something behind - is a different moment, and what happens there is not
+a policy anyone chose. `primitives_factory` forwards `on_unreadable`, which is
+`default.clone()`, so the live value is replaced by a shipped constant.
+
+Three things are wrong with it, and the third is the one that matters.
+
+**It destroys what the person is looking at.** A window dragged to a good size
+snaps back to the factory one because another process wrote nonsense into the
+file. The default is a compile-time guess and the least likely correct value at
+that moment.
+
+**It wakes the subscribers with it.** This is not a quiet fallback: the signal
+fires, so the UI actively redraws to the wrong value. Doing nothing at all would
+be strictly better than what happens now.
+
+**It collapses a distinction the rest of the library defends.** A deleted key
+forwards `on_delete`, which is also the default. So "the key is gone" and "the
+value will not decode" become the same observable, and the only way to tell
+them apart is `try_get`, which nothing obliges a caller to reach for. Everything
+else here works hard to keep absent, null and deleted separate - the whole of
+`absent_or_null.rs` is about that - and this hands three states to one value.
+
+**Keep the last decodable value instead.** It is what is on screen, it is the
+last thing the store actually agreed with, and `try_get` already exists to say
+the store no longer does. Keeping it makes `try_get` load-bearing rather than
+advisory, which is the point of having it.
+
+That gives three answers, and they are not a ladder - they answer different
+moments: refuse at the open, default when nothing is known, keep when something
+is.
+
 **And it is the default.** A declared path that cannot be read is far more often
 a bug or a tampered file than a thing to shrug at, and shrugging is what makes a
 stale value indistinguishable from a successful write - the failure the
@@ -480,6 +541,22 @@ they become how a *deliberately* lenient field says it fell back.
 structs; the application does, by name, one call site at a time. Three prefixes
 refusing is three ordinary `?` in the caller's own control flow, and there is no
 moment at which the store could decide to give up - it was never the one asking.
+
+### Where this lands in the book
+
+`Concepts/defining-structs.md`, beside the default and the interceptors - it is
+the third thing a field declares about itself, and the page a reader is already
+on when they ask what happens to a value that will not come back. The store and
+prefix scopes are the same section, since the three read as one dial at three
+scales and separating them is what makes people reach for the wrong one.
+
+The same page owes a section on **serde attributes**, which it has never had.
+`#[serde(rename)]`, `skip`, `flatten` and `default` change what a type
+*serialises as* without changing what it *is*, and this library addresses values
+by a path built from the field's own name - so the two disagree in ways that are
+silent. `tests/probe_serde_attributes.rs` already measures every case across
+every engine, so the page is a `//@show` away rather than something to write out
+and hope.
 
 ### The list this has to be checked against
 
@@ -928,12 +1005,13 @@ Two things to settle while doing it:
 
 - **The lock is wrong.** `cache: Arc<Mutex<HashMap<K, V>>>` serialises readers
   against each other for no reason. Once reads actually go through it, that is
-  the hot path - and the load is many readers against an occasional writer, so
-  `DashMap` fits it better than one `RwLock` over the whole map: readers on
-  different shards never meet. Its own trap is worth knowing before it bites -
-  holding a reference into the map while touching the same shard again
-  deadlocks, so `entries` has to collect rather than hand out an iterator that
-  keeps shard guards alive.
+  the hot path, and the load is many readers against an occasional writer. Take
+  the shape `MapCache` already uses - `ArcSwap<rpds::RedBlackTreeMapSync>`,
+  measured in `RFC-map-locking.md` - rather than sharding: a read holds nothing,
+  so `entries` can lend instead of collecting, and a reader that touches the map
+  again mid-walk is ordinary. `DashMap` would serve the read load too, and
+  brings the trap this one just got rid of: hold a reference into the map, touch
+  the same shard, deadlock.
 - **Staying in sync.** The cache is currently filled by `map_apply_remote_change`
   off the store subscription, which covers writes and external file edits. That
   path has to remain the only writer, or the two diverge again.
@@ -1014,6 +1092,26 @@ opt a field out of expansion.
 
 Checked and clean: `cfg!(feature = "tauri")` reads the right crate's features,
 since the facade forwards the feature to the macro crate.
+
+### The book says this out loud, and will have to be rewritten
+
+`landing/src/content/docs/State/defining-structs.md` has a `#[derive(AmeType)]`
+section. It used to claim a *unique* `TYPE_HASH`, which the collisions above
+disprove; it now says the hash is a summary rather than an identity, that
+distinct shapes can share a number, and that a change landing on the same number
+goes unnoticed with no drift reported.
+
+That is the honest description of today and it is not a description anyone wants
+to keep. Whatever replaces the hash - a wider one, a structural fingerprint, a
+recorded shape rather than a number - changes what that section says and how
+much of it is a warning. Rewrite it with the change rather than after it: the
+paragraph exists to stop a reader trusting the gate, and it should stop existing
+the moment the gate is worth trusting.
+
+The same section is also where `AmeType`'s missing impls will surface. `char`,
+`()`, `Box<T>`, `Arc<T>`, `BTreeMap`, `HashSet`, arrays and tuples have none
+today, and the page does not say so - a reader meets it as a compile error on a
+field they had no reason to think was special.
 
 **Direction.** Widening the hash does not fix any of this - every collision
 above is structural, not a birthday collision. Two shapes are worth considering:
@@ -1571,86 +1669,6 @@ attribute (`prefix = "a.b"` is two levels, and `key` reads the same way) but is
 part of a single name in `Kv::namespace("a.b")` - which is deliberate on the
 `Kv` side, pinned by a doctest, and unmentioned on either.
 
-## The error model: `error-stack`, and what it has to buy
-
-### What is wrong now
-
-Ten `thiserror` enums, nested by `#[error(transparent)]`. `StorageError` wraps
-five engines plus the codec, the migration engine and `StorePathError`;
-`WriteError` wraps `StorageError` in turn. Transparent nesting keeps the
-innermost message and throws away every layer that knew something useful, so
-what reaches a caller is the engine's sentence and nothing else:
-
-    Error: no such table: data
-
-Which path, which store, which operation, which prefix a migration was on - all
-of it was known at some frame on the way out and none of it is in the value. The
-enums cannot fix this by adding fields: the context differs per call site, not
-per variant, and a variant per call site is not a design.
-
-Three consequences already written down elsewhere in this file:
-
-- a key that will not parse is skipped in silence, because there is nowhere to
-  put "which key, in which file" (the section below);
-- the conformance suite cannot assert failures, only successes, because the
-  errors are not distinguishable enough to assert on (the section near the end);
-- a failed migration reports the engine's error, not which prefix or which step
-  it was on.
-
-### What `error-stack` gives
-
-A `Report<C>` is one context type plus a stack of frames, each carrying
-attachments. The context is the *kind* of failure; the attachments are the
-*particulars*, added by whoever knew them:
-
-    store.get_raw(path)
-        .change_context(StorageError::Read)
-        .attach_printable_lazy(|| format!("path: {path}"))?;
-
-The type stays one type. The message becomes the whole chain, printed as a tree,
-with each attachment beside the frame that added it. That is precisely the shape
-this library needs, because the useful context is always positional.
-
-`stackerror` was the other candidate and is the wrong one here: it makes errors
-opaque plus a code, which suits a boundary crate, not one whose callers branch
-on what happened.
-
-### The shape it becomes
-
-- Keep the enums as *contexts*, but shrink them. A context should name what
-  failed, not restate the cause: `StorageError::{Read, Write, Flush, Open,
-  Migrate, Decode, Encode}` rather than one variant per engine. The engine's own
-  error becomes an attached frame.
-- Public signatures become `Result<T, Report<StorageError>>` and
-  `Result<T, Report<WriteError>>`. `StorageResult<T>` and `WriteResult<T>` stay
-  as the aliases; most call sites do not change shape.
-- Engine crates keep their own error types and stop being variants of
-  `StorageError`; they attach.
-- `?` keeps working through `change_context`, but every `?` that crosses a layer
-  boundary has to name what it was doing. That is the actual work, and the
-  actual value.
-
-### Order
-
-1. Add the dependency and convert `amethystate-core` first - it has the
-   smallest surface (`WriteError<E>`, `StorePathError`) and everything else
-   depends on it.
-2. `StorageError`: collapse the engine variants into contexts, attach the engine
-   errors. Everything compiles at each step because the alias absorbs it.
-3. Attach at the boundaries that know something: path on every store operation,
-   file on every text-engine operation, prefix and step on every migration.
-4. Then, and only then: replace the silent `else { continue }` skips with a
-   skip that carries a report, and write the backend conformance suite's failure
-   half.
-
-### What it costs
-
-Every `From` impl that exists only to nest one enum in another goes away;
-`reactive/error.rs`'s hand-written `From<core::WriteError<E>>` goes with it. The
-enums get smaller. The cost is at the `?` sites: a bare `?` across a layer is no
-longer enough, and there are on the order of a few hundred. That is the point -
-each one is a place where context is being dropped today.
-
 ## A key that will not parse disappears from a scan without a word
 
 The text backends rebuild a key from the document tree and read it back with
@@ -1763,13 +1781,13 @@ about the two hashes covers what that costs.
 
 ## `build()` runs no generated migrations, and nothing at the call site says so
 
-`build_with_report` calls `collect_codegen` before opening; `build` does not.
+`build_with_migration` calls `collect_codegen` before opening; `build` does not.
 Both open a store, both succeed, and only one runs the steps `#[migrate]`
 emitted. A program that opens with `build` compiles, starts, and silently skips
 every generated migration - and then the version gate sees a prefix behind the
 code and reports drift for a reason that has nothing to do with the data.
 
-`init_global` goes through `build_with_report`, so the same application migrates
+`init_global` goes through `build_with_migration`, so the same application migrates
 or does not depending on which of the two setups it copied.
 
 Either `build` should collect too, or it should refuse to open when a generated
@@ -1829,7 +1847,7 @@ today that is silent in exactly the case that matters:
 - but the target version reaches the plan through `collect_codegen`. Without
   it the plan never learns that version 2 is expected, so there is nothing to
   compare and no gap to report;
-- and `build` drops the report without logging, where `build_with_report` calls
+- and `build` drops the report without logging, where `build_with_migration` calls
   `log_to_tracing`.
 
 So before the default moves, the target version has to come from the type
@@ -1851,123 +1869,17 @@ The macro emits the entry as a `const` named for the function - uppercased, so
 lives once. `tests/migration_explicit.rs` is one fixture opened twice: the step
 is invisible to the sweep, and runs when it is handed over.
 
-## Opening a large map, and where the time actually went
+## The write path is a fifth of the allocations and nobody has looked
 
-Measured because the reactive-table design needed a number and the one it had
-was an extrapolation. At a million entries on redb, committed, warm:
+The read path was measured and worked through; what the profile still shows
+above the irreducible costs is the *write* side. `path::join`, `try_push`,
+`get_erased` and `committed_or_buffered` are around a fifth of the blocks in a
+run that fills a store, and none of them has been examined.
 
-| | before | after |
-|---|---|---|
-| `scan_keys` | 1.31 s | 0.99 s |
-| `scan_prefix` | 1.42 s | 1.11 s |
-| open | 2.45 s | 1.73 s |
-
-**Two guesses were wrong before a profiler settled it.** Reserving capacity in
-the two hash maps an open builds - `load_map`'s `HashMap` and the projection's
-`DashMap`, both of which grew from nothing - changed nothing measurable. The
-capacity is still reserved, because sizing a map whose size is known is right,
-but it bought nothing and is not a performance change. Then the sampling
-profile said a third of the run was in `RtlFreeHeap` and friends and named no
-single hot function of ours, which reads as allocation-bound, spread thin.
-
-**`dhat` is what answered it**, by counting blocks and attributing them, where
-a sampling profile only says how much time the allocator got. At 20 000
-entries, `StorePath::parse_joined` was the largest single site at 18% of all
-allocations, and `split_checked` - splitting a key into a level per `Arc<str>`
-- another 14%. Both for levels that the map load reads once and the flat
-engines never read at all.
-
-**So a `StorePath` splits its levels only when asked.** `parse_joined`
-validates the string without allocating - it has to stay eager, because a key
-that will not parse must be refused where it is read - and defers the split.
-`PartialEq` and `Hash` moved to the joined form, where `Ord` already was, which
-is sound because the escaping is injective and which stops equality from waking
-the levels. `StorePath::name_under` reads the level below a prefix straight off
-the joined string, borrowing unless the name carries an escape, and `load_map`
-uses it instead of `starts_with` plus `segment_at`. After that `split_checked`
-does not appear in the allocation profile at all.
-
-That also makes `Borrow<str>` sound for the first time - all three of `Eq`,
-`Ord` and `Hash` now answer from one form - so a map keyed by paths could be
-probed with a key a flat engine already holds. Not implemented, but the door is
-open and `a_path_hashes_like_its_key` is what keeps it that way.
-
-**Then the fold, which was the larger half.** A scan built a
-`BTreeMap<StorePath, Vec<u8>>` from the engine and searched it with the write
-buffer. Both sides already arrive sorted, so the tree bought nothing and cost a
-walk per committed key. Merging two sorted lists took `scan_prefix` at a
-million from 1.11 s to 0.60 s and an open from 1.73 s to 1.20 s - half again
-on top of the path work, and the largest single win of the lot. sqlite needed
-`ORDER BY key` added: it always depended on that order and the tree was hiding
-it.
-
-**And what a benchmark says depends on what it benchmarks.** Three conclusions
-here were drawn from measuring the wrong thing, and each survived until
-something forced a second look:
-
-- `.map(..).count()` throws its results away, and a compiler may throw the work
-  away with them. Folding instead.
-- Folding on `StorePath::len` forces the very split the laziness avoids, so it
-  priced work a scan does not do: parsing a million keys reads 448 ms that way
-  and 159 ms on `as_str`.
-- Decoding was measured on `u64` and called not worth dividing. A `u64` decodes
-  in eleven nanoseconds; a value with five fields in it takes two hundred, and
-  a million of them are 204 ms rather than 11. It divides ×4.9, same as the
-  keys. Nothing about the first measurement was wrong except what it was of.
-
-The crossover for both is between three hundred and a thousand entries, which
-is why `parallel_reads` does not divide below a thousand. Watch the shape of a
-run rather than its numbers when the machine is busy: a run that reported 10^4
-taking as long as 3·10^4 was contaminated, and the arithmetic said so before
-any intuition did.
-
-**The cache the deferral came with is gone too.** An `Arc<OnceLock<..>>` held
-the split once it happened, and that `Arc` was an allocation on every parsed
-key - 200 000 blocks of 2.7 million in a twenty-thousand-entry run, for a cache
-the scan path never read. `Segments::Deferred` carries nothing now, and a level
-comes back as a `Cow`: one holding an escaped separator is not a run of the
-joined string and has to be assembled, one without is borrowed from it. Total
-allocations fell to 2.44 million.
-
-Holding the cell inline was never an option - the macro builds paths as
-`static`, and a `OnceLock` anywhere in the type makes every `StorePath`
-non-`Freeze`, which the borrow checker refuses there. That is what the `Arc`
-was for.
-
-`TextDocument` still takes `&[&str]`, so the eleven call sites in the document
-engines borrow from the `Cow`s in a second vector. Left as it is deliberately:
-those engines walk short paths on small stores, which is what they are for.
-
-**And then the scan stopped building anything at all.** Pricing the value copy
-on its own said four percent and not worth a trait change, which was the wrong
-unit: a caller that decodes each entry where it sees it needs neither the copy
-*nor* the path built for the key, and the key's `Arc<str>` was twice the copy.
-Counted together it is the copy, the string, and the walk that parses it.
-
-`StoreBackend::visit_prefix` hands each entry to a closure as `(&str, &[u8])`,
-defaulted through `scan_prefix` so a backend outside this crate stays correct
-without knowing it exists. redb overrides it and streams: the buffer is
-collected and sorted first, because it is what is pending rather than what is
-stored and is small beside it, and the engine's side is ranged over with a
-cursor and merged into the visitor as it goes. `name_under_key` reads the level
-below a prefix straight out of a stored key, validating it on the way, so a
-malformed key is still refused where it is read.
-
-Loading a map on one thread takes that path. Dividing the decode wants the
-entries in hand, so `parallel_reads` keeps the owning scan - the two ways to
-open cost differently and both are worth having.
-
-Allocations in a twenty-thousand-entry run went 2.44 million to 2.32, and the
-value copy left the profile entirely. Opening a million five-field rows: 2.0 s
-to 1.87 s on one thread, and 1.55 s to 1.27 s across cores.
-
-**What is left cannot be taken.** A path built in code holds its own string,
+The irreducible part, for comparison: a path built in code holds its own string,
 and a value costs what its type costs to decode - two thirds of the difference
-between a `u64` map and a five-field one is `deserialize` building two
-`String`s per row, which no scan work touches. What the profile still shows
-above those is the *write* path: `path::join`, `try_push`, `get_erased` and
-`committed_or_buffered` are around a fifth of the blocks in a run that fills a
-store, and nothing here has looked at them.
+between a `u64` map and a five-field one is `deserialize` building two `String`s
+per row, which no scan work touches.
 
 ## `amethystate-tauri` does not compile
 
@@ -2042,6 +1954,56 @@ That is worth doing when the schema says what a description must contain, not
 before: what such a trait hands back is whatever ends up in the file. `role` and
 `optional` already come from the type, which was the part that blocked the
 schema.
+
+## A flush that can never succeed is retried at the same rate as one that can
+
+`run_with_retry` never looks at what failed. `op()` returns `Err`, the streak
+starts, and the same call is made again every `retry.interval` until it lands or
+the store is dropped. That is right for a full disk, which is what the loop was
+written for, and wrong for anything deterministic: the same document, serialized
+by the same codec, fails the same way at the same rate forever.
+
+**Most of this class never reaches the flush**, which is worth saying before the
+rest sounds worse than it is. `set_erased_inner` encodes the value where it is
+written - `D::serialize_node(value, &depth)` - so a `NaN` on json is refused at
+`set`, by the caller's own `?`, and never enters the buffer. What is left is the
+narrower case of a document that only fails *as a whole*.
+
+**And there the text engines make it everyone's problem.** `persist` serializes
+the entire document, so a value that cannot be rendered is not one stuck write:
+every later write to that store is carried by the same flush and lands nowhere
+either. The store goes on accepting writes into memory and never commits
+another one, which from the outside looks like the disk went away.
+
+`on_persist_failure` does not help here. It decides what writers are *told* from
+then on - `Fail`, `Ignore`, `Poison` - and nothing anywhere removes the value
+that caused it. There is no way to say "this one will never go; drop it and tell
+whoever wrote it".
+
+**The two pieces needed are both already there.** `StorageError` distinguishes
+`Codec` from `Flush`, so the loop can tell a deterministic failure from a
+transient one instead of treating both as weather. And a write carries
+`source: Option<Uuid>` - the instance that made it - so the value can be
+attributed back to a writer rather than only logged.
+
+**Naming the culprit exactly is the wrong thing to chase.** The buffer holds a
+document, not a list of writes, and a render that fails does not say which node
+did it - so pinning the one bad value means either a bisect over the document or
+a per-node re-render, and both are work in the path that is already failing.
+
+Handing back **every path written since the last flush landed** costs nothing
+and is enough. The writer knows what it wrote; a candidate set it can look at
+beats an error that names nothing. It is also the more honest answer, since a
+document can fail for a combination rather than for one node.
+
+Nothing records that set today. `set_node` bumps a `writes` counter and emits an
+event, and the path is already cloned there for the event, so the set goes in
+beside `writes.fetch_add` and is cleared where `save_now` moves `persisted`.
+Its size is bounded by the debounce window rather than by the store.
+
+The same list answers a second question already on this list: what a store still
+held when it died. `The last write of a store's life can fail without a trace`
+is the same gap seen from the other end.
 
 ## The debouncer has two states and needs four
 
@@ -2720,7 +2682,7 @@ From an audit of every bare `?` and every silent skip in `core/` and
 **A failed migration is invisible through `StoreBuilder::build`.** The engine
 turns a failure into data - `ComponentOutcome::Failed { error }` inside an
 `Ok(report)` - and `build` (`store/builder.rs:262`) discards the report.
-`build_with_report` calls `log_to_tracing`; `build` does not, and
+`build_with_migration` calls `log_to_tracing`; `build` does not, and
 `MigrationReport` is not `#[must_use]`. Confirmed by running it: a store at v1
 with a v2 step that returns `Err` opens successfully, silently, holding
 pre-migration data, and the application then runs new code against old data.
@@ -3139,228 +3101,9 @@ only thing addressing the class, and it no longer is.
 
 ## Decided: the codec's ceiling is a fact, key depth is a setting, portability is a policy
 
-Three things, and calling all of them "the depth limit" is what made the first
-draft of this wrong.
-
-**The codec's ceiling is a fact.** `ron` will not read past 64 whatever anyone
-configures; `serde_json` stops at 128 less the level its root object spends;
-`sonic_rs` under sqlite at 255; `toml` at about 81; `rmp_serde` has none and the
-stack ends around 3,200 instead. These were measured, are recorded above, and
-are not settings. A write past its own codec's ceiling produces a file that
-codec cannot read, so it is refused - always, unconditionally, with nothing to
-turn off. There is no number here for anyone to pick.
-
-What is counted is `path_depth + value_depth`, because the budget is shared:
-counting segments alone misses that a path of 64 on ron plus any nesting at all
-still kills the file, and counting the value alone misses that the path spends
-the same allowance. sqlite is the exception in the useful direction - its path
-is a `TEXT` key and costs nothing.
-
-**Key depth is configured, on its own.** How deep a path may go is the store's
-question rather than the codec's - the application knows the shape of its own
-paths, and a cap on them is cheap to check and catches a path that grows without
-anyone meaning it to. It also reserves the rest of the shared budget for values,
-which is the half nobody thinks about: sixty levels of path on ron leaves four
-for whatever is stored there, and a cap turns that into a startup error rather
-than a cliff a user's data walks off later.
-
-So one setting, about keys, refused at the moment a path is declared where the
-depth is known and the caller is standing there.
-
-**Portability is a policy, and depth is one row of it.** The reason to hold
-below your own codec is that a store written on json should still open on ron,
-and depth is not the only thing that stops it - it is just the first instance
-that happened to be found. The measurements above are already a table of what
-each engine cannot hold:
-
-| | refused by |
-| --- | --- |
-| non-finite floats | json, and sqlite because it carries json |
-| `u64::MAX` and anything past `i64` | toml |
-| `Option<Option<T>>` kept as two layers | json, sqlite, redb |
-| a unit enum variant | ron, through its node type |
-| a non-string map key | every text engine |
-| the sign of `-0.0` | sqlite |
-| depth past the ceiling | all five, at different numbers |
-
-That is the portability surface, and no single number describes it. So:
-
-```rust
-StoreBuilder::new(path)
-    .portable_across_engines()   // refuse whatever the weakest engine here
-                                 // could not give back
-```
-
-is one switch over the whole table, not a depth flag - which is why it should be
-built as a policy from the start even while depth is the only row implemented.
-Off by default, because a store nobody intends to move has no reason to pay for
-any of it.
-
-Deriving what it enforces rather than writing constants means it cannot go
-quietly stale: adding an engine that loses something new adds a row, and a
-store that was portable stops compiling or starts refusing - which is a real
-consequence that a hand-written figure would have hidden until someone tried to
-open a file.
-
-**A prefix may waive it.** Not to be given more - the codec will not allow that -
-but to say *this component is engine-specific and the rest of the store is not*.
-The schema snapshot is already per prefix, so the waiver lands on disk with the
-rest of the shape and a reader of the file sees which components are portable
-without running the program. Drift and migrations are already reckoned per
-prefix, so this is the same grain. Paths outside any declared prefix - `Kv`, a
-write at an arbitrary path - follow the store.
-
-**Validated at open**, against the engine: a prefix declaring 200 opened on ron
-fails at startup naming the prefix and both numbers. Once at build time for the
-developer, rather than when a user's data happens to go deep. The declaration is
-a budget the author writes, like a version - nothing derives it from the type,
-and nothing could.
-
-### What it looks like from the outside
-
-```rust
-StoreBuilder::new(path)
-    .backend(Backend::Json)
-    .limits(|l| {
-        l.key_depth(8)
-            .portable_across([Backend::Json, Backend::Sqlite])
-    })
-    .build()?
-```
-
-Both in the same closure, because both answer the same question - what this
-store will refuse to hold - and because a builder that grows a method per idea
-is already an entry in this file. `backend` and `build` stay at the top level;
-everything that configures goes into a group and reads as one chain, the way
-`file_write` and `located` already do.
-
-`portable_across` takes the set rather than meaning *all*, because "all" is a
-moving target - it changes under a store when an engine is added - and because
-the honest requirement is usually narrower. A desktop application that ships
-json and a mobile one that ships sqlite need those two and have no opinion about
-ron. With no argument it means every engine this build has, which is the strict
-reading for someone who wants it.
-
-**Portability is mostly a question about types, so it is answered once.** The
-schema on disk already records what every path is; the set of engines is known
-at `build()`. So a store walks its own declared shape at startup and refuses
-what no member of the set can hold, naming the field - a `HashMap<u64, _>` is
-not writable by any text engine whatever value goes in it, and finding that out
-at startup is the difference between a bug and a support ticket.
-
-What is left for the write is the residue that depends on the value rather than
-the type: a particular `f64` that is `NaN`, a particular `u64` past `i64::MAX`.
-Refusing every `f64` in a portable store would be absurd - almost every `f64` is
-fine - so the type check refuses only what is unportable in all its inhabitants,
-and the write catches the rest. That is the same split as the gate above, and it
-should be the same code.
-
-Three refusals, three moments, and each says what to do next:
-
-```
-a path is deeper than this store allows
-├╴path: ui.panels.left.tree.node.style.color.fg.alpha
-├╴levels: 9, and the limit is 8
-├╴set by: limits(|l| l.key_depth(8))
-╰╴note: what is stored here spends the same budget - json reads 127 levels in all
-
-a value cannot be read back from where it was put
-├╴path: doc.tree
-├╴the path spends 2 levels and the value adds 126
-├╴json reads at most 127
-╰╴note: a deeper value is written without complaint and the file will not open again
-
-this value is not portable, and this store asked to be
-├╴path: ui.ratio
-├╴value: NaN
-├╴json writes it as null and reads back nothing, and sqlite carries json
-╰╴note: keep it by waiving portability for this prefix, or drop it from limits
-```
-
-The last line of each is the part that is usually missing. A refusal with no way
-out is a wall, and the way out here is always one of three: change the value,
-waive the prefix, or drop the claim.
-
-### Where each half is enforced
-
-The ceiling is enforced **at the write**, by the counting serializer below, and
-it belongs to whichever codec is running. Nothing about it is deferred and
-nothing checks it against a setting, because there is no setting to check it
-against. redb is the one that most needs this: it has no ceiling of its own, so
-without an imposed one a deep value commits and then kills every process that
-opens the file afterwards.
-
-The refusal names the codec, its ceiling, the path, and how much of the budget
-the path spent - a caller told only "too deep" has to find the rest by
-experiment, and the path's share is the half they would not think of.
-
-Key depth is enforced **where a path is declared**, which is the earliest
-moment it is known and the only one where the caller is still standing next to
-the mistake.
-
-Portability is settled **at compile time** for what it can be - the set of
-engines the build has is known before the store exists - and at the write for
-the rest, since whether a particular value is representable everywhere is a
-question about that value.
-
-What all three deliberately avoid is a number the caller supplies and the store
-checks later. That would have to wait for `build()`, because `backend()` is
-ordinarily called after the setting and `default_backend()` answers until it -
-which is the extension bug recorded further down, where the builder named a file
-for one engine and opened it with another for exactly that reason. Nothing here
-takes a figure that only the engine can judge, so nothing here has to wait.
-
-### How the depth is measured without building anything
-
-Not by inspecting the value - by the time it reaches the engine the type is
-gone, it is a `&dyn erased_serde::Serialize`, and a five-level struct is
-indistinguishable from a five-level tree. Nor by building the node and walking
-it: building is the dangerous act, and on redb it is what overflows the stack.
-
-Serde is a push protocol and the engine is on the receiving end. A counting
-serializer wrapper is enough:
-
-```
-serialize_seq / _map / _struct  -> depth += 1; if depth > limit, Err
-end                             -> depth -= 1
-```
-
-Nothing is allocated, no node is built, the type is never needed, and the stack
-at the point of refusal is `limit` frames deep by construction. `erased_serde`
-exists precisely to put a `&mut dyn Serializer` under a `&dyn Serialize`.
-
-`serde_json` already does exactly this on the **read** side - `check_recursion!`
-against `RECURSION_LIMIT`. What is missing is the same thing on the write side,
-on all five. The path is the other half and costs `path.len()`.
-
-### Recursive types, and why the limit is affordable
-
-A recursive type's depth is fixed by data rather than by code, so any limit is a
-cliff on someone's data rather than an error in their program. That is the one
-real cost, and it is small: recursive *types* are ordinary, deep recursive
-*persisted data* is not. A file browser persists which nodes are expanded, not
-the tree; nested layout is bounded by what a person can stand to look at.
-
-And a graph does not need depth. Stored as edges - `ReactiveMap<NodeId, Node>`
-with `Vec<NodeId>` inside - any graph is two levels, whatever its diameter. An
-adjacency **list** rather than a matrix, since a UI tree's children are ordered.
-The flat form is also strictly more expressive: a nested value cannot hold a
-cycle at all, while an edge set holds one for free. The nested form wins on
-exactly one point, that derive writes it for you.
-
-So a tree deep enough to meet the limit wanted to be an edge set anyway - not to
-satisfy the limit, but because a nested blob rewrites and re-notifies the whole
-tree on every change to any node, which is the opposite of what a reactive store
-is for. The refusal message should say this, and say that bytes or a string are
-one level if reactivity inside is not wanted.
-
-What the store does not have is any understanding of the ids inside those
-values: no cascade on delete, no notification through a reference, no rewriting
-of references by a migration, nothing against a cycle. That is a foreign key,
-it is a database feature, and it is a note about where this library ends rather
-than a task. Ordering over rows (`RFC-reactive-table.md`) is wanted by everyone
-drawing a list; reference integrity is wanted by whoever has a graph. Different
-weights, and they should not be added together.
+Three separate things wear the name "the depth limit": a ceiling the codec
+imposes and nobody configures, a key depth the store configures, and portability
+across engines, of which depth is one row. `RFC-limits.md` has the decision.
 
 ## Decided: the layer to unify is the node, not the parser
 
@@ -3784,28 +3527,17 @@ declaration and its four implementations - so a subscription made the way the
 subscriptions chapter teaches records the call site rather than a line in this
 library.
 
-### Pages that go with the access modes and the lookups
+### Done: the pages that went with the access modes and the lookups
 
-Not corrections - these document features that are being removed, so the pages
-come out rather than get fixed. Written down now because the code lands first
-and a book kept while the feature goes is a book that teaches something that is
-not there.
+`State/defining-structs.md` lost the *Cross-struct references* section and the
+four attribute rows; `Migrations/overview.md` lost its `lookup` row; the three
+integration pages now describe `use_read_only_field` by what it returns rather
+than by a handle kind that no longer exists; and the macro's own rustdoc lost
+the same table rows and its *Lookups and Permissions* example, which was
+`rust,ignore` and so had never been compiled.
 
-| page | what comes out |
-| --- | --- |
-| `Concepts/defining-structs.md` | the whole *Cross-struct references* section, and four rows of the field-attribute table: `lookup`, `lookup_node`, `parent`, `export_mut` |
-| `Integrations/dioxus.md` | whatever `### use_read_only_field` says about needing a read-only handle |
-| `Integrations/leptos.md` | the same |
-| `Integrations/yew.md` | the same |
-| `Migrations/overview.md` | the *what migrates* row for `lookup` / `lookup_node`, and whatever the dependency ordering says once the graph is demand-driven |
-
-The `lookup` in `Concepts/fields-and-subscriptions.md` is the English word, in
-"use the map for lookup", and stays.
-
-`use_read_only_field` itself stays. It differs from `use_field` by what it
-returns - a signal, with no setter beside it - not by the handle it takes, so
-one handle type does not merge them. What changes is that it now accepts any
-handle, because there is no longer another kind.
+What is left of the dependency ordering in `Migrations/overview.md` still has to
+be revisited once the graph is demand-driven.
 
 ## What tampering with a text document does, found by doing it
 
@@ -4668,6 +4400,16 @@ because the macro resolves the crate to `crate` and a doctest compiles as a
 separate crate where that means something else. Examples reach the same types
 through `store::field_with_path` and `Kv`, which need no macro.
 
+**`Watch::stream` has no doctest.** `reactive/watch.rs` carries three, and all
+of them sit above `register_with_source`; `stream` is the last public method in
+the file and has prose only. It is also the one that most needs an example,
+because it is the only exit from the builder that is not a callback: what it
+returns has to be polled, the loop shape is the thing a reader is looking for,
+and "dropping the stream ends the subscription" is a lifetime rule that a
+worked example states better than a sentence. `Concepts/subscriptions.md` shows
+a loop over it, and that block is hand-written for the same reason - the page
+has no test behind it either, so the two gaps are one gap seen twice.
+
 **Several of these document today's behaviour, and today's behaviour is on this
 list.** They are written to fail rather than quietly go stale, but they will
 need rewriting as the entries above land:
@@ -4696,7 +4438,7 @@ cannot afford to lose. What it should cover:
 - what a step is: a bare `fn` collected at link time, capturing nothing, which
   is why anything from the application arrives through `provide`/`require`
   rather than a closure;
-- the difference between `build` and `build_with_report` - only the second
+- the difference between `build` and `build_with_migration` - only the second
   collects the steps `#[migrate]` generated, which is its own entry above and
   is the first thing that bites;
 - reading old data (`AmeData`), the scoped forms (`nested`, `scoped`), and
@@ -4709,6 +4451,69 @@ cannot afford to lose. What it should cover:
 
 When the list is empty, turn on `#![deny(missing_docs)]` for the documented
 modules so the next undocumented public item cannot land quietly.
+
+### The policies are not in the book at all
+
+`FileWritePolicy`, `RetryPolicy` and `FlushPolicy` are configurable and the word
+"policy" does not appear on any page. Two of them behave in a way a reader would
+guess wrong: `FileWritePolicy` splits a write into two steps with unrelated
+budgets, and `RetryPolicy`'s `budget` is how long the store stays quiet about a
+failing flush, not how long it keeps trying - it keeps trying until it lands or
+it is dropped. Configuring it as a give-up time gets the opposite of what was
+meant.
+
+`tests/atomic_write.rs` already exercises `FileWritePolicy` on both ends of its
+budget, so the page can be sourced from it rather than written out. Where the
+pages go depends on the shape settling above.
+
+### A test that measures a format writes the page about it
+
+`cargo xtask docs` turns a test into a page under `Limitations/`. A file
+publishes only if it marks a region with `//@act` / `//@end`; the preamble
+becomes the prose, each marked region becomes a block of code under it. Nothing
+is keyed off a file name, so a file opts in by marking itself and opts out by
+not. `--check` fails a run whose pages are behind their tests, which is what
+keeps prose and code from drifting.
+
+`absent_or_null` is the shape the rest should take: one question, every engine
+answering it in one run. It used to pick a single engine through
+`text_backend()` and carry the three-engine table as prose - the features are
+additive, so the limit was a choice in the helper rather than anything cargo
+imposed.
+
+**Four things this deliberately does not do yet, and the order they will
+probably be wanted in.**
+
+*The page cannot say where the code goes.* Regions are appended in file order
+under one heading. A page wanting prose, code, prose, code needs regions to
+have names and the preamble to have holes to drop them into - `//@act name`
+and a `{{name}}` in the prose. Everything else below assumes this exists.
+
+*The page shows what runs, not what came out.* The measured table is printed by
+the run and the page still carries a copy of it written by hand. That is the
+same drift `//@act` closed for code, left open for output: nothing checks that
+the table on the page is the table the test produced.
+
+*Generation reads source, never a run.* `cargo xtask docs` parses text. It will
+happily publish a region guarded by `#[cfg(feature = "toml")]` from a checkout
+where toml is off and the test has never executed. So a page can assert
+something no run verified, and `--check` will call it up to date. Closing this
+means generating from a test run - captured output keyed by test name - rather
+than from a file, and it is the one that turns the pipeline from a formatter
+into infrastructure.
+
+*The section is hardcoded, and should stay flat rather than become a tree.*
+Everything lands in `Limitations/`, which is the wrong name for what is
+accumulating: `absent_or_null` is not a defect of this library, it is what a
+person choosing between five engines needs to know before choosing.
+
+A tree of sections is the obvious next step and the wrong one. `absent_or_null`
+belongs to toml, to `Option`, and to choosing an engine all at once, so a tree
+makes it pick one home and raises "where does this go" on the second page
+rather than the fiftieth. Flat pages that declare what they are about, and
+indexes built from those declarations, never ask it: a new way of slicing adds
+an index instead of moving files. Renaming the section later moves every
+published URL, so the name is worth settling before there are many.
 
 ## The builder named a file for one engine and opened it with another
 

@@ -71,6 +71,59 @@ pub fn text_backend() -> amethystate::store::builder::Backend {
     }
 }
 
+/// Every document engine the build enabled, for a question whose answer is the
+/// difference between them. The features are additive, so a run with all three
+/// on answers for all three; [`text_backend`] picks one and is for a test that
+/// only needs a file it can read.
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
+pub fn text_backends() -> Vec<amethystate::store::builder::Backend> {
+    use amethystate::store::builder::Backend;
+
+    let mut enabled = Vec::new();
+    #[cfg(feature = "json")]
+    enabled.push(Backend::Json);
+    #[cfg(feature = "ron")]
+    enabled.push(Backend::Ron);
+    #[cfg(feature = "toml")]
+    enabled.push(Backend::Toml);
+    enabled
+}
+
+/// One measurement, as fields rather than as a rendering of them.
+///
+/// A probe measures; how the book lays the result out is `cargo xtask docs`'s
+/// business, and keeping the two apart is what stops a change of layout from
+/// being a change to a test. The line is JSON so a value carrying newlines,
+/// quotes or a pipe needs no escaping convention of its own.
+pub fn measured(fields: &[(&str, &str)]) {
+    let object: Vec<String> = fields
+        .iter()
+        .map(|(name, value)| format!("{}:{}", quoted(name), quoted(value)))
+        .collect();
+
+    println!("@measured {{{}}}", object.join(","));
+}
+
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+
+    out.push('"');
+    out
+}
+
 fn content(line: &str) -> &str {
     line.trim_start_matches(['│', '├', '╰', '╴', '─', '▶', ' '])
 }

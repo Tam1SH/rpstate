@@ -1,5 +1,5 @@
 use crate::reactive::error::{WriteError, WriteResult};
-use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::reactive::watch::{Watch, Watchable};
 use crate::store::Durable;
 use amethystate_core::{Signal, SignalSubscription};
 use error_stack::ResultExt;
@@ -193,6 +193,7 @@ where
         self.set(value)
     }
 
+    /// Calls `callback` on every change, until the returned handle is dropped.
     ///
     /// A callback sees the change while it is still buffered, before it
     /// reaches disk - see [the module docs](crate::reactive).
@@ -217,11 +218,9 @@ where
         self.cache.subscribe_with_source(callback)
     }
 
-    /// Configures a subscription: filtering, provenance, and where the callback
-    /// runs. See [`Watch`].
-    /// Configures a subscription: filtering, provenance, and where the
-    /// callback runs. See [`Watch`].
-    pub fn subscription_with(&self) -> Watch<Self, Immediate> {
+    /// Configures a subscription: filtering, provenance, and whether it is a
+    /// callback or a stream. See [`Watch`].
+    pub fn subscription_with(&self) -> Watch<Self> {
         Watch::new(self.clone())
     }
 }
@@ -242,32 +241,6 @@ where
         F: Fn(&Option<T>, Option<Uuid>) + Send + Sync + 'static,
     {
         self.cache.subscribe_with_source(callback)
-    }
-}
-
-impl<T> amethystate_core::pipeline::Reactive<Option<T>> for ReactiveCell<T>
-where
-    T: Clone + Send + Sync + 'static,
-{
-    fn get(&self) -> Option<T> {
-        self.get()
-    }
-
-    fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
-    where
-        F: for<'a> Fn(&'a Option<T>, Option<Uuid>) + Send + Sync + 'static,
-    {
-        self.cache.subscribe_with_source(callback)
-    }
-
-    /// What has to outlive this cell for its value to keep arriving, beyond
-    /// the cell itself.
-    ///
-    /// Not `_owner`, which a cell made by `into_cell` or `Kv::cell` holds to
-    /// own what it views: whoever asks this is keeping the cell, and `_owner`
-    /// is kept by being a field of it.
-    fn keepalive(&self) -> Option<Arc<dyn Send + Sync>> {
-        self._keepalive.clone()
     }
 }
 

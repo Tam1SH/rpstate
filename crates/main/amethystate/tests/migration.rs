@@ -43,7 +43,7 @@ fn test_decentralized_codegen_migration() {
         config.host().set("10.0.0.1".to_string()).unwrap();
     }
 
-    let (store, reports) = StoreBuilder::new(&path).build_with_report().unwrap();
+    let (store, reports) = StoreBuilder::new(&path).build_with_migration().unwrap();
 
     assert!(!reports.has_failures());
 

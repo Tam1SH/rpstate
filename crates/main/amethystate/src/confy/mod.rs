@@ -17,7 +17,7 @@
 #[cfg(feature = "confy-compat-0-6")]
 use directories::ProjectDirs;
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 use etcetera::{
     AppStrategy, AppStrategyArgs, app_strategy::choose_app_strategy,
     app_strategy::choose_native_strategy,
@@ -54,9 +54,9 @@ static STORES: OnceLock<Mutex<HashMap<PathBuf, Arc<Store>>>> = OnceLock::new();
 
 fn get_strategy() -> &'static Mutex<ConfigStrategy> {
     STRATEGY.get_or_init(|| {
-        #[cfg(feature = "confy-compat")]
+        #[cfg(feature = "confy-compat-2")]
         let default = ConfigStrategy::App;
-        #[cfg(all(not(feature = "confy-compat"), feature = "confy-compat-0-6"))]
+        #[cfg(all(not(feature = "confy-compat-2"), feature = "confy-compat-0-6"))]
         let default = ConfigStrategy::Directories;
         Mutex::new(default)
     })
@@ -199,11 +199,11 @@ pub enum ConfigStrategy {
     /// The `App` Strategy is the default strategy
     /// this is the traditional XDG strategy and will place the config file in the XDG directories.
     /// See [Etcetera App Strategy](https://docs.rs/etcetera/latest/etcetera/#appstrategy) for more information.
-    #[cfg(feature = "confy-compat")]
+    #[cfg(feature = "confy-compat-2")]
     App,
     /// The `Native` Strategy is mainly used for GUI applications and places the config directory based on the
     /// host systems determination. See [Etcetera Native Strategy](https://docs.rs/etcetera/latest/etcetera/#native-strategy) for more information.
-    #[cfg(feature = "confy-compat")]
+    #[cfg(feature = "confy-compat-2")]
     Native,
     /// The legacy directories strategy from confy v0.6.
     #[cfg(feature = "confy-compat-0-6")]
@@ -233,7 +233,7 @@ pub fn change_config_strategy(changer: ConfigStrategy) {
         .expect("Error getting lock on Config Strategy") = changer;
 }
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 #[allow(unused)]
 enum InternalStrategy {
     App(etcetera::app_strategy::Xdg),
@@ -242,7 +242,7 @@ enum InternalStrategy {
     NativeWindows(etcetera::app_strategy::Windows),
 }
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 impl AppStrategy for InternalStrategy {
     fn home_dir(&self) -> &Path {
         unimplemented!()
@@ -274,28 +274,28 @@ impl AppStrategy for InternalStrategy {
     }
 }
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 impl From<etcetera::app_strategy::Xdg> for InternalStrategy {
     fn from(value: etcetera::app_strategy::Xdg) -> Self {
         InternalStrategy::App(value)
     }
 }
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 impl From<etcetera::app_strategy::Apple> for InternalStrategy {
     fn from(value: etcetera::app_strategy::Apple) -> Self {
         InternalStrategy::NativeMac(value)
     }
 }
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 impl From<etcetera::app_strategy::Unix> for InternalStrategy {
     fn from(value: etcetera::app_strategy::Unix) -> Self {
         InternalStrategy::NativeUnix(value)
     }
 }
 
-#[cfg(feature = "confy-compat")]
+#[cfg(feature = "confy-compat-2")]
 impl From<etcetera::app_strategy::Windows> for InternalStrategy {
     fn from(value: etcetera::app_strategy::Windows) -> Self {
         InternalStrategy::NativeWindows(value)
@@ -541,7 +541,7 @@ pub fn get_configuration_file_path<'a>(
         .expect("Error getting lock on config strategy");
 
     let path = match *strategy_lock {
-        #[cfg(feature = "confy-compat")]
+        #[cfg(feature = "confy-compat-2")]
         ConfigStrategy::App => {
             let project = choose_app_strategy(AppStrategyArgs {
                 top_level_domain: "rs".to_string(),
@@ -558,7 +558,7 @@ pub fn get_configuration_file_path<'a>(
             p.push(format!("{config_name}.{ext}"));
             p
         }
-        #[cfg(feature = "confy-compat")]
+        #[cfg(feature = "confy-compat-2")]
         ConfigStrategy::Native => {
             let project = choose_native_strategy(AppStrategyArgs {
                 top_level_domain: "rs".to_string(),

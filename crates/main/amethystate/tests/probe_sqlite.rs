@@ -34,7 +34,7 @@ fn open(path: &Path) -> StorageResult<Store> {
     StoreBuilder::new(path)
         .backend(Backend::Sqlite)
         .debounce(Duration::from_secs(60))
-        .watch_interval(Duration::from_secs(60))
+        .watch_debounce(Duration::from_secs(60))
         .build()
 }
 

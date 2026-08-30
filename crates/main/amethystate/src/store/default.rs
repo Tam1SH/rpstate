@@ -307,6 +307,9 @@ impl StoreBackend for Store {
     fn parallel_reads(&self) -> bool {
         self.backend.parallel_reads()
     }
+    fn files(&self) -> Option<crate::store::traits::StoreLayout> {
+        self.backend.files()
+    }
     fn save_now(&self) -> StorageResult<()> {
         self.backend.save_now()
     }

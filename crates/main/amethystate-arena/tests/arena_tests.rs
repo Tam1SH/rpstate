@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 use amethystate::test_utils::unique_store;
-use amethystate::{Field, IntoPipeline, MapChange, ReactiveMap, amethystate};
+use amethystate::{Field, MapChange, ReactiveMap, amethystate};
 use amethystate_arena::Arena;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,8 +18,8 @@ pub struct TestState {
 }
 
 #[test]
-fn test_arena_field_and_pipeline() {
-    let store = unique_store("field_pipeline");
+fn test_arena_field() {
+    let store = unique_store("field");
     let state = TestState::new_with(&store).unwrap();
     let arena = Arena::new();
 
@@ -43,40 +43,9 @@ fn test_arena_field_and_pipeline() {
         .unwrap();
     assert_eq!(*last_val.lock().unwrap(), "Charlie");
 
-    let address_pipe = (state.username(), state.port())
-        .pipe()
-        .map(|(host, port)| format!("{host}:{port}"));
-
-    let pipe_handle = arena.register_pipeline(address_pipe);
-    assert_eq!(arena.get_pipeline(pipe_handle), "Charlie:8080");
-
     let port_handle = arena.register_field(state.port());
     arena.set_field(port_handle, 9090).unwrap();
-    assert_eq!(arena.get_pipeline(pipe_handle), "Charlie:9090");
-}
-
-#[test]
-fn test_subscribe_pipeline() {
-    let store = unique_store("subscribe_pipeline");
-    let state = TestState::new_with(&store).unwrap();
-    let arena = Arena::new();
-
-    let address_pipe = (state.username(), state.port())
-        .pipe()
-        .map(|(host, port)| format!("{host}:{port}"));
-
-    let pipe_handle = arena.register_pipeline(address_pipe);
-    let port_handle = arena.register_field(state.port());
-
-    let notified_val = Arc::new(Mutex::new(String::new()));
-    let notified_val_clone = notified_val.clone();
-
-    let _sub = arena.subscribe_pipeline(pipe_handle, move |val| {
-        *notified_val_clone.lock().unwrap() = val.clone();
-    });
-
-    arena.set_field(port_handle, 9090).unwrap();
-    assert_eq!(*notified_val.lock().unwrap(), "Alice:9090");
+    assert_eq!(arena.get_field(port_handle), 9090);
 }
 
 #[test]

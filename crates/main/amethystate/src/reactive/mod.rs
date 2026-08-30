@@ -23,9 +23,7 @@ pub mod cell;
 pub mod entry_cell;
 pub mod error;
 pub mod field;
-pub mod local;
 pub mod map;
-pub mod pipeline;
 pub mod watch;
 
 pub use crate::migration::node::*;
@@ -34,10 +32,10 @@ pub use amethystate_core::primitives::intercept::*;
 pub use amethystate_core::primitives::map_core::{
     Entries, InterceptorAny, InterceptorKey, SubscriberAny, SubscriberKey, Walk,
 };
-pub use amethystate_core::primitives::signal::{SignalSubscription, SubscriptionMeta};
+pub use amethystate_core::primitives::signal::{
+    ReactiveScope, SignalSubscription, SubscriptionMeta,
+};
 pub use cell::*;
 pub use field::*;
-pub use local::*;
 pub use map::*;
-pub use pipeline::*;
 pub use watch::*;

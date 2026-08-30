@@ -48,14 +48,14 @@ fn a_store_at_v1(path: &std::path::Path) {
     store.save_now().unwrap();
 }
 
-/// `build_with_report` is the entry that sweeps the binary for steps, and this
+/// `build_with_migration` is the entry that sweeps the binary for steps, and this
 /// one is not in the sweep.
 #[test]
 fn an_explicit_step_is_not_collected_from_the_linker() {
     let path = unique_path("migration_explicit_uncollected");
     a_store_at_v1(&path);
 
-    let (store, _report) = StoreBuilder::new(&path).build_with_report().unwrap();
+    let (store, _report) = StoreBuilder::new(&path).build_with_migration().unwrap();
 
     let settings = Settings::new_with(&store).unwrap();
     assert_eq!(
@@ -75,7 +75,7 @@ fn an_explicit_step_runs_when_it_is_handed_over() {
         .migrations(|m| {
             m.add_steps(&[SETTINGS_V1_TO_V2]);
         })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     assert!(!report.has_failures(), "{report:?}");

@@ -1,7 +1,7 @@
 use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
 use crate::reactive::cell::CellCommit;
-use crate::reactive::watch::{Immediate, Watch, Watchable};
+use crate::reactive::watch::{Watch, Watchable};
 use crate::store::facts::Facts;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Commit, Durable, StoreBackend, StoreSubscription};
@@ -72,7 +72,7 @@ where
 /// through it are indistinguishable from writes through the original.
 ///
 /// [`Field::fork`] is the one that gives a new id, which is what a
-/// subscription uses to tell whose write it is looking at - see [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
+/// subscription uses to tell whose write it is looking at - see [clone and fork](https://uniproc-dev.github.io/amethystate/concepts/subscriptions/#clone-and-fork).
 impl<TValue> Clone for Field<TValue> {
     fn clone(&self) -> Self {
         Self {
@@ -123,7 +123,7 @@ where
     ///
     /// Without `external` all three would arrive; the id is what tells them
     /// apart. The book works through the pair in
-    /// [clone vs fork](https://uniproc-dev.github.io/amethystate/concepts/fields-and-subscriptions#clone-vs-fork).
+    /// [clone and fork](https://uniproc-dev.github.io/amethystate/concepts/subscriptions/#clone-and-fork).
     pub fn fork(&self) -> Self {
         self.fork_with_id(Uuid::new_v4())
     }
@@ -139,6 +139,15 @@ where
                 unreadable: self.inner.unreadable.clone(),
             }),
         }
+    }
+
+    /// The id writes through this handle carry, so a subscriber can tell them
+    /// from someone else's.
+    ///
+    /// A [`Field::clone`] keeps it and a [`Field::fork`] takes a new one, which
+    /// is the whole of what separates the two.
+    pub fn instance_id(&self) -> Uuid {
+        self.inner.instance_id
     }
 
     /// The current value, read from memory.
@@ -237,13 +246,10 @@ where
     /// outside the process edits the store, so the callback has to be able to
     /// run there. That rules out `Rc` state and most GUI context handles.
     ///
-    /// [`LocalScope`](crate::LocalScope) is the way around it, and the right one: a subscription
-    /// registered there queues the value instead of calling immediately, and
-    /// runs the callback from [`LocalScope::drain`](crate::LocalScope::drain) on
-    /// whichever thread
-    /// drains. The scope is neither `Send` nor `Sync`, so the callback cannot
-    /// reach another thread at all - enforced by the type, not by convention.
-    /// Reach it through [`Field::subscription_with`] and [`Watch::local`].
+    /// [`Watch::stream`] is the way around it: the changes are yielded into a
+    /// loop of your own, so the value is the only thing that crosses the thread
+    /// boundary and what you do with it stays where you are. Reach it through
+    /// [`Field::subscription_with`].
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -275,9 +281,9 @@ where
         self.inner.core.subscribe(callback)
     }
 
-    /// Configures a subscription: filtering, provenance, and where the callback
-    /// runs. See [`Watch`].
-    pub fn subscription_with(&self) -> Watch<Self, Immediate> {
+    /// Configures a subscription: filtering, provenance, and whether it is a
+    /// callback or a stream. See [`Watch`].
+    pub fn subscription_with(&self) -> Watch<Self> {
         Watch::new(self.clone())
     }
 }
@@ -617,29 +623,6 @@ impl<TValue> PartialEq for Field<TValue> {
 }
 
 impl<TValue> Eq for Field<TValue> {}
-
-impl<TValue> amethystate_core::pipeline::Reactive<TValue> for Field<TValue>
-where
-    TValue: FieldValue,
-{
-    fn get(&self) -> TValue {
-        self.get()
-    }
-
-    fn subscribe_with_source<F>(&self, callback: F) -> SignalSubscription
-    where
-        F: for<'a> Fn(&'a TValue, Option<Uuid>) + Send + Sync + 'static,
-    {
-        self.inner.core.subscribe_with_source(callback)
-    }
-
-    fn subscribe<F>(&self, callback: F) -> SignalSubscription
-    where
-        F: for<'a> Fn(&'a TValue) + Send + Sync + 'static,
-    {
-        self.subscribe(callback)
-    }
-}
 
 impl<TValue> Durable<'_, Field<TValue>>
 where

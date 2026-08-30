@@ -84,7 +84,7 @@ impl MigrationReport {
 
     /// Writes the report through `tracing`, at a level per outcome.
     ///
-    /// [`StoreBuilder::build_with_report`](crate::StoreBuilder::build_with_report)
+    /// [`StoreBuilder::build_with_migration`](crate::StoreBuilder::build_with_migration)
     /// already does this, so calling it again duplicates the lines.
     pub fn log_to_tracing(&self) {
         for comp in &self.components {

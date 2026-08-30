@@ -138,7 +138,7 @@ fn a_momentary_truncation_is_not_written_back_as_the_document() {
         let store = StoreBuilder::new(path.path())
             .backend(Backend::Toml)
             .debounce(Duration::from_millis(20))
-            .watch_interval(Duration::from_millis(20))
+            .watch_debounce(Duration::from_millis(20))
             .build()
             .unwrap();
         store.set(["cfg", "width"], &1280u32).unwrap();

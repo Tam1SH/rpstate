@@ -63,12 +63,12 @@ fn a_provided_value_reaches_a_migration_step() {
         store.save_now().unwrap();
     }
 
-    // `build_with_report` rather than `build`: only that one collects the
+    // `build_with_migration` rather than `build`: only that one collects the
     // steps `#[migrate]` generated, which is the entry the store's own TODO
     // has open against it.
     let (store, report) = StoreBuilder::new(&path)
         .provide(LegacyDefaults { port: 4321 })
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
     assert!(
         !report.has_failures(),
@@ -104,7 +104,7 @@ fn a_value_that_is_not_send_can_still_be_provided() {
     let (_store, report) = StoreBuilder::new(&path)
         .provide(LegacyDefaults { port: 7 })
         .provide(Rc::clone(&seen))
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
 
     assert!(!report.has_failures(), "{report:?}");
@@ -126,7 +126,7 @@ fn a_step_that_needs_something_nobody_provided_says_which() {
         store.save_now().unwrap();
     }
 
-    let (_store, report) = StoreBuilder::new(&path).build_with_report().unwrap();
+    let (_store, report) = StoreBuilder::new(&path).build_with_migration().unwrap();
 
     let failure = report
         .components

@@ -152,7 +152,7 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
     {
         let (store, _) = StoreBuilder::new(path.path())
             .backend(text_backend())
-            .build_with_report()
+            .build_with_migration()
             .unwrap();
         assert_eq!(
             store.get::<u32>(["replay", "hits"]).unwrap(),
@@ -167,7 +167,7 @@ fn losing_the_metadata_file_does_not_replay_a_migration() {
 
     let (store, _) = StoreBuilder::new(path.path())
         .backend(text_backend())
-        .build_with_report()
+        .build_with_migration()
         .unwrap();
     assert_eq!(
         store.get::<u32>(["replay", "hits"]).unwrap(),

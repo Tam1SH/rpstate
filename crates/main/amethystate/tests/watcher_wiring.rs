@@ -24,7 +24,7 @@ fn an_edit_from_outside_reaches_a_subscriber() {
     let path = TempPath::new("watcher_wiring");
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
-        .watch_interval(Duration::from_millis(10))
+        .watch_debounce(Duration::from_millis(10))
         .build()
         .unwrap();
 

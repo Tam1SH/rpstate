@@ -44,7 +44,7 @@ fn an_external_edit_is_picked_up_while_the_store_is_open() {
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
         .debounce(Duration::from_millis(20))
-        .watch_interval(Duration::from_millis(20))
+        .watch_debounce(Duration::from_millis(20))
         .build()
         .unwrap();
 
@@ -73,7 +73,7 @@ fn an_external_edit_notifies_a_subscriber() {
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
         .debounce(Duration::from_millis(20))
-        .watch_interval(Duration::from_millis(20))
+        .watch_debounce(Duration::from_millis(20))
         .build()
         .unwrap();
 
@@ -111,7 +111,7 @@ fn an_external_edit_survives_an_unrelated_pending_write() {
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
         .debounce(Duration::from_millis(400))
-        .watch_interval(Duration::from_millis(20))
+        .watch_debounce(Duration::from_millis(20))
         .build()
         .unwrap();
 
@@ -153,7 +153,7 @@ fn a_broken_external_edit_is_not_silently_overwritten() {
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
         .debounce(Duration::from_millis(20))
-        .watch_interval(Duration::from_millis(20))
+        .watch_debounce(Duration::from_millis(20))
         .build()
         .unwrap();
 
@@ -195,7 +195,7 @@ fn a_momentarily_truncated_file_is_not_read_as_an_empty_store() {
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
         .debounce(Duration::from_millis(20))
-        .watch_interval(Duration::from_millis(20))
+        .watch_debounce(Duration::from_millis(20))
         .build()
         .unwrap();
 

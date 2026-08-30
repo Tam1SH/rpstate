@@ -1,9 +1,7 @@
 use amethystate::test_utils::unique_store;
 use amethystate::uuid;
-use amethystate_arena::{DefaultArena, IntoArenaPipeline, PIPELINE_ARENA};
-use amethystate_leptos::{
-    use_field, use_map, use_map_subscribe_any, use_map_subscribe_key, use_pipeline,
-};
+use amethystate_arena::DefaultArena;
+use amethystate_leptos::{use_field, use_map, use_map_subscribe_any, use_map_subscribe_key};
 use leptos::prelude::*;
 use serial_test::serial;
 use std::collections::HashMap;
@@ -138,59 +136,6 @@ async fn test_use_map_requirements() {
     assert_eq!(probe.last().unwrap().get("external").unwrap(), "value");
 
     drop(owner);
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[serial]
-async fn test_use_pipeline_requirements() {
-    any_spawner::Executor::init_tokio().ok();
-
-    let store = unique_store("pipeline");
-    let arena = DefaultArena::new();
-
-    let field = amethystate::store::field_with_path(
-        &store,
-        ["field_2"],
-        5,
-        uuid::Uuid::new_v4(),
-    )
-    .unwrap();
-    let dep_handle = arena.register_field(field);
-
-    let probe = Probe::new();
-    let probe_clone = probe.clone();
-
-    let owner = Owner::new();
-    owner.set();
-    provide_context(arena.clone());
-
-    let val = use_pipeline(move || dep_handle.pipe().map(|v| v * 2));
-
-    let _effect = Effect::new_isomorphic(move || {
-        probe_clone.push(val.get());
-    });
-
-    leptos::task::tick().await;
-    assert_eq!(probe.last(), Some(10));
-
-    let _ = arena.set_field(dep_handle, 20);
-    leptos::task::tick().await;
-    assert_eq!(probe.last(), Some(40));
-
-    PIPELINE_ARENA.with(|a| *a.borrow_mut() = Some(arena.clone()));
-    let pipeline = dep_handle.pipe().map(|v| v * 3);
-    PIPELINE_ARENA.with(|a| *a.borrow_mut() = None);
-
-    let manual_handle = arena.register_pipeline(pipeline);
-
-    assert_eq!(arena.get_pipeline(manual_handle), 60);
-
-    drop(owner);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        arena.get_pipeline(manual_handle);
-    }));
-    assert!(result.is_ok());
 }
 
 #[tokio::test(flavor = "current_thread")]

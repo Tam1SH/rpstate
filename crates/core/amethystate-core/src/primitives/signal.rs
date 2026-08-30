@@ -1,4 +1,3 @@
-use crate::ReactiveScope;
 use arc_swap::ArcSwap;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,6 +62,42 @@ impl SignalSubscription {
 impl Drop for SignalSubscription {
     fn drop(&mut self) {
         (self.cleanup)(self.id);
+    }
+}
+
+/// Subscriptions held together, ending when the scope does.
+///
+/// Not `Clone`, for the reason [`SignalSubscription`] is not: a copy of the
+/// scope would be a second chance to end every subscription in it, and the
+/// first copy dropped would take them all.
+#[derive(Default)]
+pub struct ReactiveScope {
+    subs: Vec<SignalSubscription>,
+}
+
+impl ReactiveScope {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn watch(&mut self, sub: SignalSubscription) {
+        self.subs.push(sub);
+    }
+
+    pub fn watch_scope(&mut self, mut other: Self) {
+        self.subs.append(&mut other.subs);
+    }
+
+    pub fn clear(&mut self) {
+        self.subs.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.subs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.subs.is_empty()
     }
 }
 

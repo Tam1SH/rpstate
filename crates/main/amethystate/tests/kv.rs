@@ -1,9 +1,8 @@
+use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::{LocalScope, amethystate};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 mod common;
 use common::{per_engine, shape};
@@ -33,24 +32,24 @@ fn raw_round_trip() {
 #[test]
 fn a_cell_is_an_ordinary_reactive_cell() {
     let store = store();
-    let kv = store.kv();
 
+    //@show opening a cell without a schema
+    let kv = store.kv();
     let width = kv.namespace("ui").cell("width", 800u32).unwrap();
+    //@show-end
+
     assert_eq!(width.get(), Some(800), "seeded with the default");
 
-    let mut ui = LocalScope::new();
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let cap = Rc::clone(&seen);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let cap = Arc::clone(&seen);
 
-    width
+    let _sub = width
         .subscription_with()
-        .local(&mut ui)
-        .register(move |w: &Option<u32>| cap.borrow_mut().push(w.unwrap()));
+        .register(move |w: &Option<u32>| cap.lock().unwrap().push(w.unwrap()));
 
     width.set(1024).unwrap();
-    ui.drain();
 
-    assert_eq!(*seen.borrow(), vec![1024]);
+    assert_eq!(*seen.lock().unwrap(), vec![1024]);
     assert_eq!(store.get::<u32>(["ui", "width"]).unwrap(), Some(1024));
 }
 

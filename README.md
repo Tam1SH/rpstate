@@ -24,7 +24,7 @@ in the background. Schema versions are explicit, migrations run on startup, and 
 
 ### Features
 
-- **Struct-defined state** — one attribute turns a struct's fields into persisted reactive ones, with defaults, subscriptions, derived values via `.pipe()`, and interceptors that can refuse a write
+- **Struct-defined state** — one attribute turns a struct's fields into persisted reactive ones, with defaults, subscriptions, and interceptors that can refuse a write
 - **Runtime-defined keys** — a map entry or a `Kv` path gets the same subscriptions, interceptors and durability as a declared field
 - **Read and write every frame** — writes are buffered and batched, reads answer from memory
 - **Migrations** — explicit versions, run at startup; drift is logged
@@ -50,10 +50,6 @@ fn main() -> amethystate::Result<()> {
     let _sub = state.port().subscribe(|p| println!("port → {p}"));
     
     state.port().set(9090)?;
-    
-    let address = (state.host(), state.port())
-        .pipe()
-        .map(|(host, port)| format!("{host}:{port}"));
 
     Ok(())
 }

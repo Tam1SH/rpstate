@@ -1,8 +1,6 @@
 use crate::MapSignal;
-use amethystate::{MapChange, Pipeline, ReactiveMapKey, ReactiveMapValue};
-use amethystate_arena::{
-    AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle, PIPELINE_ARENA,
-};
+use amethystate::{MapChange, ReactiveMapKey, ReactiveMapValue};
+use amethystate_arena::{AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle};
 use leptos::callback::Callback;
 use leptos::prelude::*;
 use serde::de::DeserializeOwned;
@@ -108,36 +106,6 @@ where
     let (signal, set_signal) = signal(arena.get_field(handle));
 
     let sub = arena.subscribe_field(handle, move |val| {
-        set_signal.set(val.clone());
-    });
-    on_cleanup(move || drop(sub));
-
-    signal
-}
-
-pub fn use_pipeline<T, F>(f: F) -> ReadSignal<T>
-where
-    T: Clone + Send + Sync + PartialEq + 'static,
-    F: FnOnce() -> Pipeline<T> + 'static,
-{
-    let arena = use_context::<DefaultArena>().expect("amethystate-leptos: Arena not found");
-
-    let handle = PIPELINE_ARENA.with(|a| {
-        *a.borrow_mut() = Some(arena.clone());
-        let pipeline = f();
-        *a.borrow_mut() = None;
-
-        arena.register_pipeline(pipeline)
-    });
-
-    let arena_clone = arena.clone();
-    on_cleanup(move || {
-        arena_clone.remove_pipeline(handle);
-    });
-
-    let (signal, set_signal) = signal(arena.get_pipeline(handle));
-
-    let sub = arena.subscribe_pipeline(handle, move |val| {
         set_signal.set(val.clone());
     });
     on_cleanup(move || drop(sub));

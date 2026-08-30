@@ -1,4 +1,4 @@
-#![cfg(any(feature = "confy-compat", feature = "confy-compat-0-6"))]
+#![cfg(any(feature = "confy-compat-2", feature = "confy-compat-0-6"))]
 //! What a real `confy` user's file meets when the application swaps `confy`
 //! for `amethystate::confy`.
 //!
@@ -79,11 +79,6 @@ fn backend_speaks_confy() -> bool {
 
 fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
-}
-
-/// Where the store puts the backup of `path`: the whole filename plus `.bak`.
-fn backup_of(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.bak", path.display()))
 }
 
 /// Text no text backend parses.
@@ -510,7 +505,7 @@ fn a_failed_load_leaves_no_backup_beside_the_config() {
 
     assert!(confy::load_path::<Simple>(&path).is_err());
 
-    let bak = backup_of(&path);
+    let bak = PathBuf::from(format!("{}.bak", path.display()));
     assert!(!bak.exists(), "left behind: {}", bak.display());
 }
 
@@ -527,7 +522,7 @@ fn the_backup_of_the_config_holds_the_config() {
 
     let _ = confy::load_path::<Simple>(&path);
 
-    let bak = backup_of(&path);
+    let bak = PathBuf::from(format!("{}.bak", path.display()));
     assert!(
         read(&bak).contains("from-confy"),
         "the config's backup reads: {}",
@@ -623,7 +618,7 @@ fn opening_a_store_keeps_the_confy_fields() {
     real_confy::store_path(&path, &a_config()).expect("confy store");
 
     let (store, _) = StoreBuilder::new(&path)
-        .build_with_report()
+        .build_with_migration()
         .expect("open with migrations");
     store.save_now().unwrap();
     drop(store);

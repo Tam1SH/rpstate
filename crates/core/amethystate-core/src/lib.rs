@@ -34,5 +34,4 @@ pub use primitives::field_ops::*;
 pub use primitives::intercept::{InterceptDisposer, InterceptGuard};
 pub use primitives::map_core::{Entries, ReactiveMapCore, Walk};
 pub use primitives::map_ops::*;
-pub use primitives::pipeline::{IntoPipeline, Pipeline, Reactive, ReactiveScope};
-pub use primitives::signal::{Signal, SignalSubscription};
+pub use primitives::signal::{ReactiveScope, Signal, SignalSubscription};

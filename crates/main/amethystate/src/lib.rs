@@ -14,14 +14,14 @@ pub mod store;
 pub type AmeData<T> = <T as AmeState>::Data;
 pub type MigrationResult<T> = StorageResult<T>;
 
+pub use error_stack;
 pub use inventory;
 pub use serde;
 pub use uuid;
 
 pub use reactive::{
-    AmeState, AmeStateNode, Change, Field, InterceptDisposer, IntoPipeline, LocalScope, MapChange,
-    Pipeline, Reactive, ReactiveCell, ReactiveMap, ReactiveMapKey, ReactiveMapValue, ReactiveScope,
-    SignalSubscription,
+    AmeState, AmeStateNode, Change, Field, InterceptDisposer, MapChange, ReactiveCell, ReactiveMap,
+    ReactiveMapKey, ReactiveMapValue, ReactiveScope, SignalSubscription,
 };
 pub use store::StoreSubscription;
 
@@ -29,6 +29,8 @@ pub mod errors {
     pub use crate::codec::CodecError;
     pub use crate::reactive::error::{FieldError, ReactiveMapError, WriteError, WriteResult};
     pub use crate::store::StorageError;
+    pub use amethystate_core::facts;
+    pub use error_stack::Report;
 }
 pub mod stores {
     pub use crate::store::default::*;
@@ -49,7 +51,7 @@ pub use serde_json;
 pub use store::StoreBackend;
 pub use store::StoreExt;
 
-#[cfg(any(feature = "confy-compat", feature = "confy-compat-0-6"))]
+#[cfg(any(feature = "confy-compat-2", feature = "confy-compat-0-6"))]
 pub mod confy;
 
 #[cfg(any(feature = "test-utils", test))]

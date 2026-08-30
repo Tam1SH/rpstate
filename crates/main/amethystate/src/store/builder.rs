@@ -180,7 +180,7 @@ pub const fn default_backend() -> Backend {
 /// ```
 ///
 /// A store that migrations run against is built the same way, with
-/// [`StoreBuilder::migrations`] and [`StoreBuilder::build_with_report`] when
+/// [`StoreBuilder::migrations`] and [`StoreBuilder::build_with_migration`] when
 /// what they did is wanted back.
 pub struct StoreBuilder {
     backend: Backend,
@@ -411,9 +411,17 @@ impl StoreBuilder {
         self
     }
 
-    /// How often the file watcher polls for changes made outside the process.
-    pub fn watch_interval(mut self, every: Duration) -> Self {
-        self.config.watch_interval = every;
+    /// How long the file must sit still before a change made outside the
+    /// process is read back.
+    ///
+    /// Nothing polls. The watcher is event-driven - inotify, ReadDirectoryChangesW,
+    /// FSEvents - and this is the quiet period after the last event before the
+    /// file is re-read, so an editor writing in several bursts is one re-read
+    /// rather than several. Lowering it makes an external edit visible sooner;
+    /// raising it costs nothing until somebody is writing the file
+    /// continuously.
+    pub fn watch_debounce(mut self, every: Duration) -> Self {
+        self.config.watch_debounce = every;
         self
     }
 
@@ -526,7 +534,7 @@ impl StoreBuilder {
     /// Declares migration steps to run when the store opens.
     ///
     /// Steps written with `#[migrate]` are collected automatically by
-    /// [`StoreBuilder::build_with_report`]; this is for the ones built by
+    /// [`StoreBuilder::build_with_migration`]; this is for the ones built by
     /// hand.
     pub fn migrations(mut self, configure: impl FnOnce(&mut MigrationBuilder)) -> Self {
         configure(&mut self.migration_builder);
@@ -618,7 +626,7 @@ impl StoreBuilder {
     /// This is also the path that collects `#[migrate]` steps, so a store
     /// opened with [`StoreBuilder::build`] runs only the migrations declared
     /// by hand.
-    pub fn build_with_report(mut self) -> StorageResult<(Store, MigrationReport)> {
+    pub fn build_with_migration(mut self) -> StorageResult<(Store, MigrationReport)> {
         self.migration_builder.collect_codegen();
         let migration_set = self.migration_builder.into_set();
         let (store, report) = self.backend.open_public(self.config, migration_set)?;

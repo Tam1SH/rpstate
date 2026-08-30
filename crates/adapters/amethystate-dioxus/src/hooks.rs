@@ -1,9 +1,6 @@
 use crate::MapSignal;
-use amethystate::{MapChange, Pipeline, ReactiveMapKey, ReactiveMapValue};
-use amethystate_arena::PIPELINE_ARENA;
-use amethystate_arena::{
-    AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle, PipelineHandle,
-};
+use amethystate::{MapChange, ReactiveMapKey, ReactiveMapValue};
+use amethystate_arena::{AmeStateFrameworkNested, DefaultArena, FieldHandle, MapHandle};
 use dioxus::core::{Callback, spawn, use_hook};
 use dioxus::hooks::{try_use_context, use_callback, use_context};
 use dioxus::prelude::*;
@@ -125,60 +122,6 @@ where
 
     use_hook(move || {
         let sub = arena.subscribe_field(handle, move |val| {
-            let _ = tx.send(val.clone());
-        });
-        Arc::new(sub)
-    });
-
-    signal.into()
-}
-
-pub fn use_pipeline<T, F>(f: F) -> ReadSignal<T>
-where
-    T: Clone + Send + Sync + PartialEq + 'static,
-    F: FnOnce() -> Pipeline<T> + 'static,
-{
-    let arena = use_context::<DefaultArena>();
-
-    let handle = use_hook(|| {
-        PIPELINE_ARENA.with(|a| *a.borrow_mut() = Some(arena.clone()));
-        let pipeline = f();
-        PIPELINE_ARENA.with(|a| *a.borrow_mut() = None);
-
-        arena.register_pipeline(pipeline)
-    });
-
-    let arena_clone = arena.clone();
-    use_hook(move || {
-        struct Guard<T: 'static> {
-            arena: DefaultArena,
-            handle: PipelineHandle<T>,
-        }
-        impl<T: 'static> Drop for Guard<T> {
-            fn drop(&mut self) {
-                self.arena.remove_pipeline(self.handle);
-            }
-        }
-        Arc::new(Guard {
-            arena: arena_clone,
-            handle,
-        })
-    });
-
-    let mut signal = use_signal(|| arena.get_pipeline(handle));
-
-    let tx = use_hook(|| {
-        let (tx, mut rx) = mpsc::unbounded_channel::<T>();
-        spawn(async move {
-            while let Some(val) = rx.recv().await {
-                signal.set(val);
-            }
-        });
-        tx
-    });
-
-    use_hook(move || {
-        let sub = arena.subscribe_pipeline(handle, move |val| {
             let _ = tx.send(val.clone());
         });
         Arc::new(sub)

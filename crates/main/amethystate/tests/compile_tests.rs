@@ -21,7 +21,6 @@ fn test_macro_expansion_compilation() {
     t.pass("tests/expand/nested_under_a_dotted_prefix.rs");
     t.pass("tests/expand/map_syntax.rs");
 
-    t.compile_fail("tests/fails/local_scope_not_send.rs");
     t.compile_fail("tests/fails/subscription_not_clone.rs");
 
     t.compile_fail("tests/fails/prefix_empty.rs");
