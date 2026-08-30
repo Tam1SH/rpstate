@@ -7,66 +7,6 @@
 //! another is the finding - that is the whole point of the file, so nothing
 //! here is written down to what the engines currently do.
 //!
-//! # The properties
-//!
-//! 1. A value written at a path reads back at that path, whatever the names
-//!    hold.
-//! 2. A value written at one path is readable at no other: a path nobody wrote
-//!    holds nothing, including the parent of a path somebody did.
-//! 3. The last write at a path is the one that reads back, and no earlier one.
-//! 4. Writing a path and then deleting it leaves the store exactly as it was -
-//!    the same keys with the same bytes, not merely the same values.
-//! 5. Deleting a path that holds no value is not an error and changes nothing -
-//!    not even when other values are stored under it, since `delete_prefix` is
-//!    the call that takes a subtree.
-//! 6. A scan under a prefix lists exactly the keys written under it - no more,
-//!    no fewer, at whatever depth they were written, and never a sibling whose
-//!    name merely starts with the same characters.
-//! 7. `scan_keys` and `scan_prefix` agree on which keys exist, at every prefix.
-//! 8. A scan comes back sorted by key and without repeats.
-//! 9. Every key a scan hands back is a path this library could have written,
-//!    and it is under the prefix that was scanned.
-//! 10. `delete_prefix` removes exactly the subtree and nothing beside it,
-//!     including a sibling whose name merely starts with the prefix.
-//! 11. A name holding the separator stays one level through a write, a scan and
-//!     a reopen, and never becomes the two levels it looks like.
-//! 12. A value at a name and values under that name coexist: neither write
-//!     destroys the other.
-//! 13. A reopen gives back everything that was committed and nothing else.
-//! 14. A map's `len`, `keys` and `entries` agree with each other and with a
-//!     scan of the map's own path.
-//! 15. A level with no name is refused by every entry point with
-//!     `StorageError::Path` over a `StorePathError::EmptySegment`, and the
-//!     store is left untouched.
-//! 16. Bytes that will not decode as the type asked for are a
-//!     `StorageError::Codec` failure, not an absent value.
-//! 17. A path that holds nothing reads as `Ok(None)`: absence is not a failure.
-//! 18. A map refuses `update` on a key it does not hold with
-//!     `WriteError::KeyNotFound`, and refuses a key that cannot be a level with
-//!     `WriteError::Path`; `insert` is the call that adds a key.
-//! 19. Golden: one fixed set of names comes back in one exact order, the same
-//!     order on every engine.
-//! 20. Degenerate: an empty store lists nothing at any prefix, and is still
-//!     empty after a reopen.
-//! 21. Degenerate: a level named `.` is an ordinary level - it addresses one
-//!     value, not the whole store.
-//! 22. A namespace reads uninitialized until it is marked, and initialized
-//!     after.
-//! 23. Each kind of subscription hears exactly what it asked for, and a prefix
-//!     is matched by level rather than by characters.
-//! 24. A dropped subscription stops hearing.
-//! 25. The store's own bookkeeping is not data: marking a namespace puts
-//!     nothing a scan of it will return.
-//! 26. A write emits one `Set` at the path, carrying the value that landed and
-//!     the one it replaced.
-//! 27. A delete emits one `Delete` carrying the value that went, and a delete
-//!     that removed nothing emits nothing.
-//! 28. `delete_prefix` emits one `DeletePrefix` at the prefix, not a `Delete`
-//!     per key underneath.
-//!
-//! Property 2 is two statements and so two tests: a path nobody wrote, and the
-//! parent of one somebody did.
-//!
 //! # What is deliberately not stated here
 //!
 //! - **Which writes a commit takes with it.** A durable write commits one key
@@ -75,8 +15,9 @@
 //!   rewritten whole because it is a document - so it belongs in
 //!   `durability_crash.rs`, which pins it per engine, and not here.
 //! - **What a scan's bytes are.** The value bytes are the engine's own format,
-//!   so only their stability within one engine is asserted (property 4), never
-//!   their content across engines.
+//!   so only their stability within one engine is asserted, by
+//!   `writing_then_deleting_leaves_the_store_as_it_was`, never their content
+//!   across engines.
 //! - **Where the metadata lives.** Two files on the text engines, one
 //!   transaction on the flat ones. A statement about a store cannot see this
 //!   without reaching for the file, which is what `tamper_meta.rs` is for.
@@ -87,15 +28,15 @@
 //! # Two deliberate narrowings of the generators, and why
 //!
 //! A segment consisting of nothing but the separator is excluded from the
-//! generated names and pinned by property 21 instead. `["."]` is mapped to the
-//! whole document by the text engines, so leaving it in the general strategy
-//! made every property fail there for one already-known reason and hid
-//! everything else in the space.
+//! generated names, and `a_level_named_dot_is_an_ordinary_level` takes it
+//! instead. `["."]` is mapped to the whole document by the text engines, so
+//! leaving it in the general strategy made every property fail there for one
+//! already-known reason and hid everything else in the space.
 //!
 //! The generated key sets are antichains - no generated path is an ancestor of
-//! another - everywhere except property 12, which is the property about
-//! ancestry. Mixing the two made every scan property fail for property 12's
-//! reason instead of its own.
+//! another - everywhere except `a_leaf_and_a_branch_coexist_at_one_name`, which
+//! is the test about ancestry. Mixing the two made every scan property fail for
+//! that one's reason instead of its own.
 
 use amethystate::Store;
 use amethystate::errors::WriteError;

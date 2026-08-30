@@ -1021,49 +1021,27 @@ This does not fix a GUI binding rendering twice. That is one write and one
 notification coming back to its own author, which is what `Watch::external`
 is for.
 
-## The map already projects itself into memory, then ignores it
+## Done: the map reads the projection it builds
 
 `reactive_map_with_path_only` scans the prefix at construction and decodes every
-entry into `ReactiveMapCore::cache`. The full projection is built and paid for -
-one scan, one deserialisation per key - before the map is handed over.
+entry into `ReactiveMapCore::cache`, and every read now answers from there -
+`get`, `len`, `is_empty`, `entries`, `keys`. The scan and the memory were being
+paid for either way while `len()` spent 386 ms rescanning 10 000 keys with the
+answer beside it, and the sync and async halves of the API disagreed about where
+the truth lived.
 
-Almost nothing reads it:
+The projection is `ArcSwap<rpds::RedBlackTreeMapSync>`, measured in
+`RFC-map-locking.md`: a read holds nothing, so `entries` lends rather than
+collecting and a reader that touches the map again mid-walk is ordinary.
+`DashMap` would have served the read load and brought back the trap that shape
+exists to remove - hold a reference into the map, touch the same shard,
+deadlock.
 
-| operation | source of truth |
-| --- | --- |
-| `get` (sync) | backend |
-| `len`, `is_empty` | backend, rescanned per call |
-| `entries`, `keys` | backend |
-| `remove` | **cache**, as a gate: absent there means `Ok(None)` and no delete |
-| `get` (async) | **cache** |
-
-So `len()` spends 386 ms scanning 10 000 keys while the answer is a
-`HashMap::len()` away in the same struct, and the sync and async halves of the
-API disagree about where the truth lives.
-
-The gate in `remove` is the sharp end. It only works because the constructor
-seeded the cache; anything that leaves the cache and the store out of step makes
-`remove` a silent no-op on a key that is really there.
-
-This is a bug rather than a design cost: the memory is already spent, the scan
-is already paid, and the reads take the slow path anyway. Reads should come from
-the projection, with the backend consulted only where the projection cannot
-answer.
-
-Two things to settle while doing it:
-
-- **The lock is wrong.** `cache: Arc<Mutex<HashMap<K, V>>>` serialises readers
-  against each other for no reason. Once reads actually go through it, that is
-  the hot path, and the load is many readers against an occasional writer. Take
-  the shape `MapCache` already uses - `ArcSwap<rpds::RedBlackTreeMapSync>`,
-  measured in `RFC-map-locking.md` - rather than sharding: a read holds nothing,
-  so `entries` can lend instead of collecting, and a reader that touches the map
-  again mid-walk is ordinary. `DashMap` would serve the read load too, and
-  brings the trap this one just got rid of: hold a reference into the map, touch
-  the same shard, deadlock.
-- **Staying in sync.** The cache is currently filled by `map_apply_remote_change`
-  off the store subscription, which covers writes and external file edits. That
-  path has to remain the only writer, or the two diverge again.
+**The one invariant to keep.** `map_apply_remote_change` off the store
+subscription is the only writer to the cache, which is what covers writes and
+external file edits alike. A second writer and the two diverge, and then
+`remove`'s gate - absent in the cache means `Ok(None)` and no delete - becomes a
+silent no-op on a key that is really there.
 
 Scope, since it decides the memory question: millions of rows and blobs are not
 this library's business - reach for the database directly there. Within the size
@@ -1843,23 +1821,23 @@ Either `build` should collect too, or it should refuse to open when a generated
 step exists for a prefix it is about to touch. Silently doing half the work is
 the one option that should go.
 
-## The global store never flushes, because statics are never dropped
+## Done as far as a library can go: the global store flushes when told
 
-Every backend commits its buffer from `Drop`, and that is what makes "closing
-cleanly loses nothing" true. `GLOBAL_STORE` is a `OnceLock<Store>`, and Rust
-does not drop statics at exit, so for an application built on `init_global` the
-`Drop` never runs and every write younger than the debounce interval is lost on
-a clean return from `main`.
+`shutdown()` writes what the global store holds and returns the result;
+`Store::close` does the same for an ordinary one. An application on
+`init_global` calls it before returning from `main`.
+
+Why it cannot be automatic, since it looks like it should be. Every backend
+commits its buffer from `Drop`, and that is what makes "closing cleanly loses
+nothing" true. `GLOBAL_STORE` is a `OnceLock<Store>`, and Rust does not drop
+statics at exit, so the `Drop` never runs and every write younger than the
+debounce interval would be lost on a clean return. Nothing in the process tells
+a library that `main` is returning: statics are not dropped, there is no stable
+`atexit` in std, and `ctor`-style destructors run at a time nobody controls and
+cannot run Rust destructors safely.
 
 This also qualifies the debouncer fix: the pending write reaches disk on drop,
 where a drop happens.
-
-**Half done: the step exists, and has to be called.** `shutdown()` writes what
-the global store holds and returns the result, and `Store::close` does the same
-for an ordinary one. That is the whole of what a library can do here - nothing
-in the process tells it that `main` is returning. Statics are not dropped,
-there is no stable `atexit` in std, and `ctor`-style destructors run at a time
-nobody controls and cannot run Rust destructors safely.
 
 The debouncer thread cannot stand in for the call, which is worth writing down
 because it looks like it could. It leaves on `RecvTimeoutError::Disconnected` -
@@ -2989,7 +2967,12 @@ place.
 
 ## The text engines replace two files with no barrier between them, and eat their own backup
 
-Both read from the code, both verified.
+Both read from the code, both verified. `RFC-text-atomicity.md` is the campaign
+that went looking for what they cost: seven ways to lose committed data, each
+with a test that fails on the current code, and three of them sharpen this entry
+rather than repeat it - the barrier is missing without any crash at all, an
+ordinary I/O failure on the bookkeeping file is enough, and the error return
+then says nothing landed when half of it did.
 
 **`StoreFiles::persist` is two atomic replaces, not one operation.**
 

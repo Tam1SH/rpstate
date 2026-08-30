@@ -15,7 +15,9 @@ mod common;
 use common::{per_engine, shape};
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
-fn sidecars(store: &amethystate::Store) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+fn sidecars(
+    store: &amethystate::Store,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     match StoreBackend::files(store) {
         Some(StoreLayout::Sidecars {
             data,
@@ -106,49 +108,170 @@ fn a_write_that_landed_leaves_no_temporary_behind() {
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
 fn a_half_written_file_is_recovered_from_the_backup_beside_it() {
-    let path = TempPath::new("atomic_backup");
+    for backend in common::text_backends() {
+        let path = TempPath::new(&format!("atomic_backup_{}", backend.extension()));
 
-    let data;
-    let backup;
-    {
-        let store = StoreBuilder::new(path.path())
-            .backend(common::text_backend())
-            .build()
-            .unwrap();
-        let held = Held::new_with(&store).unwrap();
-        held.a().set(99).unwrap();
-        store.save_now().unwrap();
+        let data;
+        let backup;
+        {
+            let store = StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .unwrap();
+            let held = Held::new_with(&store).unwrap();
+            held.a().set(99).unwrap();
+            store.save_now().unwrap();
 
-        let (found, _, found_backup) = sidecars(&store);
-        data = found;
-        backup = found_backup;
-    }
+            let (found, _, found_backup) = sidecars(&store);
+            data = found;
+            backup = found_backup;
+        }
 
-    let good = std::fs::read_to_string(&data).unwrap();
+        let good = std::fs::read_to_string(&data).unwrap();
 
-    //@show what a process killed mid-migration leaves behind
-    std::fs::write(&backup, &good).unwrap();
-    std::fs::write(&data, "{ this never finished").unwrap();
-    //@show-end
+        //@show a previous open that never finished
+        std::fs::write(&backup, &good).unwrap();
+        std::fs::write(&data, "{ this never finished").unwrap();
+        //@show-end
 
-    {
-        let reopened = StoreBuilder::new(path.path())
-            .backend(common::text_backend())
-            .build()
-            .expect("a half-written file with a good backup beside it must still open");
+        {
+            let reopened = StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .unwrap_or_else(|why| {
+                    panic!(
+                        "on {}: a half-written file with a good backup beside it must still open: {why:?}",
+                        backend.extension()
+                    )
+                });
+
+            assert_eq!(
+                Held::new_with(&reopened).unwrap().a().get(),
+                99,
+                "on {}: the value from the backup did not reach the reopened store",
+                backend.extension()
+            );
+        }
 
         assert_eq!(
-            Held::new_with(&reopened).unwrap().a().get(),
-            99,
-            "the value from the backup did not reach the reopened store"
+            std::fs::read_to_string(&data).unwrap(),
+            good,
+            "on {}: the only good copy was overwritten by the broken file it was there to replace",
+            backend.extension()
         );
     }
+}
 
-    assert_eq!(
-        std::fs::read_to_string(&data).unwrap(),
-        good,
-        "the only good copy was overwritten by the broken file it was there to replace"
-    );
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
+#[test]
+fn a_half_written_file_with_no_backup_is_refused() {
+    for backend in common::text_backends() {
+        let path = TempPath::new(&format!("atomic_no_backup_{}", backend.extension()));
+
+        let data;
+        let backup;
+        {
+            let store = StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .unwrap();
+            let held = Held::new_with(&store).unwrap();
+            held.a().set(99).unwrap();
+            store.save_now().unwrap();
+
+            let (found, _, found_backup) = sidecars(&store);
+            data = found;
+            backup = found_backup;
+        }
+
+        assert!(
+            !backup.exists(),
+            "on {}: a store that opened cleanly keeps no backup",
+            backend.extension()
+        );
+
+        std::fs::write(&data, "{ this never finished").unwrap();
+
+        let refused = StoreBuilder::new(path.path()).backend(backend).build();
+
+        assert!(
+            refused.is_err(),
+            "on {}: a broken file with nothing to recover from must not open",
+            backend.extension()
+        );
+    }
+}
+
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
+#[test]
+fn recovery_leaves_the_bookkeeping_agreeing_with_the_data() {
+    for backend in common::text_backends() {
+        let path = TempPath::new(&format!("atomic_meta_{}", backend.extension()));
+
+        let data;
+        let meta;
+        let backup;
+        {
+            let store = StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .unwrap();
+            let held = Held::new_with(&store).unwrap();
+            held.a().set(99).unwrap();
+            store.save_now().unwrap();
+
+            let (found, found_meta, found_backup) = sidecars(&store);
+            data = found;
+            meta = found_meta;
+            backup = found_backup;
+        }
+
+        let good = std::fs::read_to_string(&data).unwrap();
+        let good_meta = std::fs::read_to_string(&meta).unwrap_or_else(|why| {
+            panic!(
+                "on {}: there is no bookkeeping beside the data to compare: {why}",
+                backend.extension()
+            )
+        });
+        assert!(
+            !good_meta.trim().is_empty(),
+            "on {}: the bookkeeping is empty, so comparing it proves nothing",
+            backend.extension()
+        );
+
+        std::fs::write(&backup, &good).unwrap();
+        std::fs::write(&data, "{ this never finished").unwrap();
+
+        {
+            let reopened = StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .unwrap();
+            assert_eq!(Held::new_with(&reopened).unwrap().a().get(), 99);
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(&meta).unwrap(),
+            good_meta,
+            "on {}: recovery moved the data back and left the bookkeeping somewhere else",
+            backend.extension()
+        );
+
+        let again = StoreBuilder::new(path.path()).backend(backend).build();
+        let again = again.unwrap_or_else(|why| {
+            panic!(
+                "on {}: a store recovered once must open again: {why:?}",
+                backend.extension()
+            )
+        });
+
+        assert_eq!(
+            Held::new_with(&again).unwrap().a().get(),
+            99,
+            "on {}: the recovered value did not survive a second open",
+            backend.extension()
+        );
+    }
 }
 
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]

@@ -72,9 +72,10 @@ data, backs up what it could read, and runs the migration pass; a pass that
 succeeds deletes the backup, and one that fails puts it back. In a store that
 started normally there is no `.bak` at all.
 
-Which means a `.bak` sitting there is a previous open that never finished:
+Which means a `.bak` sitting there is a previous open that never finished. The
+state one leaves behind, made by hand:
 
-<!-- shown: what a process killed mid-migration leaves behind -->
+<!-- shown: a previous open that never finished -->
 ```rust
 std::fs::write(&backup, &good).unwrap();
 std::fs::write(&data, "{ this never finished").unwrap();
