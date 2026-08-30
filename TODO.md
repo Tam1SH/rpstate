@@ -101,20 +101,36 @@ differently for one declared schema.
 `an_ancestor_is_not_a_value` in `backend_conformance.rs` already asserts the
 scalar half and would fail on toml. It has never been run there - see below.
 
-## The conformance suite asks one engine unless told otherwise
+## Every per-engine suite asks one engine unless told otherwise
 
-`cargo test --test backend_conformance` runs the twenty-nine properties against
-redb and nothing else: the other four engines sit behind their own features, so
-each needs its own invocation. A file whose stated purpose is that "a statement
-that fails on one engine and passes on another is the finding" is, by default,
-asking one engine.
+Three files are built as one statement asked of every engine, and `cargo test`
+puts the question to redb alone in all three - the other four sit behind their
+own features, so each needs its own invocation.
 
-The toml bug above is what that costs. The property was written, the assertion
-was right, and it was never put the question.
+| file | how it fans out | what an ordinary run sees |
+| --- | --- | --- |
+| `backend_conformance.rs` | `engine!` per backend | redb |
+| `depth_is_refused_before_it_is_written.rs` | `per_engine!` per backend | redb |
+| `non_finite_float.rs` | a `cfg` ladder picking one | redb |
 
-Whatever fixes this has to survive being forgotten - a single command that runs
-all five, and something that fails when a new engine is added without joining
-it.
+A file whose stated purpose is that "a statement that fails on one engine and
+passes on another is the finding" is, by default, asking one engine. The depth
+file is the sharpest: the ceilings are 512, 254, 127, 80 and 64, and the whole
+point is that each engine answers with its own - a default run sees one of the
+five.
+
+Three things have already been found only by running a feature by hand: the toml
+branch-read bug, which `an_ancestor_is_not_a_value` asserted correctly and was
+never asked; a `kv` snapshot left stale under toml through a rename every other
+engine's snapshot had taken; and the confy tests, which turned out to pass on
+toml long before anyone looked.
+
+CI does run the matrix, so this is not invisible forever - it is invisible for
+as long as it takes a change to reach CI, which is exactly the window in which
+it is cheap to fix.
+
+Whatever closes this has to survive being forgotten: one command that runs all
+five, and something that fails when an engine is added without joining it.
 
 ## `durable()` on one field commits everyone else's unfinished writes
 
