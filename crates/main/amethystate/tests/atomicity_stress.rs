@@ -1,16 +1,5 @@
-//! Atomicity under a load that is trying to catch it out.
-//!
-//! [`atomic_write`] asks whether the write path does the right thing when one
-//! named condition holds. This asks the same question with the conditions
-//! arriving in an order nobody chose: a reader looking at the file while it is
-//! being replaced, several writers going at once, a holder appearing and
-//! letting go at moments picked by a generator.
-//!
-//! Every run is reproducible. The seed is fixed unless `AME_STRESS_SEED` says
-//! otherwise, and every failure prints the one it ran with, so a schedule that
-//! breaks something can be gone back to.
-//!
-//! [`atomic_write`]: ../atomic_write/index.html
+//! Every run is reproducible: the seed is fixed unless `AME_STRESS_SEED` says
+//! otherwise, and every failure prints the one it ran with.
 
 #![cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 
@@ -67,12 +56,9 @@ fn seed() -> u64 {
         .unwrap_or(0x5EED_1234)
 }
 
-/// How long a stress test is allowed to run before it stops looking.
 #[cfg(feature = "json")]
 const DEADLINE: Duration = Duration::from_secs(5);
 
-/// A write in flight is a narrow window, so a run that never caught one has
-/// not shown anything and must not report success.
 #[cfg(feature = "json")]
 fn assert_saw_enough(observed: usize, floor: usize, what: &str, seed: u64) {
     assert!(
@@ -83,13 +69,8 @@ fn assert_saw_enough(observed: usize, floor: usize, what: &str, seed: u64) {
     );
 }
 
-/// A reader that is not the store, looking at the store's file at moments the
-/// store did not choose. Every look must find a whole document.
-///
-/// The parse is what makes this a test rather than an exercise: a replacement
-/// that let a reader see part of a write leaves a file that no parser accepts.
-/// Only `json` is checked this way, because the test can parse that itself
-/// without asking the crate under test whether its own file is well formed.
+/// Only `json` is checked this way: the test parses the file itself rather than
+/// asking the crate under test whether its own file is well formed.
 #[cfg(feature = "json")]
 #[test]
 fn a_reader_never_meets_a_half_written_file() {
@@ -186,20 +167,8 @@ fn a_reader_never_meets_a_half_written_file() {
     assert_saw_enough(looks, 20, "whole documents read", seed);
 }
 
-/// Several writers on one store, each owning its own path, all flushing to the
-/// same file whenever they feel like it.
-///
-/// What a race costs here is not a parse error but a lost write: the file ends
-/// up holding neither what one writer put there nor what the other did. So the
-/// store is reopened at the end and asked for every path, having been told each
-/// one's last value - after every writer has finished and a final `save_now`
-/// has returned success, so there is nothing left in flight to excuse it.
-///
-/// It used to fail about twice in ten runs, and what came back was a value from
-/// earlier in the run rather than the default - the shape of a stale document
-/// landing on a newer one rather than of a write never made. `StoreFile::persist`
-/// rendered the document under a guard it then dropped, and replaced the file
-/// holding nothing, so two flushes crossed.
+/// Each writer owns its own path, so every final value is determined and a
+/// lost write is distinguishable from a permitted overwrite.
 #[test]
 fn writers_racing_each_other_all_land() {
     let seed = seed();
@@ -266,13 +235,8 @@ fn writers_racing_each_other_all_land() {
     }
 }
 
-/// A holder arriving and letting go at moments the store did not choose, some
-/// of them longer than the retry budget and some shorter.
-///
-/// Whether any one save succeeds is the schedule's business. What is not the
-/// schedule's business is the file: a save that failed must leave the previous
-/// document where it was, whole, and the store must still be able to land the
-/// value once the holder is gone for good.
+/// Whether any one save succeeds is the schedule's business; what the file
+/// holds afterwards is not.
 #[cfg(all(windows, feature = "json"))]
 #[test]
 fn a_holder_coming_and_going_never_leaves_a_broken_file() {
@@ -369,9 +333,8 @@ fn a_holder_coming_and_going_never_leaves_a_broken_file() {
     );
 }
 
-/// The metadata file is written the same way as the data file and is just as
-/// able to be caught half-written - and a store whose schema bookkeeping is
-/// torn cannot read the data file at all, so it is the worse of the two.
+/// A store whose bookkeeping is torn cannot read its data file at all, so this
+/// is the worse of the two files to catch half-written.
 #[cfg(feature = "json")]
 #[test]
 fn the_metadata_file_is_never_half_written_either() {

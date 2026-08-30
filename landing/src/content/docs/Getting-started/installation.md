@@ -75,7 +75,7 @@ See [Tauri integration](/amethystate/integrations/tauri/) for setup and usage.
 
 ## Migrating from an existing solution
 
-See [Migrating from confy](/amethystate/migrations/confy-compat/) or [Migrating from a custom solution](/amethystate/migrations/custom/).
+See [Migrating from a custom solution](/amethystate/migrations/custom/).
 
 ## Framework integrations
 

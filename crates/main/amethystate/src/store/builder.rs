@@ -196,14 +196,13 @@ pub struct StoreBuilder {
 
 /// Which convention decides where an application's files belong.
 ///
-/// The two disagree about enough of the tree that a store written under one is
-/// not found under the other, so an application that has shipped should say
-/// which it means rather than let a feature flag elsewhere in the build decide.
+/// They disagree about enough of the tree that a store written under one is not
+/// found under the other, so an application that has shipped should name the one
+/// it means rather than take whichever [`Location::app`] defaults to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Layout {
-    /// The XDG layout, followed on every platform. What [`Location::app`] uses
-    /// unless a compatibility feature says otherwise.
+    /// The XDG layout, followed on every platform. What [`Location::app`] uses.
     App,
 
     /// Wherever the host system says an application's files go, which differs
@@ -212,28 +211,22 @@ pub enum Layout {
     /// things.
     Native,
 
-    /// The layout the `directories` crate produces.
+    /// The layout the `directories` crate produces: the XDG configuration
+    /// directory on Linux, `AppData\Roaming\<app>\config` on Windows, and
+    /// `Library/Application Support/rs.<app>` on macOS.
     ///
-    /// Offered because `confy` 0.6 wrote there, so an application that used to
-    /// keep its configuration through `confy` can still find it. Available with
-    /// the `confy-compat-0-6` feature, which is what brings that crate in.
-    #[cfg(feature = "confy-compat-0-6")]
+    /// A third reading of the same question, close to [`Layout::App`] on Linux
+    /// and Windows and to [`Layout::Native`] on macOS without being either of
+    /// them everywhere. The one to name for an application whose files that
+    /// crate already placed, since where it put them is what the store has to
+    /// match.
     ProjectDirs,
 }
 
 impl Layout {
-    /// What [`Location::app`] picks: `ProjectDirs` where the compatibility
-    /// feature is on - it exists only there, so this cannot be a link - and
-    /// [`Layout::App`] otherwise.
+    /// What [`Location::app`] picks when the caller does not say: [`Layout::App`].
     pub const fn default_for_build() -> Self {
-        #[cfg(feature = "confy-compat-0-6")]
-        {
-            Self::ProjectDirs
-        }
-        #[cfg(not(feature = "confy-compat-0-6"))]
-        {
-            Self::App
-        }
+        Self::App
     }
 }
 
@@ -245,8 +238,8 @@ pub struct Location;
 impl Location {
     /// The configuration directory this platform keeps for `app_name`.
     ///
-    /// Which convention that is comes from the build's features; name it with
-    /// [`Location::app_under`] where it must not move.
+    /// That is [`Layout::App`]; name a convention with [`Location::app_under`]
+    /// where the store must not move.
     pub fn app(
         self,
         app_name: impl AsRef<str>,
@@ -255,7 +248,7 @@ impl Location {
         self.app_under(Layout::default_for_build(), app_name, config_name)
     }
 
-    /// The same, under the layout named rather than the one the features chose.
+    /// The same, under the layout named rather than the default one.
     pub fn app_under(
         self,
         layout: Layout,
@@ -286,7 +279,6 @@ impl Location {
                     .attach("this system has no home directory to put an application's own under")?
                     .config_dir()
             }
-            #[cfg(feature = "confy-compat-0-6")]
             Layout::ProjectDirs => {
                 use directories::ProjectDirs;
 

@@ -181,5 +181,3 @@ the debouncer.
 - **Framework integrations** - Tauri with TypeScript bindings, Leptos, Dioxus,
   Yew, GPUI, windows-reactor:
   [Integrations](/amethystate/integrations/overview/).
-- **Coming from confy** - an existing config is read in place:
-  [Migrating from confy](/amethystate/migrations/confy-compat/).

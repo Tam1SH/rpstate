@@ -106,21 +106,19 @@ and `Layout` names them:
 | --- | --- |
 | `Layout::App` | the XDG layout, on every platform including Windows and macOS |
 | `Layout::Native` | wherever the host system says application files go, which differs from XDG off Linux |
-| `Layout::ProjectDirs` | what the `directories` crate produces, behind the `confy-compat-0-6` feature |
+| `Layout::ProjectDirs` | what the `directories` crate produces - XDG on Linux and Windows, `Library/Application Support` on macOS |
 
-`app` picks one for you, and which one depends on the build's features:
-`ProjectDirs` when `confy-compat-0-6` is on, `App` otherwise. `ProjectDirs`
-exists for one reason - confy 0.6 wrote there, so an application arriving from
-confy can still find its old configuration.
+`app` picks `Layout::App` for you.
 
 `Layout::Native` is what a desktop application usually wants, since it is where
 the rest of the platform's software puts things - and `app` never chooses it.
-Ask for it by name.
+Ask for it by name. `Layout::ProjectDirs` is for an application whose files are
+already where the `directories` crate puts them, so that crate's reading of the
+directory is the one the store has to match.
 
 **Name the layout once you have shipped.** The conventions disagree about
 enough of the tree that a store written under one is not found under the other,
-so `app_under` is what keeps a feature flag elsewhere in the build from moving
-someone's settings out from under them on an upgrade.
+so `app_under` is what pins where someone's settings live across an upgrade.
 
 `beside_the_executable` is for a portable install, and not for an installed
 one: `Program Files` and `/usr/bin` are not writable by the person running the

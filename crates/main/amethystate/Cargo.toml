@@ -27,11 +27,6 @@ text = ["dep:tempfile", "dep:parking_lot", "dep:notify"]
 async = ["amethystate-core/async"]
 tauri = ["amethystate-macros/tauri", "amethystate-tauri", "async"]
 
-# One feature per confy generation, because they disagree about where the
-# configuration directory is: 0.6 used `directories`, 2.x uses `etcetera`. A
-# store that reads the wrong one finds nothing and starts fresh.
-confy-compat-0-6 = ["dep:directories"]
-confy-compat-2 = []
 test-utils = ["amethystate-core/test-utils"]
 
 # Counts every allocation in the profiling example and attributes it to where
@@ -68,7 +63,7 @@ redb = { workspace = true, optional = true }
 arc-swap = { workspace = true, optional = true }
 rmp-serde = { workspace = true, optional = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
-directories = { workspace = true, optional = true }
+directories = { workspace = true }
 inventory = { workspace = true }
 futures-core = { workspace = true }
 parking_lot = { workspace = true, optional = true }
@@ -93,7 +88,6 @@ rayon = { workspace = true }
 serde = { workspace = true }
 trybuild = { workspace = true }
 tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
-real-confy = { package = "confy", version = "2.0.0" }
 serial_test = "3.5.0"
 dashmap = { workspace = true }
 smol_str = { workspace = true }

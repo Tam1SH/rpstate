@@ -31,7 +31,6 @@ in the background. Schema versions are explicit, migrations run on startup, and 
 - **Three backends, five formats** — `redb`, `sqlite`, and text as `json`/`toml`/`ron`; text files reload on external edits
 - **[Integrations](https://uniproc-dev.github.io/amethystate/integrations/overview)** — Tauri (+TS bindings), Leptos, Dioxus, Yew, GPUI, windows-reactor, egui/iced/ratatui
 - **Tracing** — structured events, each write tagged with its source struct
-- **confy compat** — reads an existing confy config in place
 
 ```rust
 #[amethystate(prefix = "network")]

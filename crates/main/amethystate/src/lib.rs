@@ -51,9 +51,6 @@ pub use serde_json;
 pub use store::StoreBackend;
 pub use store::StoreExt;
 
-#[cfg(any(feature = "confy-compat-2", feature = "confy-compat-0-6"))]
-pub mod confy;
-
 #[cfg(any(feature = "test-utils", test))]
 pub mod test_utils;
 

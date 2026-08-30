@@ -92,13 +92,11 @@ there. Rendering the table as an inline table and passing that on gives toml the
 same behaviour - `Err` for the `u32`, `Ok` for a struct that matches - rather
 than a third answer of its own.
 
-**It unblocks six ignored tests.** Both in `confy_compat.rs` and four in
-`confy_migration.rs` name this: "a stored config cannot be read back", "toml
-decodes the document root wrongly", "same root decode failure as the flat case",
-"the document root does not survive a round trip". Reading a whole document as
-one struct is what `confy` compatibility *is*, and it is the root case of this
-bug. The remaining two ignores are other causes - the extension following the
-backend, and an empty file becoming defaults.
+**It is what `as_root` runs into on toml.** A struct that owns the document root
+is read back as one value, which is the root case of this bug: the whole
+document reaches serde as a table, and the table is the thing toml renders
+wrongly. json takes the same shape without complaint, so the two engines answer
+differently for one declared schema.
 
 `an_ancestor_is_not_a_value` in `backend_conformance.rs` already asserts the
 scalar half and would fail on toml. It has never been run there - see below.
@@ -2755,21 +2753,13 @@ turns a failure into data - `ComponentOutcome::Failed { error }` inside an
 `MigrationReport` is not `#[must_use]`. Confirmed by running it: a store at v1
 with a v2 step that returns `Err` opens successfully, silently, holding
 pre-migration data, and the application then runs new code against old data.
-That is the thing migrations exist to prevent. `confy::get_store` and every
-doctest take this path.
+That is the thing migrations exist to prevent. Every doctest takes this path.
 
 **Every engine discards its last flush on drop.** `let _ = self.close()` in
 `redb/mod.rs:147`, `sqlite/mod.rs:516`, and `let _ = self.save_now()` in
 `text/store.rs:178`. `close` is the only thing that commits the write buffer at
 shutdown. redb's `close` even attaches "flushing the buffer before close", and
 the attachment goes on the floor. `Drop` cannot return, but it can log.
-
-**`confy::load_or_else` deletes the config file on any store-open error**
-(`confy/mod.rs:410`). `get_store` fails on a poisoned mutex, on `create_dir_all`,
-and on `build()` - which covers the database being locked by another process and
-permission denied. None of those mean the config is bad; all of them delete it.
-The report is discarded, so the error the user finally sees describes the
-freshly recreated store rather than the original failure.
 
 **`CommitSignal` reduces a report to one bool** (`store/durable.rs:35`). Every
 producer has a `Report` in hand and throws it away; `outcome` then builds a bare
@@ -2985,13 +2975,6 @@ and `Poison` still takes the writer down for an application that asks.
 precisely so this is not done: a name may hold GLOB metacharacters - `panel[0]`
 is a name - and nothing escapes them. `ui*` also matches `uix.width`, with no
 separator boundary. The main engine's path was fixed; this one was missed.
-
-## `confy`'s error conversion is written against an error model that is gone
-
-`confy/mod.rs:134-177` destructures `RpError::TextStore(..)`, `RpError::Codec(..)`,
-`RpError::Path(..)`. `StorageError` is now a payload-free enum naming the
-operation, so that whole match is stale. It only compiles under `confy-compat`,
-which is why nothing has noticed.
 
 ## A durable write commits a different amount on each engine
 
@@ -3316,9 +3299,8 @@ Four passes over the suite, one per area, each asking whether a test would say
 so if the behaviour under it were broken. The expected answer was loose error
 matching - `is_err()` on a `Report` whose context says exactly what happened -
 and that is there. It is not the largest part. The largest part is tests that
-**never run** or that **cannot fail**: four confy tests that return before their
-first assertion in every CI cell, a macro golden that `macrotest` writes for
-itself rather than failing, an adapter crate outside the workspace whose 324
+**never run** or that **cannot fail**: a macro golden that `macrotest` writes
+for itself rather than failing, an adapter crate outside the workspace whose 324
 lines of tests only build on one machine, and about a dozen tests that stay green
 under a named one-line mutation of the code they exist to guard.
 
@@ -4204,8 +4186,8 @@ Two models, and the library is currently both.
 
 **A picture of a type.** `to_writer(file, &config)`. The file is nested because
 the struct is, a person opening it sees their own shape, and there is nothing to
-address: the root is read and written whole. This is what `confy` does and what
-the compatibility layer exists to read.
+address: the root is read and written whole. This is what a plain
+`to_writer(file, &config)` gives, and what `as_root` writes.
 
 **A store that happens to be text.** Keys are paths, each with its own value,
 its own event, its own deletion. VS Code's `settings.json` is this - flat, keys
@@ -4236,8 +4218,8 @@ difference between `delete` and `delete_prefix` on a document, and `Navigable`
 with the four `generic_*` walkers - `TextDocument` becomes a flat map.
 
 What it would cost: every file already written nested needs migrating on open;
-`confy`'s files are nested and stay a foreign format to import rather than our
-own; toml needs quoted keys (`"editor.fontSize" = 14`), which is legal and
+any file some other library wrote by serializing a struct whole is nested, and
+stays a foreign format to import rather than our own; toml needs quoted keys (`"editor.fontSize" = 14`), which is legal and
 against its idiom; and a path into the interior of a value - `["cfg", "panels",
 "left", "width"]` - stops resolving, though `#[amestate(nested)]` already writes
 each leaf as its own key and so is unaffected.

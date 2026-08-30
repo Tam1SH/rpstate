@@ -18,7 +18,7 @@ Everything else sits beside it under `landing/src/content/docs/`:
 | --- | --- |
 | `Getting-started/` | installation, first store, the smallest working app |
 | `Concepts/` | fields and subscriptions, reactive cells, `Kv`, durability, observability |
-| `Migrations/` | defining steps, custom and manual migrations, confy compatibility |
+| `Migrations/` | defining steps, custom and manual migrations |
 | `Integrations/` | one page per GUI framework, plus an overview of the execution models |
 
 `Integrations/overview.md` is the fastest way to understand why each adapter is

@@ -170,24 +170,28 @@ line falls.
 
 ## Root-level storage (`as_root`)
 
-By default, all fields are stored under the struct's `prefix`. With `as_root`, fields are written directly to the store root with no namespace — the same layout that `confy` produces.
+By default, all fields are stored under the struct's `prefix`. With `as_root`, fields are written directly to the store root with no namespace.
 
 ```rust
 #[amethystate(mode = "persistent", as_root)]
 pub struct AppConfig {
-    #[amestate(default = "legacy".to_string())]
+    #[amestate(default = "acme".to_string())]
     pub name: String,
 
     #[amestate(default = false)]
-    pub comfy: bool,
+    pub verbose: bool,
 }
 ```
 
 This produces a file like:
 
 ```toml
-name = "legacy"
-comfy = false
+name = "acme"
+verbose = false
 ```
 
-The primary use case is coexistence with or migration from an existing `confy`-managed file. See [Migrating from confy](/amethystate/migrations/confy-compat/).
+That is the shape to ask for when the file is read by something other than this
+crate — a config somebody edits by hand, or one whose keys another program
+already expects at the top level. Root fields are claimed like any others, so
+two structs reaching for the same key still collide:
+[Who owns which place](/amethystate/concepts/claims/).

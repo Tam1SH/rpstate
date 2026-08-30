@@ -1,10 +1,7 @@
-// The .stderr goldens quote rustc diagnostics, and rustc qualifies type
-// paths differently once other backends are in scope. They are checked in
-// the canonical single-backend config only.
-//
-// Behind `golden` because trybuild compiles a crate per case: this one test
-// costs more than every other test binary in the suite put together, and
-// nothing it checks can change without the macro sources changing too.
+// One backend, because rustc qualifies type paths differently once others are
+// in scope and the .stderr goldens quote it. Behind `golden`, because trybuild
+// compiles a crate per case and this one test costs more than the rest of the
+// suite together.
 #[cfg(all(
     feature = "golden",
     feature = "redb",

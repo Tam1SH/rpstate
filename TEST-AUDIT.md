@@ -96,25 +96,6 @@ checkable. This is what has been done about them.
 
 The worst kind, because a suite that reports green counts these as coverage.
 
-**Four `confy` compatibility tests return before their first assertion, in every
-CI cell.** `tests/confy_migration.rs` - `what_the_layer_writes_confy_can_read`
-(:262), `an_as_root_schema_reads_the_confy_file` (:320),
-`loading_leaves_the_file_byte_identical` (:415),
-`opening_a_store_keeps_the_confy_fields` (:611). Each opens with
-`if !backend_speaks_confy() { return; }`, which is `default_backend().extension()
-== "toml"`. CI runs three cells - `redb`, `json`, `all`; the first two have no
-`confy-compat` so the file is cfg'd out, and in `all` the default backend is
-redb. Together these are the entire positive story for confy compatibility.
-`[verified]`
-
-**`tests/confy_compat.rs:178` `test_compare_real_confy_and_amethystate` compiles
-in no CI cell.** It needs `--no-default-features --features toml,confy-compat`,
-which the matrix does not contain. It is the only test comparing the bytes
-`real_confy` writes against the bytes this crate writes.
-
-**`tests/confy_compat.rs:115` `test_confy_amethystate_coexistence`** - same
-shape, and it carries three `insta` snapshots that therefore cannot rot loudly.
-
 **`tests/expand/nested_under_a_dotted_prefix.rs` has no `.expanded.rs`, and
 `macrotest` writes one rather than failing.** `macrotest::expand()` runs in
 `RegenerateFiles` mode: a missing golden is written and reported as *refreshed*,
@@ -305,25 +286,6 @@ buffer at all - so the doc describes a path that is not running.
 `backend/redb/mod.rs:1133`) - asserts `report.has_failures()` and that the value
 is unchanged. Both hold if the step being "rolled back" never ran. It should
 assert that one component succeeded then rolled back and the other failed.
-
-**`tests/confy_migration.rs` runs redb while its doc comments describe toml.**
-`layer_ext()` is `default_backend().extension()`, so
-`a_struct_reads_back_from_the_path_it_was_written_to` (:300) - whose doc is
-explicitly about toml storing a struct as an inline table under a name and a
-table at the root - opens a `.redb` file. This is the trap recorded below under
-*A gate is not a choice of engine*; the eight `tamper_*` files were fixed and
-this one was not. `seeded_store()` (:95) shares it.
-
-**`tests/confy_migration.rs:402` `a_corrupt_file_is_reported_by_load_path`** -
-writes broken toml, asserts `is_err()`. The layer opens it with redb, which
-fails because it is not a redb database; the corruption is never reached.
-Replace the toml parse-failure path with "return the default" and it stays
-green.
-
-**`tests/confy_migration.rs:636` `a_read_only_file_is_refused_the_way_confy_refuses_it`**
-- the whole assertion is `assert_eq!(layer_refuses, confy_refuses)` on two
-`is_err()` booleans. **It passes when both are `false`.** Nothing pins that a
-refusal happens at all.
 
 **`tests/atomic_write.rs:35` `a_path_that_cannot_be_written_is_reported`** - the
 real claim ("must not leave the caller thinking the value landed") is in the
