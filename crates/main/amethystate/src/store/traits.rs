@@ -150,12 +150,11 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// - which is what loading a map is - drops both immediately.
     ///
     /// The key arrives as it is stored, joined and escaped, and has not been
-    /// checked: [`name_under_key`](amethystate_core::path::name_under_key)
-    /// reads a level out of one and refuses a key this library did not write.
+    /// checked: [`level_under`](amethystate_core::path::level_under) reads a
+    /// level out of one and refuses a key this library did not write.
     ///
     /// Defaulted through `scan_prefix`, so a backend implemented outside this
-    /// crate stays correct without knowing this exists - it simply pays what it
-    /// paid before.
+    /// crate stays correct without knowing this exists.
     fn visit_prefix(
         &self,
         prefix: &StorePath,
@@ -203,7 +202,64 @@ pub trait StoreBackend: Send + Sync + 'static {
         None
     }
 
+    /// Writes everything buffered and says whether it landed.
+    ///
+    /// This is the fallible half of dropping the store, and the point of
+    /// calling it is the `Result`: a full disk, a locked file or a permission
+    /// error at exit is answered here, while the application is still running
+    /// and can do something about it. Left to `Drop`, the same failure can
+    /// only be logged.
+    ///
+    /// The store goes on working afterwards, and a call with nothing buffered
+    /// does nothing. The file is released when the last clone of the store
+    /// goes.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc_save_now");
+    /// let store = StoreBuilder::new(&*path).build().unwrap();
+    /// store.kv().set("port", &8080u16).unwrap();
+    ///
+    /// if let Err(report) = store.save_now() {
+    ///     eprintln!("settings were not saved: {report:?}");
+    /// }
+    /// ```
     fn save_now(&self) -> StorageResult<()>;
+
+    /// Writes what is buffered, stops the background threads and lets go of
+    /// the file.
+    ///
+    /// This is what hands the file to somebody else - another process, a
+    /// backup, a rename. Afterwards every read and write answers
+    /// [`StorageError::Closed`](crate::store::StorageError::Closed) rather
+    /// than opening it again, because taking it back would leave two owners
+    /// each believing they hold it. Values already read stay readable in
+    /// memory; it is the store that is closed, not the handles onto it.
+    ///
+    /// It closes for every clone, since there is one file between them.
+    /// Calling it more than once is fine, and `Drop` after it does nothing.
+    ///
+    /// What each engine gives up differs: sqlite releases the file itself,
+    /// redb releases its claim so another store can open it, and a document
+    /// engine holds nothing open and only settles its threads.
+    ///
+    /// The default writes what is buffered and leaves the store working, which
+    /// is the whole of closing for a backend implemented outside this crate
+    /// that holds nothing to give up. One that does hold something - a file
+    /// handle, a connection, a thread - implements this and
+    /// [`StoreBackend::is_closed`] together.
+    fn close(&self) -> StorageResult<()> {
+        self.save_now()
+    }
+
+    /// Whether [`StoreBackend::close`] has already run.
+    ///
+    /// For a reader that holds a value of its own and wants to say where it
+    /// came from: a closed store reports nothing further, so what such a
+    /// reader holds is the last thing it was told.
+    fn is_closed(&self) -> bool {
+        false
+    }
 
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId;
     fn unsubscribe(&self, id: SubscriptionId);

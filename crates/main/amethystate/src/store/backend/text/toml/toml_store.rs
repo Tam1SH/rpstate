@@ -91,6 +91,14 @@ impl StoreBackend for TomlStore {
         self.0.save_now()
     }
 
+    fn close(&self) -> StorageResult<()> {
+        self.0.close()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.0.is_closed()
+    }
+
     fn subscribe(&self, kind: SubscriptionKind, callback: StoreCallback) -> SubscriptionId {
         self.0.subscribe(kind, callback)
     }

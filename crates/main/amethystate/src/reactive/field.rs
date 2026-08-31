@@ -81,6 +81,21 @@ impl<TValue> Clone for Field<TValue> {
     }
 }
 
+impl<TValue> Field<TValue> {
+    /// Records that this field is reporting something the store does not agree
+    /// with, and why.
+    ///
+    /// What a struct's own `check` reaches for: its verdict is about a
+    /// relationship, and [`Field::try_get`] is where each field it named says
+    /// so.
+    #[doc(hidden)]
+    pub fn __ame_refused(&self, why: &str) {
+        if let Ok(mut held) = self.inner.unreadable.lock() {
+            *held = Some(Arc::from(why));
+        }
+    }
+}
+
 impl<TValue> Field<TValue>
 where
     TValue: FieldValue,
@@ -179,10 +194,11 @@ where
     /// where a caller that cares finds out whether what it drew is what the
     /// store holds.
     ///
-    /// `Err` when a change arrived that would not decode into this field's
-    /// type - from an edit to the file outside the process, a migration that
-    /// left something behind, or a codec that accepted a value it cannot read
-    /// back. The field goes on reporting the last value the store agreed with,
+    /// `Err` when the store holds something this field will not report: a
+    /// change that would not decode into its type - from an edit to the file
+    /// outside the process, a migration that left something behind, or a codec
+    /// that accepted a value it cannot read back - or a value a declared
+    /// `check` refused. The field goes on reporting the last value it agreed with,
     /// and subscribers hear nothing, because the alternative is waking a
     /// redraw with a value nobody chose. This is the channel that says the
     /// store no longer agrees.
@@ -191,6 +207,12 @@ where
     /// as it is true. Nothing here fails at the moment of asking: what failed
     /// happened earlier, and this reports it.
     pub fn try_get(&self) -> ReactiveFieldResult<TValue> {
+        if self.store_has_closed() {
+            return Err(Report::new(FieldError::Storage)
+                .attach(format!("path: {}", self.inner.path))
+                .attach("the store was closed, so this value is the last one it reported"));
+        }
+
         let unreadable = self
             .inner
             .unreadable
@@ -205,6 +227,16 @@ where
                 .attach(format!("the stored value could not be read: {reason}"))),
         }
     }
+
+    fn store_has_closed(&self) -> bool {
+        use crate::StoreBackend;
+
+        self.inner
+            .store_sub
+            .as_ref()
+            .is_some_and(|sub| sub.store().is_closed())
+    }
+
 
     /// The full path this field is stored under, prefix included.
     ///
@@ -228,8 +260,8 @@ where
     /// let net = store.kv().namespace("net");
     /// assert_eq!(net.get::<u16>("port").unwrap(), Some(8080));
     /// ```
-    /// Lent, not handed over: a caller asking where a field lives usually wants
-    /// to read it and drop it, and cloning on their behalf decides for them.
+    /// Borrowed, so a caller who wants to keep it clones it themselves: asking
+    /// where a field lives is usually a read and a drop.
     pub fn path(&self) -> &StorePath {
         &self.inner.path
     }

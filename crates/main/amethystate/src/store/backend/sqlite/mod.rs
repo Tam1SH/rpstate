@@ -12,7 +12,7 @@ use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::facts::{Facts, Key, StoreFile};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
-use crate::store::util::debouncer::Debouncer;
+use crate::store::debouncer::Debouncer;
 use crate::store::{
     InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
     SubscriptionEntry, SubscriptionId, SubscriptionKind,
@@ -92,7 +92,7 @@ fn apply_pending(
 }
 
 struct SqliteStoreInner {
-    conn: Arc<Mutex<Connection>>,
+    conn: Arc<Mutex<Option<Connection>>>,
     path: PathBuf,
     pending: Arc<Mutex<utils::Pending>>,
     initialized: Arc<Mutex<HashSet<StorePath>>>,
@@ -109,9 +109,59 @@ struct SqliteStoreInner {
 }
 
 impl SqliteStoreInner {
+    /// The connection, or the reason there is not one.
+    ///
+    /// sqlite holds the file for as long as the connection lives, so closing
+    /// has to take the connection away rather than leave it idle - and every
+    /// caller that wanted it has to hear which of the two it got.
+    fn conn(&self) -> StorageResult<parking_lot::MappedMutexGuard<'_, Connection>> {
+        parking_lot::MutexGuard::try_map(self.conn.lock(), |held| held.as_mut()).map_err(|_| {
+            error_stack::Report::new(StorageError::Closed).attach(StoreFile(self.path.clone()))
+        })
+    }
+
+    /// Writes what is buffered, stops the background thread and lets go of the
+    /// file.
+    ///
+    /// The order is what makes it safe. Stopping first means a write racing
+    /// this one is refused rather than buffered by a store about to lose its
+    /// connection, and the join means the flush the thread was already running
+    /// has finished. Only then is the connection taken, which is what releases
+    /// the file to whoever the close was for.
+    ///
+    /// Closing twice is fine: the second call finds the thread stopped and
+    /// returns, so `Drop` after an explicit close does nothing.
     pub fn close(&self) -> StorageResult<()> {
+        {
+            let _buffering = self.pending.lock();
+            if !self.debouncer.stop_accepting() {
+                return Ok(());
+            }
+        }
         info!("Closing SqliteStore...");
-        self.save_now()?;
+
+        self.debouncer.shutdown();
+        let flushed = self.save_now().attach("flushing the buffer before close");
+        self.conn.lock().take();
+
+        flushed
+    }
+
+    /// Buffers a write, refusing it if the store closed first.
+    ///
+    /// The refusal belongs inside this lock rather than at the top of a write.
+    /// Closing takes the same lock to decide it is closing, so a write is
+    /// either in the buffer before that decision - and so in the flush that
+    /// follows it - or it is refused. Checked earlier and buffered later, a
+    /// write lands after the last flush and is reported as taken while never
+    /// reaching the disk.
+    fn buffer(&self, fill: impl FnOnce(&mut utils::Pending)) -> StorageResult<()> {
+        let mut lock = self.pending.lock();
+        if self.debouncer.is_stopped() {
+            return Err(error_stack::Report::new(StorageError::Closed)
+                .attach(StoreFile(self.path.clone())));
+        }
+        fill(&mut lock);
         Ok(())
     }
 
@@ -124,7 +174,7 @@ impl SqliteStoreInner {
         };
 
         {
-            let mut conn = self.conn.lock();
+            let mut conn = self.conn()?;
             let txn = conn
                 .transaction()
                 .map_err(SqliteStoreError::from)
@@ -171,7 +221,7 @@ impl SqliteStoreInner {
             return Ok(op.value().map(Vec::from));
         }
 
-        let conn = self.conn.lock();
+        let conn = self.conn()?;
         let mut stmt = conn
             .prepare_cached("SELECT value FROM data WHERE key = ?")
             .map_err(SqliteStoreError::from)
@@ -187,7 +237,7 @@ impl SqliteStoreInner {
 
     fn run_migrations(&self, mset: MigrationSet) -> StorageResult<MigrationReport> {
         struct SqliteProvider<'a> {
-            conn: &'a Mutex<Connection>,
+            inner: &'a SqliteStoreInner,
         }
 
         impl<'a> StorageProvider for SqliteProvider<'a> {
@@ -195,7 +245,7 @@ impl SqliteStoreInner {
             where
                 F: FnOnce(&mut dyn MigrationBackendAdapter) -> StorageResult<T>,
             {
-                let mut conn = self.conn.lock();
+                let mut conn = self.inner.conn()?;
                 let txn = conn
                     .transaction()
                     .map_err(SqliteStoreError::from)
@@ -215,7 +265,7 @@ impl SqliteStoreInner {
             }
         }
 
-        let provider = SqliteProvider { conn: &self.conn };
+        let provider = SqliteProvider { inner: self };
         let engine = MigrationEngine::new(&provider);
         engine.run(mset).attach_store_file(&self.path)
     }
@@ -228,7 +278,7 @@ impl SqliteStoreInner {
             }
         }
 
-        let conn = self.conn.lock();
+        let conn = self.conn()?;
         let mut stmt = conn
             .prepare_cached("SELECT value FROM data WHERE key = ?")
             .map_err(SqliteStoreError::from)
@@ -287,10 +337,9 @@ impl SqliteStoreInner {
             return Ok(());
         }
 
-        {
-            let mut lock = self.pending.lock();
+        self.buffer(|lock| {
             lock.insert(path.clone(), utils::PendingOp::Set(vec.clone()));
-        }
+        })?;
 
         utils::emit_events(
             &self.subscriptions,
@@ -317,7 +366,7 @@ impl SqliteStoreInner {
         let mut storage_results: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         {
-            let conn = self.conn.lock();
+            let conn = self.conn()?;
             let mut stmt = conn
                 .prepare_cached(
                     "SELECT key, value FROM data \
@@ -367,7 +416,7 @@ impl SqliteStoreInner {
         let mut keys: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
         {
-            let conn = self.conn.lock();
+            let conn = self.conn()?;
             let mut stmt = conn
                 .prepare_cached(
                     "SELECT key FROM data \
@@ -426,10 +475,9 @@ impl SqliteStoreInner {
             return Ok(());
         };
 
-        {
-            let mut lock = self.pending.lock();
+        self.buffer(|lock| {
             lock.insert(path.clone(), utils::PendingOp::Delete);
-        }
+        })?;
 
         utils::emit_events(
             &self.subscriptions,
@@ -455,12 +503,11 @@ impl SqliteStoreInner {
             .attach_prefix(prefix)
             .attach("listing the subtree being deleted")?;
 
-        {
-            let mut lock = self.pending.lock();
+        self.buffer(|lock| {
             for (path, _) in keys {
                 lock.insert(path, utils::PendingOp::Delete);
             }
-        }
+        })?;
 
         utils::emit_events(
             &self.subscriptions,
@@ -502,7 +549,7 @@ impl SqliteStoreInner {
 
         let key = utils::init_key(namespace.as_str());
         let found = {
-            let conn = self.conn.lock();
+            let conn = self.conn()?;
             let mut stmt = conn
                 .prepare_cached("SELECT 1 FROM metadata WHERE key = ?")
                 .map_err(SqliteStoreError::from)
@@ -526,9 +573,9 @@ impl SqliteStoreInner {
         }
 
         self.check_debouncer()?;
-        self.pending
-            .lock()
-            .insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
+        self.buffer(|lock| {
+            lock.insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
+        })?;
 
         let mut initialized = self.initialized.lock();
         if state.is_seeded() {
@@ -589,7 +636,7 @@ impl SqliteStore {
         .doing(StorageError::Open, &config.path)
         .attach("setting the pragmas and creating the tables")?;
 
-        let conn_arc = Arc::new(Mutex::new(conn));
+        let conn_arc = Arc::new(Mutex::new(Some(conn)));
         let pending = Arc::new(Mutex::new(utils::Pending::new()));
         let initialized = Arc::new(Mutex::new(HashSet::<StorePath>::new()));
         let commits = Arc::new(CommitSignal::default());
@@ -606,7 +653,7 @@ impl SqliteStore {
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
-            crate::store::util::debouncer::FlushPolicy {
+            crate::store::debouncer::FlushPolicy {
                 retry: config.retry_policy.clone(),
                 commits: commits.clone(),
                 health: health.clone(),
@@ -624,7 +671,13 @@ impl SqliteStore {
                 };
 
                 let landed: StorageResult<()> = (|| {
-                    let mut conn = conn_save.lock();
+                    let mut conn = parking_lot::MutexGuard::try_map(conn_save.lock(), |held| {
+                        held.as_mut()
+                    })
+                    .map_err(|_| {
+                        error_stack::Report::new(StorageError::Closed)
+                            .attach(StoreFile(path_save.clone()))
+                    })?;
                     let txn = conn
                         .transaction()
                         .map_err(SqliteStoreError::from)
@@ -732,6 +785,14 @@ impl StoreBackend for SqliteStore {
         self.inner.save_now()
     }
 
+    fn close(&self) -> StorageResult<()> {
+        self.inner.close()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.inner.debouncer.is_stopped()
+    }
+
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.inner.scan_prefix(prefix)
     }
@@ -808,7 +869,7 @@ mod tests {
         store.set(["config", "port"], &8080u16).unwrap();
 
         {
-            let conn = store.inner.conn.lock();
+            let conn = store.inner.conn().unwrap();
             let mut stmt = conn
                 .prepare("SELECT 1 FROM data WHERE key = 'config.port'")
                 .unwrap();
@@ -818,7 +879,7 @@ mod tests {
         thread::sleep(Duration::from_millis(500));
 
         {
-            let conn = store.inner.conn.lock();
+            let conn = store.inner.conn().unwrap();
             let mut stmt = conn
                 .prepare("SELECT 1 FROM data WHERE key = 'config.port'")
                 .unwrap();
@@ -842,7 +903,7 @@ mod tests {
 
         store.save_now().unwrap();
 
-        let conn = store.inner.conn.lock();
+        let conn = store.inner.conn().unwrap();
         let mut stmt = conn
             .prepare("SELECT 1 FROM data WHERE key = 'temp.key'")
             .unwrap();
@@ -886,7 +947,7 @@ mod tests {
             assert_eq!(pending.len(), 3);
         }
         {
-            let conn = store.inner.conn.lock();
+            let conn = store.inner.conn().unwrap();
             let mut stmt = conn.prepare("SELECT 1 FROM data WHERE key = ?").unwrap();
             assert!(!stmt.exists(["net.host"]).unwrap());
             assert!(!stmt.exists(["ui.theme"]).unwrap());
@@ -897,7 +958,7 @@ mod tests {
             .unwrap();
 
         {
-            let conn = store.inner.conn.lock();
+            let conn = store.inner.conn().unwrap();
             let mut stmt = conn
                 .prepare("SELECT value FROM data WHERE key = ?")
                 .unwrap();
@@ -934,7 +995,7 @@ mod tests {
             );
         }
         {
-            let conn = store.inner.conn.lock();
+            let conn = store.inner.conn().unwrap();
             let mut stmt = conn
                 .prepare("SELECT 1 FROM data WHERE key = 'ui.theme'")
                 .unwrap();

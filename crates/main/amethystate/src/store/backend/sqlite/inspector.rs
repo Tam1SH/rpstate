@@ -23,7 +23,7 @@ impl InspectorBackend for SqliteStore {
     }
 
     fn get_schema_snapshots(&self) -> StorageResult<Vec<(String, SchemaSnapshot)>> {
-        let conn = self.inner.conn.lock();
+        let conn = self.inner.conn()?;
         let mut stmt = conn
             .prepare_cached("SELECT key, value FROM schema_snapshot")
             .map_err(SqliteStoreError::from)

@@ -1,7 +1,45 @@
+//! One thread that waits out a quiet period and then writes.
+//!
+//! Where the thread can be:
+//!
+//! - **Idle** - parked on `recv`, nothing owed.
+//! - **Settling** - a `Schedule` arrived; waiting out `interval`, and each
+//!   further `Schedule` starts the wait again.
+//! - **Flushing** - inside `op`.
+//! - **Retrying** - `op` failed; waiting `retry.interval` for the next
+//!   attempt, and reading the channel while it waits.
+//! - **Silent** - the same, past `retry.budget`: the streak has been reported
+//!   once and the attempts carry on without saying more.
+//! - **Stopped** - the thread has left. `schedule` and `flush_now` do nothing.
+//! - **Poisoned** - `op` panicked and took the thread down holding `guard`.
+//!   Every later `schedule` panics too.
+//!
+//! | from | `Schedule` | `Now` | `Stop` | timeout | `op` ok | `op` err |
+//! |---|---|---|---|---|---|---|
+//! | Idle | Settling | Flushing | Stopped | - | - | - |
+//! | Settling | Settling | Flushing | Flushing, then Stopped | Flushing | - | - |
+//! | Flushing | - | - | - | - | Idle | Retrying |
+//! | Retrying | Flushing | Flushing | Stopped | Flushing | - | - |
+//! | Silent | Flushing | Flushing | Stopped | Flushing | - | - |
+//! | Stopped | - | - | - | - | - | - |
+//!
+//! A disconnected channel reads as `Stop` everywhere it is noticed, and a
+//! panic inside `op` moves to Poisoned from Flushing.
+//!
+//! The asymmetry in the `Stop` column is the one thing to hold on to: stopping
+//! during a quiet period runs the write that period was waiting out, and
+//! stopping during a failing streak does not. A settling write has not been
+//! tried yet; a failing one has, and another attempt would only hold whoever
+//! asked to stop.
+//!
+//! `Stop` is not read inside `op`, so a caller waiting on the thread waits for
+//! at most one flush and one retry interval.
+
 use crate::store::StorageResult;
 use crate::store::config::{AfterGivingUp, PersistFailureCallback, RetryPolicy};
 use crate::store::durable::{CommitSignal, PersistHealth};
 use crate::store::util::DeadNotifier;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Condvar, Mutex};
@@ -9,17 +47,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, warn};
 
-/// Why the thread was woken: `Schedule` restarts the quiet period, `Now`
-/// cuts it short for a caller that is waiting on the commit.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Trigger {
-    Schedule,
-    Now,
-}
+mod machine;
+
+use machine::{Next, State, Trigger, next_state};
 
 pub struct Debouncer {
-    tx: Option<mpsc::Sender<Trigger>>,
-    handle: Option<thread::JoinHandle<()>>,
+    tx: mpsc::Sender<Trigger>,
+    handle: Mutex<Option<thread::JoinHandle<()>>>,
+    stopped: AtomicBool,
     guard: Arc<Mutex<()>>,
     #[cfg(test)]
     dead: Arc<(Mutex<bool>, Condvar)>,
@@ -38,7 +73,7 @@ pub struct FlushPolicy {
 impl Debouncer {
     fn spawn<F>(interval: Duration, mut run: F) -> Self
     where
-        F: FnMut(&mpsc::Receiver<Trigger>) + Send + 'static,
+        F: FnMut(&mpsc::Receiver<Trigger>) -> Next + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<Trigger>();
         let guard = Arc::new(Mutex::new(()));
@@ -50,30 +85,18 @@ impl Debouncer {
             let _notify = DeadNotifier(dead_inner);
             let _hold = guard_inner.lock().unwrap();
 
-            while let Ok(first) = rx.recv() {
-                if first == Trigger::Now {
-                    debug!("debouncer trigger: asked for immediately");
-                } else {
-                    loop {
-                        match rx.recv_timeout(interval) {
-                            Ok(Trigger::Schedule) => continue,
-                            Ok(Trigger::Now)
-                            | Err(RecvTimeoutError::Timeout)
-                            | Err(RecvTimeoutError::Disconnected) => break,
-                        }
-                    }
-                    debug!("debouncer trigger: interval elapsed");
-                }
-
-                run(&rx);
+            let mut state = State::Idle;
+            while state != State::Stopped {
+                state = next_state(state, &rx, interval, &mut run);
             }
 
-            debug!("debouncer thread exiting (channel closed)");
+            debug!("debouncer thread exiting");
         });
 
         Self {
-            tx: Some(tx),
-            handle: Some(handle),
+            tx,
+            handle: Mutex::new(Some(handle)),
+            stopped: AtomicBool::new(false),
             guard,
             #[cfg(test)]
             dead,
@@ -84,7 +107,10 @@ impl Debouncer {
     where
         F: FnMut() + Send + 'static,
     {
-        Self::spawn(interval, move |_| op())
+        Self::spawn(interval, move |_| {
+            op();
+            Next::Wake
+        })
     }
 
     /// Like [`Debouncer::new`], for a flush that has to report whether it
@@ -118,8 +144,11 @@ impl Debouncer {
         if self.guard.is_poisoned() {
             panic!("debouncer is poisoned");
         }
-        if let Some(ref tx) = self.tx
-            && let Err(e) = tx.send(trigger)
+        if self.stopped.load(Ordering::Acquire) {
+            return;
+        }
+        if let Err(e) = self.tx.send(trigger)
+            && !self.stopped.load(Ordering::Acquire)
         {
             panic!("failed to schedule debounced operation: channel closed ({e})");
         }
@@ -129,9 +158,33 @@ impl Debouncer {
         self.guard.is_poisoned()
     }
 
-    fn shutdown(&mut self) {
-        self.tx.take();
-        if let Some(handle) = self.handle.take() {
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    /// Refuses further work, without waiting for the thread.
+    ///
+    /// Split from [`Debouncer::shutdown`] so a caller can take this decision
+    /// while holding whatever lock its writers buffer under: waiting for the
+    /// thread there would deadlock, since the flush the thread is running
+    /// wants that same lock.
+    ///
+    /// Answers whether this call was the one that stopped it.
+    pub fn stop_accepting(&self) -> bool {
+        !self.stopped.swap(true, Ordering::AcqRel)
+    }
+
+    /// Ends the thread and waits for it, so anything already queued has run by
+    /// the time this returns.
+    ///
+    /// Calling it more than once is fine; the second caller finds the thread
+    /// already taken and does not wait again.
+    pub fn shutdown(&self) {
+        self.stop_accepting();
+        let _ = self.tx.send(Trigger::Stop);
+
+        let handle = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(handle) = handle {
             let _ = handle.join();
         }
     }
@@ -204,15 +257,15 @@ fn give_up(
 /// guard poisons on the way down, which is the same mechanism a panic inside
 /// `op` itself already relies on.
 ///
-/// A trigger arriving mid-streak just retries sooner, and its identity is
-/// discarded. A disconnect is the store being dropped, and is the one way out
-/// of a streak that never lands - without it, `shutdown` would join a thread
-/// still politely waiting for a disk that is never coming back.
+/// A `Schedule` or a `Now` arriving mid-streak just retries sooner, and which
+/// of the two it was is discarded. The two ways out of a streak that never
+/// lands are a `Stop` and a disconnect - without them, `shutdown` would join a
+/// thread still politely waiting for a disk that is never coming back.
 fn run_with_retry(
     op: &mut dyn FnMut() -> StorageResult<()>,
     policy: &FlushPolicy,
     rx: &mpsc::Receiver<Trigger>,
-) {
+) -> Next {
     let retry = &policy.retry;
     let mut streak = Streak::Fresh;
 
@@ -221,7 +274,7 @@ fn run_with_retry(
             Ok(()) => {
                 policy.health.landed();
                 policy.commits.finished(true);
-                return;
+                return Next::Wake;
             }
             Err(why) => Arc::new(why),
         };
@@ -250,9 +303,16 @@ fn run_with_retry(
             }
         }
 
-        if let Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(retry.interval) {
-            debug!("debouncer thread leaving a failing flush: the store is gone");
-            return;
+        match rx.recv_timeout(retry.interval) {
+            Err(RecvTimeoutError::Disconnected) => {
+                debug!("debouncer thread leaving a failing flush: the store is gone");
+                return Next::Wake;
+            }
+            Ok(Trigger::Stop) => {
+                debug!("debouncer thread leaving a failing flush: asked to stop");
+                return Next::Stop;
+            }
+            Ok(Trigger::Schedule) | Ok(Trigger::Now) | Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }

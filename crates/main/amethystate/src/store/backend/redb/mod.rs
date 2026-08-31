@@ -27,7 +27,7 @@ use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
-use crate::store::util::debouncer::Debouncer;
+use crate::store::debouncer::Debouncer;
 use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
 use rmp_serde::config::BytesMode;
@@ -129,9 +129,48 @@ struct RedbStoreInner {
 }
 
 impl RedbStoreInner {
+    /// Writes what is buffered, stops the background thread and lets go of the
+    /// file.
+    ///
+    /// The order is what makes it safe. Stopping first means a write racing
+    /// this one is refused rather than buffered by a store about to lose the
+    /// handle, and the join means the flush the thread was already running has
+    /// finished. Only then is the database dropped, which is what releases the
+    /// file to whoever the close was for.
+    ///
+    /// Closing twice is fine: the second call finds the thread stopped and
+    /// returns, so `Drop` after an explicit close does nothing.
     pub fn close(&self) -> StorageResult<()> {
+        {
+            let _buffering = self.pending.lock();
+            if !self.debouncer.stop_accepting() {
+                return Ok(());
+            }
+        }
         info!("Closing RedbStore...");
-        self.save_now().attach("flushing the buffer before close")?;
+
+        self.debouncer.shutdown();
+        let flushed = self.save_now().attach("flushing the buffer before close");
+        self.db.store(None);
+
+        flushed
+    }
+
+    /// Buffers a write, refusing it if the store closed first.
+    ///
+    /// The refusal belongs inside this lock rather than at the top of a write.
+    /// Closing takes the same lock to decide it is closing, so a write is
+    /// either in the buffer before that decision - and so in the flush that
+    /// follows it - or it is refused. Checked earlier and buffered later, a
+    /// write lands after the last flush and is reported as taken while never
+    /// reaching the disk.
+    fn buffer(&self, fill: impl FnOnce(&mut utils::Pending)) -> StorageResult<()> {
+        let mut lock = self.pending.lock();
+        if self.debouncer.is_stopped() {
+            return Err(error_stack::Report::new(StorageError::Closed)
+                .attach(StoreFile(self.path.to_path_buf())));
+        }
+        fill(&mut lock);
         Ok(())
     }
 
@@ -198,9 +237,14 @@ impl RedbStoreInner {
     /// true for free.
     fn db(&self) -> StorageResult<Arc<Database>> {
         self.db.load_full().ok_or_else(|| {
-            error_stack::Report::new(StorageError::Read)
-                .attach("the database is being reopened after an I/O failure")
-                .attach(StoreFile(self.path.to_path_buf()))
+            if self.debouncer.is_stopped() {
+                error_stack::Report::new(StorageError::Closed)
+                    .attach(StoreFile(self.path.to_path_buf()))
+            } else {
+                error_stack::Report::new(StorageError::Read)
+                    .attach("the database is being reopened after an I/O failure")
+                    .attach(StoreFile(self.path.to_path_buf()))
+            }
         })
     }
 
@@ -305,7 +349,7 @@ impl RedbStore {
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
-            crate::store::util::debouncer::FlushPolicy {
+            crate::store::debouncer::FlushPolicy {
                 retry: config.retry_policy.clone(),
                 commits: commits.clone(),
                 health: health.clone(),
@@ -574,10 +618,9 @@ impl StoreBackend for RedbStore {
             return Ok(());
         }
 
-        {
-            let mut lock = self.inner.pending.lock();
+        self.inner.buffer(|lock| {
             lock.insert(path.clone(), utils::PendingOp::Set(bytes.clone()));
-        }
+        })?;
 
         utils::emit_events(
             &self.inner.subscriptions,
@@ -606,6 +649,14 @@ impl StoreBackend for RedbStore {
 
     fn save_now(&self) -> StorageResult<()> {
         self.inner.save_now()
+    }
+
+    fn close(&self) -> StorageResult<()> {
+        self.inner.close()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.inner.debouncer.is_stopped()
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
@@ -780,10 +831,9 @@ impl StoreBackend for RedbStore {
             return Ok(());
         };
 
-        {
-            let mut lock = self.inner.pending.lock();
+        self.inner.buffer(|lock| {
             lock.insert(path.clone(), utils::PendingOp::Delete);
-        }
+        })?;
 
         utils::emit_events(
             &self.inner.subscriptions,
@@ -813,12 +863,11 @@ impl StoreBackend for RedbStore {
             .attach_prefix(prefix)
             .attach("listing the subtree to be removed")?;
 
-        {
-            let mut lock = self.inner.pending.lock();
+        self.inner.buffer(|lock| {
             for (path, _) in keys {
                 lock.insert(path, utils::PendingOp::Delete);
             }
-        }
+        })?;
 
         utils::emit_events(
             &self.inner.subscriptions,
@@ -896,10 +945,9 @@ impl StoreBackend for RedbStore {
         }
 
         self.inner.check_debouncer()?;
-        self.inner
-            .pending
-            .lock()
-            .insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
+        self.inner.buffer(|lock| {
+            lock.insert(namespace.clone(), utils::PendingOp::Init(state.is_seeded()));
+        })?;
 
         let mut initialized = self.inner.initialized.lock();
         if state.is_seeded() {

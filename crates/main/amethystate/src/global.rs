@@ -17,9 +17,9 @@ static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 /// the logger, the threads and the allocator are all still up - rather than
 /// leaving the last writes to a static that is never dropped.
 ///
-/// Dropping it early closes the store early. The store keeps working
-/// afterwards, so nothing breaks; what is lost is the flush at exit, which is
-/// the reason it was handed to you.
+/// Dropping it early closes the store early, and every read and write after
+/// that answers [`StorageError::Closed`](crate::store::StorageError::Closed).
+/// Binding it in `main` is what puts that at the end rather than in the middle.
 #[must_use = "dropped here, the global store is closed here - bind it in `main` \
               (`let _ame = ...`) so the last writes are flushed on the way out"]
 pub struct GlobalStoreGuard {
@@ -139,17 +139,21 @@ pub fn global_store() -> Store {
     GLOBAL_STORE.get().unwrap().clone()
 }
 
-/// Writes what the process-wide store still holds, and says whether it landed.
+/// Closes the process-wide store: writes what it still holds, stops its
+/// background thread and lets go of the file.
 ///
 /// [`GlobalStoreGuard`] calls this and logs a failure; call it directly when
 /// the failure is worth acting on - offering to retry, saving elsewhere, or
 /// not exiting yet - since only a caller can do any of that.
 ///
-/// Nothing else can stand in. A static is never dropped, so the closing flush
-/// every other store gets for free never runs here, and the debouncer thread
-/// leaves when its channel disconnects, which is the store being dropped,
-/// which is the thing that does not happen. Left out, everything written
-/// inside the last debounce interval is lost on a clean return.
+/// Nothing else can stand in. A static is never dropped, so the close every
+/// other store gets from `Drop` never runs here, and the thread would outlive
+/// `main` for the same reason. Left out, everything written inside the last
+/// debounce interval is lost on a clean return.
+///
+/// Afterwards the store answers every read and write with
+/// [`StorageError::Closed`](crate::store::StorageError::Closed), so this
+/// belongs where nothing follows it. Calling it twice is fine.
 ///
 /// Does nothing, successfully, when no global store was ever initialised.
 ///

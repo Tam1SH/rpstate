@@ -12,7 +12,7 @@ use crate::store::depth::{Depth, DepthBudget};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::facts::{Facts, Key, StoreFile as StoreFileFact};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
-use crate::store::util::debouncer::Debouncer;
+use crate::store::debouncer::Debouncer;
 use crate::store::{
     EXTERNAL_EDIT, InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback,
     StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId, SubscriptionKind,
@@ -264,7 +264,7 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     /// What this store may spend on a path and its value together, worked out
     /// once from the codec's own ceiling and whatever the caller promised.
     pub(crate) budget: DepthBudget,
-    _watch_debouncer: Arc<Debouncer>,
+    watch_debouncer: Arc<Debouncer>,
     _watcher: RecommendedWatcher,
 }
 
@@ -283,7 +283,7 @@ impl<D: TextDocument> TextStoreInner<D> {
 
 impl<D: TextDocument> Drop for TextStoreInner<D> {
     fn drop(&mut self) {
-        utils::report_closing_flush(self.save_now(), &self.files.data.path);
+        utils::report_closing_flush(self.close(), &self.files.data.path);
     }
 }
 
@@ -365,7 +365,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
-            crate::store::util::debouncer::FlushPolicy {
+            crate::store::debouncer::FlushPolicy {
                 retry: config.retry_policy.clone(),
                 commits: commits.clone(),
                 health: health.clone(),
@@ -442,7 +442,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             writes,
             persisted,
             budget: DepthBudget::for_codec(&config.limits, D::format()),
-            _watch_debouncer: watch_debouncer,
+            watch_debouncer,
             _watcher: watcher,
         });
 
@@ -498,6 +498,7 @@ impl<D: TextDocument + Send + 'static> SchemaAwareStore for TextStore<D> {
 
 impl<D: TextDocument> TextStoreInner<D> {
     fn get_node_bytes(&self, path: &StorePath) -> StorageResult<Option<Vec<u8>>> {
+        self.refuse_if_closed()?;
         let guard = self.files.data.doc.read();
         let levels: Vec<Cow<'_, str>> = path.segments().collect();
         let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
@@ -543,6 +544,49 @@ impl<D: TextDocument> TextStoreInner<D> {
         Ok(())
     }
 
+    /// Renders the document one last time and stops both background threads.
+    ///
+    /// There is no handle to give up here - a document engine writes through a
+    /// temporary file and holds nothing open between flushes - so what closing
+    /// settles is the threads. The watcher's own debouncer goes too: a file
+    /// changing underneath a closed store has nobody left to tell.
+    ///
+    /// Closing twice is fine: the second call finds the thread stopped and
+    /// returns, so `Drop` after an explicit close does nothing.
+    pub(crate) fn close(&self) -> StorageResult<()> {
+        {
+            let _data = self.files.data.doc.write();
+            let _meta = self.files.meta.doc.write();
+            if !self.debouncer.stop_accepting() {
+                return Ok(());
+            }
+        }
+
+        self.debouncer.shutdown();
+        self.watch_debouncer.shutdown();
+        self.save_now().attach("rendering the document before close")
+    }
+
+    /// Refuses a read or a write once the store has closed.
+    ///
+    /// A document engine keeps the whole store in memory, so a closed one
+    /// could go on answering reads from it. It does not: an engine holding a
+    /// file answers `Closed` there, and a store that reads on one engine and
+    /// refuses on another is worse than either.
+    ///
+    /// A write calls it with the document already locked, because closing
+    /// takes that same lock to decide it is closing: a write is either in the
+    /// document before that decision - and so in the render that follows it -
+    /// or it is refused. Checked before the lock, a write lands after the last
+    /// render and is reported as taken while never reaching the file.
+    fn refuse_if_closed(&self) -> StorageResult<()> {
+        if self.debouncer.is_stopped() {
+            return Err(error_stack::Report::new(StorageError::Closed)
+                .attach(StoreFileFact(self.files.data.path.clone())));
+        }
+        Ok(())
+    }
+
     /// Picks up an edit made to the file outside the process before writing our
     /// own, unless we have unsaved changes of our own to lose.
     pub(crate) fn pull_external_changes(&self) {
@@ -555,12 +599,14 @@ impl<D: TextDocument> TextStoreInner<D> {
     }
 
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
+        self.refuse_if_closed()?;
         let guard = self.files.data.doc.read();
         scan_prefix_impl(&*guard, prefix)
             .attach_store_file(&self.files.data.path)
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
+        self.refuse_if_closed()?;
         let guard = self.files.data.doc.read();
         scan_keys_impl(&*guard, prefix)
             .attach_store_file(&self.files.data.path)
@@ -576,6 +622,7 @@ impl<D: TextDocument> TextStoreInner<D> {
 
         let old_bytes = {
             let mut guard = self.files.data.doc.write();
+            self.refuse_if_closed()?;
             let old = guard
                 .get(&parts)
                 .map(|n| D::node_to_bytes(n))
@@ -661,6 +708,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     }
 
     fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
+        self.refuse_if_closed()?;
         let key = self.init_key(namespace);
         let guard = self.files.meta.doc.read();
         Ok(guard.get(&[key.as_str()]).is_some())
@@ -670,6 +718,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         let key = self.init_key(namespace);
         {
             let mut guard = self.files.meta.doc.write();
+            self.refuse_if_closed()?;
             let parts = [key.as_str()];
 
             match state {
@@ -708,6 +757,7 @@ impl<D: TextDocument> TextStoreInner<D> {
         let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
         let (old_bytes, new_bytes) = {
             let mut guard = self.files.data.doc.write();
+            self.refuse_if_closed()?;
             let old = guard
                 .get(&parts)
                 .map(|n| D::node_to_bytes(n))
@@ -820,6 +870,14 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
 
     fn save_now(&self) -> StorageResult<()> {
         self.inner.save_now()
+    }
+
+    fn close(&self) -> StorageResult<()> {
+        self.inner.close()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.inner.debouncer.is_stopped()
     }
 
     fn files(&self) -> Option<StoreLayout> {

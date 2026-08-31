@@ -4,11 +4,11 @@ use std::fmt;
 
 /// What a store operation failed at.
 ///
-/// A context, not a chain. Which engine said what is the frame below this one
-/// in the report, and the particulars - which path, which file, which prefix -
-/// are attachments put there by whoever knew them. So the variants name the
-/// operation rather than the source: two engines failing to write are the same
-/// kind of failure, told apart by the frames underneath.
+/// Each variant names the operation that failed. Which engine said what is the
+/// frame below this one in the report, and the particulars - which path, which
+/// file, which prefix - are attachments put there by whoever knew them. Two
+/// engines failing to write are the same kind of failure, told apart by the
+/// frames underneath.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageError {
     /// Opening or creating the store.
@@ -54,6 +54,13 @@ pub enum StorageError {
 
     /// Two owners want the same place, so one would write over the other.
     Claimed,
+
+    /// The store was closed and has let go of its file.
+    ///
+    /// A close hands the file to whoever asked for it - another process, a
+    /// backup, a rename - and it stays theirs, so every later read, write,
+    /// scan and delete answers with this.
+    Closed,
 }
 
 impl fmt::Display for StorageError {
@@ -72,6 +79,7 @@ impl fmt::Display for StorageError {
             StorageError::Depth => "deeper than this store reads back",
             StorageError::CommitFailed => "the flush this commit was waiting on did not complete",
             StorageError::Claimed => "two schemas claim the same stored path",
+            StorageError::Closed => "the store was closed and has let go of its file",
         })
     }
 }
@@ -80,12 +88,11 @@ impl Error for StorageError {}
 
 pub type StorageResult<T> = Result<T, Report<StorageError>>;
 
-/// A write a document engine cannot represent, refused rather than carried out.
+/// A write a document engine refuses because it cannot represent the result.
 ///
-/// A tree holds a value at a node or values under it, never both, so one of the
-/// two writes has to lose. Refusing the second is the only answer that does not
-/// destroy the first. The flat engines have no such limit and never report
-/// this.
+/// A tree holds a value at a node or values under it, never both, so the second
+/// write is refused and the first survives. Only the document engines - json,
+/// toml, ron - report this.
 ///
 /// Sits below [`StorageError::Write`] so that a caller who has to tell this
 /// apart - a seeding write, which nobody asked for, backs off where a real one

@@ -85,7 +85,7 @@ fn the_three_places_a_location_can_name() -> Result<(), Box<dyn Error + Send + S
     //@show-end
 
     for store in [config, named, portable] {
-        store.close()?;
+        store.save_now()?;
     }
 
     Ok(())
@@ -122,14 +122,35 @@ fn a_location_is_worked_out_rather_than_spelled() -> Result<(), Box<dyn Error + 
 }
 
 #[test]
-fn closing_says_whether_the_last_writes_landed() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_store_close");
+fn closing_lets_something_else_have_the_file() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let path = TempPath::new("book_store_closing");
     let store = StoreBuilder::new(path.path()).build()?;
-
-    //@show closing a store and hearing about it
     store.kv().set("port", &8080u16)?;
 
+    //@show closing the store and letting go of the file
     if let Err(report) = store.close() {
+        eprintln!("the last writes were not saved: {report:?}");
+    }
+    //@show-end
+
+    assert!(store.kv().get::<u16>("port").is_err());
+    assert!(store.kv().set("port", &9090u16).is_err());
+
+    let elsewhere = StoreBuilder::new(path.path()).build()?;
+    assert_eq!(elsewhere.kv().get::<u16>("port")?, Some(8080));
+
+    Ok(())
+}
+
+#[test]
+fn saving_now_says_whether_the_last_writes_landed() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let path = TempPath::new("book_store_save_now");
+    let store = StoreBuilder::new(path.path()).build()?;
+
+    //@show writing the buffer out and hearing whether it landed
+    store.kv().set("port", &8080u16)?;
+
+    if let Err(report) = store.save_now() {
         eprintln!("settings were not saved: {report:?}");
     }
     //@show-end

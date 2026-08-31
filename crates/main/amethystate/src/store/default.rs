@@ -42,6 +42,7 @@ use std::sync::Arc;
 pub struct Store {
     backend: Arc<dyn StoreBackend>,
     owners: Arc<crate::store::owners::Owners>,
+    context: Arc<crate::store::CheckContext>,
 }
 
 impl Store {
@@ -53,7 +54,22 @@ impl Store {
         Self {
             backend: inner,
             owners: Arc::new(crate::store::owners::Owners::default()),
+            context: Arc::new(crate::store::CheckContext::default()),
         }
+    }
+
+    /// What the application handed this store for its declared checks, put
+    /// there by [`StoreBuilder::context`](crate::StoreBuilder::context).
+    ///
+    /// A store opened any other way carries an empty one, and a check asking
+    /// it for something is refused with what was on offer.
+    pub fn context(&self) -> &crate::store::CheckContext {
+        &self.context
+    }
+
+    pub(crate) fn with_context(mut self, context: Arc<crate::store::CheckContext>) -> Self {
+        self.context = context;
+        self
     }
 
     /// The erased backend underneath, for code that is generic over
@@ -73,33 +89,6 @@ impl Store {
         mset: crate::migration::set::MigrationSet,
     ) -> StorageResult<(Self, MigrationReport)> {
         crate::store::builder::default_backend().open_public(config, mset)
-    }
-
-    /// Writes everything buffered and says whether it landed.
-    ///
-    /// This is the fallible half of dropping the store, and the point of
-    /// calling it is the `Result`: a full disk, a locked file or a permission
-    /// error at exit is answered here, while the application is still running
-    /// and can do something about it. Left to `Drop`, the same failure can only
-    /// be logged.
-    ///
-    /// It does not invalidate this handle or any other. A store is shared by
-    /// its clones and the file is released when the last one goes; what closes
-    /// here is the buffer, and the store is usable afterwards. Calling it more
-    /// than once is fine, and on a store with nothing buffered it does nothing.
-    ///
-    /// ```
-    /// # use amethystate::StoreBuilder;
-    /// # let path = amethystate_core::test_utils::TempPath::new("doc_close");
-    /// let store = StoreBuilder::new(&*path).build().unwrap();
-    /// store.kv().set("port", &8080u16).unwrap();
-    ///
-    /// if let Err(report) = store.close() {
-    ///     eprintln!("settings were not saved: {report:?}");
-    /// }
-    /// ```
-    pub fn close(&self) -> StorageResult<()> {
-        self.backend.save_now()
     }
 }
 
@@ -225,8 +214,8 @@ impl Store {
     ///
     /// Bytes that will not decode - because the file was edited by hand, or the
     /// field changed type - are an error naming the type that was asked for and
-    /// what the codec made of them. They used to yield `T::default()`, which
-    /// meant a caller could not tell a stored default from an unreadable value.
+    /// what the codec made of them, so a caller can tell a stored default from
+    /// a value it could not read.
     pub fn decode<T: serde::de::DeserializeOwned>(&self, bytes: &[u8]) -> StorageResult<T> {
         StoreExt::decode(self, bytes)
     }
@@ -312,6 +301,12 @@ impl StoreBackend for Store {
     }
     fn save_now(&self) -> StorageResult<()> {
         self.backend.save_now()
+    }
+    fn close(&self) -> StorageResult<()> {
+        self.backend.close()
+    }
+    fn is_closed(&self) -> bool {
+        self.backend.is_closed()
     }
     fn subscribe(&self, kind: crate::SubscriptionKind, callback: StoreCallback) -> SubscriptionId {
         self.backend.subscribe(kind, callback)

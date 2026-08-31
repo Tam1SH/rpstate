@@ -2,7 +2,7 @@ use crate::SubscriptionKind;
 use crate::store::durable::PersistHealth;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::Facts;
-use crate::store::util::debouncer::Debouncer;
+use crate::store::debouncer::Debouncer;
 use crate::store::{StoreEvent, SubscriptionEntry};
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -22,8 +22,17 @@ impl<R: ResultExt> Attempted for R {
     }
 }
 
-/// Refuses a write while the background flush is not landing.
+/// Refuses a write while the background flush is not landing, and once the
+/// store has been closed.
+///
+/// A stopped debouncer is what closing leaves behind, and a write reaching a
+/// stopped one would be buffered by a store that has nothing left to write it
+/// with. Refusing here is what makes that a `Closed` rather than a value that
+/// was accepted and never appeared.
 pub fn check_debouncer(health: &PersistHealth, debouncer: &Debouncer) -> StorageResult<()> {
+    if debouncer.is_stopped() {
+        return Err(error_stack::Report::new(StorageError::Closed));
+    }
     if let Some(reason) = health.failure() {
         return Err(error_stack::Report::new(StorageError::CommitFailed)
             .attach(format!("the background flush is not landing: {reason:#}"))
@@ -144,7 +153,7 @@ fn matches_kind(kind: &SubscriptionKind, path: &StorePath) -> bool {
 mod buffered {
     use super::{SubscriptionEntry, emit_events};
     use crate::store::StoreEvent;
-    use crate::store::util::debouncer::Debouncer;
+    use crate::store::debouncer::Debouncer;
     use crate::{StorageResult, StoreOp};
     use amethystate_core::path::StorePath;
     use parking_lot::{Mutex, RwLock};
@@ -431,12 +440,6 @@ mod tests {
     }
 
     proptest::proptest! {
-        /// The merge answers what laying one map over the other would.
-        ///
-        /// An oracle that shares no code with the thing it checks: build the
-        /// two sides as maps, apply the buffer to a copy of the engine's side
-        /// the obvious way, and read the answer out in order. `merge_buffered`
-        /// has to arrive at the same list without ever holding both.
         #[test]
         fn it_answers_what_a_map_of_the_two_would(
             entries in proptest::collection::vec(

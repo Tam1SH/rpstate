@@ -167,33 +167,66 @@ So a store opened with `build` in a binary full of `#[migrate]` steps migrated
 nothing, and said nothing about it. Reach for `build_with_migration` whenever the
 macro is in play. [Migrations](/amethystate/migrations/overview/).
 
-## Closing
+## Writing the buffer out
 
 Dropping the store flushes what it holds, so an ordinary exit loses nothing.
 Dropping says nothing about whether the flush landed, though, and a disk that
 was full at that moment is the case worth hearing about:
 
-<!-- shown: closing a store and hearing about it -->
+<!-- shown: writing the buffer out and hearing whether it landed -->
 ```rust
 store.kv().set("port", &8080u16)?;
 
-if let Err(report) = store.close() {
+if let Err(report) = store.save_now() {
     eprintln!("settings were not saved: {report:?}");
 }
 ```
 <!-- /shown -->
 
-`close` is the same flush with the failure handed back. It does not consume the
-store: the later drop flushes again, and reports what it finds to the log
+`save_now` is the same flush with the failure handed back. The store goes on
+working: the later drop flushes again, and reports what it finds to the log
 rather than to you. That is the whole difference - the drop is the one nobody
 hears.
 
-**The global store closes the same way, with the same catch.** Dropping the
-guard flushes, and a failure there goes to `tracing::error!` under the
-`amethystate` target - nowhere a caller can act on it. `amethystate::shutdown()`
-is the one that hands the failure back, so an application that would rather find
-out while it can still do something - offer to retry, save elsewhere, not exit
-yet - calls it before the guard goes out of scope.
+## Closing
+
+`save_now` leaves the store holding its file. `close` gives it up: it writes
+what is buffered, stops the background thread, and lets go.
+
+<!-- shown: closing the store and letting go of the file -->
+```rust
+if let Err(report) = store.close() {
+    eprintln!("the last writes were not saved: {report:?}");
+}
+```
+<!-- /shown -->
+
+Afterwards every read and write on that store answers `StorageError::Closed`,
+and so does every clone of it - there is one file between them. Calling it twice
+is fine, and the drop that follows does nothing.
+
+This is what to call when something else needs the file: another process, a
+backup, a rename. What that buys differs by engine, and each engine gives up
+what it was holding:
+
+| engine | what a live store claims | what closing releases |
+| --- | --- | --- |
+| sqlite | the file, against the whole machine | renaming or deleting it starts working |
+| redb | the right to open it | a second store can open the same path |
+| json, toml, ron | nothing between flushes | the background thread only |
+
+A field goes on answering `get` from memory, so a screen drawn from the last
+values keeps drawing them. [`try_get`](/amethystate/concepts/errors/) is where
+that shows: it reports that the store was closed and what the field holds is the
+last thing it was told.
+
+**The global store closes the same way.** Dropping the guard closes it, and a
+failure there goes to `tracing::error!` under the `amethystate` target - nowhere
+a caller can act on it. `amethystate::shutdown()` is the one that hands the
+failure back, so an application that would rather find out while it can still do
+something - offer to retry, save elsewhere, not exit yet - calls it before the
+guard goes out of scope. A static is never dropped, so without one of the two
+the last debounce interval is lost on a clean return.
 
 For waiting on the disk for one write rather than all of them:
 [Durability](/amethystate/concepts/durability/).

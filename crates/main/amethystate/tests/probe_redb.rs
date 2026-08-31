@@ -1547,14 +1547,14 @@ fn an_unflushed_write_is_visible_to_the_store_and_lost_without_a_flush() {
             Some(42),
             "a buffered write is not visible to its own store"
         );
-        store.close().unwrap();
+        store.save_now().unwrap();
     }
 
     let store = open(&file);
     assert_eq!(
         store.get::<u32>(&path).unwrap(),
         Some(42),
-        "close did not commit the buffer"
+        "save_now did not commit the buffer"
     );
     drop(store);
 }

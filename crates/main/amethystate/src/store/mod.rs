@@ -1,6 +1,8 @@
 pub mod backend;
 pub mod builder;
+pub mod check;
 pub mod config;
+pub mod debouncer;
 pub mod default;
 pub mod depth;
 pub mod durable;
@@ -17,6 +19,7 @@ mod types;
 pub mod util;
 
 pub use amethystate_core::path::{IntoStorePath, StorePath, StorePathError};
+pub use check::{Check, CheckContext, Invalid, refused, refused_or_default, refused_under};
 pub use durable::{Commit, Durable};
 pub use error::{IntoStorageReport, Occupied, StorageError, StorageResult, one_line};
 pub use kv::{Cleared, Kv};
