@@ -34,6 +34,8 @@ pub struct Noticed {
     overflowed: Cell<bool>,
     non_finite: Cell<bool>,
     enum_variant: Cell<bool>,
+    inside_a_some: Cell<bool>,
+    collapsed_option: Cell<bool>,
     limit: usize,
 }
 
@@ -46,6 +48,8 @@ impl Noticed {
             overflowed: Cell::new(false),
             non_finite: Cell::new(false),
             enum_variant: Cell::new(false),
+            inside_a_some: Cell::new(false),
+            collapsed_option: Cell::new(false),
             limit,
         }
     }
@@ -112,12 +116,30 @@ impl Noticed {
         self.enum_variant.get()
     }
 
+    /// Whether a `None` went past while it was the whole of what a `Some` held.
+    ///
+    /// `Some(None)` and `None` are one value to any format that writes an
+    /// `Option` as a bare null, because the outer `Some` has nothing of its own
+    /// to write. Only the value directly inside the `Some` counts: `Some` of a
+    /// list holding a `None` is two levels apart and comes back whole.
+    pub fn saw_a_collapsing_option(&self) -> bool {
+        self.collapsed_option.get()
+    }
+
+    /// Called on the way into every method that is not `serialize_some`, so
+    /// that what `serialize_none` sees is a `Some` it sits directly inside.
+    fn left_the_some(&self) {
+        self.inside_a_some.set(false);
+    }
+
     /// The deepest level reached, once a pass has finished.
     pub fn deepest(&self) -> usize {
         self.deepest.get()
     }
 
     fn enter<E: ser::Error>(&self) -> Result<(), E> {
+        self.left_the_some();
+
         let now = self.depth.get() + 1;
         if now > self.limit {
             self.overflowed.set(true);
@@ -172,6 +194,7 @@ where
 macro_rules! forward {
     ($($method:ident($($arg:ident: $ty:ty),*);)+) => {
         $(fn $method(self $(, $arg: $ty)*) -> Result<S::Ok, S::Error> {
+            self.depth.left_the_some();
             self.inner.$method($($arg),*)
         })+
     };
@@ -203,9 +226,19 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         serialize_char(v: char);
         serialize_str(v: &str);
         serialize_bytes(v: &[u8]);
-        serialize_none();
         serialize_unit();
         serialize_unit_struct(name: &'static str);
+    }
+
+    /// The one place the nesting shows, and only for the pass that is
+    /// happening: a format writing an `Option` as a bare null has already
+    /// spent the outer `Some` by the time it gets here.
+    fn serialize_none(self) -> Result<S::Ok, S::Error> {
+        if self.depth.inside_a_some.get() {
+            self.depth.collapsed_option.set(true);
+        }
+        self.depth.left_the_some();
+        self.inner.serialize_none()
     }
 
     fn serialize_unit_variant(
@@ -214,6 +247,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         index: u32,
         variant: &'static str,
     ) -> Result<S::Ok, S::Error> {
+        self.depth.left_the_some();
         self.depth.enum_variant.set(true);
         self.inner.serialize_unit_variant(name, index, variant)
     }
@@ -225,6 +259,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
     /// read it. Noting it costs one comparison on a pass that is happening
     /// anyway.
     fn serialize_f32(self, v: f32) -> Result<S::Ok, S::Error> {
+        self.depth.left_the_some();
         if !v.is_finite() {
             self.depth.non_finite.set(true);
         }
@@ -232,6 +267,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
     }
 
     fn serialize_f64(self, v: f64) -> Result<S::Ok, S::Error> {
+        self.depth.left_the_some();
         if !v.is_finite() {
             self.depth.non_finite.set(true);
         }
@@ -240,12 +276,19 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
 
     /// `Some` is not a level: no format spends nesting on it, and counting it
     /// would make `Option<T>` measure deeper than the `T` inside.
+    ///
+    /// Which is the same reason it is the one method that arms rather than
+    /// clears the flag: having spent nothing, it leaves a `None` directly
+    /// inside it with nothing to tell it apart from a `None` on its own.
     fn serialize_some<T>(self, value: &T) -> Result<S::Ok, S::Error>
     where
         T: Serialize + ?Sized,
     {
         let Counting { inner, depth } = self;
-        inner.serialize_some(&Counted { value, depth })
+        depth.inside_a_some.set(true);
+        let out = inner.serialize_some(&Counted { value, depth });
+        depth.left_the_some();
+        out
     }
 
     fn serialize_newtype_struct<T>(self, name: &'static str, value: &T) -> Result<S::Ok, S::Error>
@@ -253,6 +296,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         T: Serialize + ?Sized,
     {
         let Counting { inner, depth } = self;
+        depth.left_the_some();
         inner.serialize_newtype_struct(name, &Counted { value, depth })
     }
 
@@ -269,6 +313,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         T: Serialize + ?Sized,
     {
         let Counting { inner, depth } = self;
+        depth.left_the_some();
         depth.enum_variant.set(true);
         depth.enter()?;
         let out = inner.serialize_newtype_variant(name, index, variant, &Counted { value, depth });

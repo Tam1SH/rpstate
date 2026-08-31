@@ -921,7 +921,7 @@ mod tests {
         config.save_debounce = Duration::from_secs(3600);
 
         {
-            let (mut store, _) = SqliteStore::open(config, MigrationSet::default()).unwrap();
+            let (store, _) = SqliteStore::open(config, MigrationSet::default()).unwrap();
             store.set(["urgent", "data"], &true).unwrap();
             store.close().unwrap();
         }

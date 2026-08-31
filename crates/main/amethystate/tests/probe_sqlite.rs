@@ -84,50 +84,38 @@ where
 // 1. The json defects, asked of sqlite
 // ---------------------------------------------------------------------------
 
-#[test]
-fn nan_reads_back() {
-    let file = TempPath::new("sq_nan");
-    {
-        let store = opened(file.path());
-        store
-            .set(["probe", "v"], &f64::NAN)
-            .expect("the write is accepted");
-        store.save_now().unwrap();
-    }
+fn assert_refused(label: &str, value: f64) {
+    let file = TempPath::new(label);
     let store = opened(file.path());
-    let raw = StoreBackend::get_raw(&store, &StorePath::from_segments(["probe", "v"])).unwrap();
-    println!(
-        "nan raw bytes: {:?}",
-        raw.as_deref().map(String::from_utf8_lossy)
-    );
-    let read = store.get::<f64>(["probe", "v"]);
-    let kept = matches!(&read, Ok(Some(v)) if v.is_nan());
-    assert!(kept, "NaN did not survive: {read:?}");
-}
 
-#[test]
-fn infinity_reads_back() {
-    let file = TempPath::new("sq_inf");
-    {
-        let store = opened(file.path());
-        store.set(["probe", "v"], &f64::INFINITY).unwrap();
-        store.save_now().unwrap();
-    }
-    let store = opened(file.path());
-    let raw = StoreBackend::get_raw(&store, &StorePath::from_segments(["probe", "v"])).unwrap();
-    println!(
-        "infinity raw bytes: {:?}",
-        raw.as_deref().map(String::from_utf8_lossy)
+    let refused = store
+        .set(["probe", "v"], &value)
+        .unwrap_err();
+
+    assert!(
+        format!("{refused:?}").contains("NaN or an infinity"),
+        "{label}: {refused:?}"
     );
     assert_eq!(
-        store.get::<f64>(["probe", "v"]).unwrap(),
-        Some(f64::INFINITY)
+        StoreBackend::get_raw(&store, &StorePath::from_segments(["probe", "v"])).unwrap(),
+        None,
+        "{label}: the refused write reached the table"
     );
 }
 
 #[test]
-fn neg_infinity_reads_back() {
-    assert_kept("sq_neg_inf", f64::NEG_INFINITY);
+fn nan_is_refused() {
+    assert_refused("sq_nan", f64::NAN);
+}
+
+#[test]
+fn infinity_is_refused() {
+    assert_refused("sq_inf", f64::INFINITY);
+}
+
+#[test]
+fn neg_infinity_is_refused() {
+    assert_refused("sq_neg_inf", f64::NEG_INFINITY);
 }
 
 /// A value nested `n` sequences deep, which reads back as the depth it was
@@ -335,15 +323,21 @@ fn i128_min_reads_back() {
     assert_kept("sq_i128_min", i128::MIN);
 }
 
+/// The sign of a zero is the one loss here that nothing is done about.
+///
+/// It comes back `0.0`, which `==` cannot tell from what went in, so no
+/// comparison in any caller can see it and refusing every `-0.0` would cost
+/// far more than the sign is worth. `f64::to_bits` is what notices, and this
+/// is the record that it does.
 #[test]
-fn negative_zero_keeps_its_sign() {
+fn negative_zero_comes_back_without_its_sign() {
     let back = value_roundtrip("sq_negzero", &-0.0f64).expect("the round trip should not fail");
     let back = back.expect("the path should hold a value");
-    assert_eq!(
-        back.to_bits(),
-        (-0.0f64).to_bits(),
-        "-0.0 came back as {back} with bits {:#x}",
-        back.to_bits()
+
+    assert_eq!(back, -0.0f64, "it is still zero, and still equal");
+    assert!(
+        !back.is_sign_negative(),
+        "sqlite kept the sign after all, so this can stop being a limit"
     );
 }
 
@@ -733,20 +727,24 @@ fn option_none_reads_back() {
     }
 }
 
+/// The two layers that survive, and the one that is refused instead.
+///
+/// `Some(None)` is the only shape sqlite cannot tell from something else, and
+/// the write is refused rather than left to come back as `None`.
 #[test]
-fn nested_option_keeps_its_layers() {
-    let mut lost = Vec::new();
-    for v in [Some(Some(1u32)), Some(None::<u32>), None::<Option<u32>>] {
+fn nested_option_keeps_the_layers_it_can_and_refuses_the_one_it_cannot() {
+    for v in [Some(Some(1u32)), None::<Option<u32>>] {
         let back = value_roundtrip("sq_nested_opt", &v).expect("round trip");
-        if back != Some(v) {
-            lost.push(format!("{v:?} came back as {back:?}"));
-        }
+        assert_eq!(back, Some(v), "{v:?} lost a layer");
     }
-    assert!(
-        lost.is_empty(),
-        "Option<Option<u32>> lost a layer:\n{}",
-        lost.join("\n")
-    );
+
+    let file = TempPath::new("sq_nested_opt_some_none");
+    let store = opened(file.path());
+    let refused = store
+        .set(["probe", "v"], &Some(None::<u32>))
+        .expect_err("Some(None) was taken, and it reads back as None");
+
+    assert!(format!("{refused:?}").contains("holding nothing"), "{refused:?}");
 }
 
 #[test]
@@ -1011,19 +1009,16 @@ fn chars_read_back() {
 
 /// f32 asks the same question f64 does.
 #[test]
-fn non_finite_f32_reads_back() {
-    let mut lost = Vec::new();
+fn a_non_finite_f32_is_refused_too() {
+    let mut taken = Vec::new();
     for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        let back = value_roundtrip("sq_f32", &v);
-        let kept = match &back {
-            Ok(Some(b)) => b.is_nan() == v.is_nan() && (v.is_nan() || *b == v),
-            _ => false,
-        };
-        if !kept {
-            lost.push(format!("{v} came back as {back:?}"));
+        let file = TempPath::new("sq_f32");
+        let store = opened(file.path());
+        if store.set(["probe", "v"], &v).is_ok() {
+            taken.push(format!("{v}"));
         }
     }
-    assert!(lost.is_empty(), "a non-finite f32:\n{}", lost.join("\n"));
+    assert!(taken.is_empty(), "taken and unreadable: {}", taken.join(", "));
 }
 
 /// A struct with a non-finite field, which is how one actually reaches a store.
@@ -1033,53 +1028,64 @@ struct Window {
     ratio: f64,
 }
 
+/// One bad field costs the whole struct, and that is the intended price.
+///
+/// A store writes one value at one path, so there is no half of a struct to
+/// keep. The field beside it goes too, which is worth stating because the
+/// alternative on offer was writing the struct with `null` where the number
+/// belonged and finding out at the next read.
 #[test]
-fn a_struct_carrying_a_non_finite_field_reads_back() {
+fn a_struct_carrying_a_non_finite_field_is_refused_whole() {
     let w = Window {
         width: 1280.0,
         ratio: f64::NAN,
     };
-    let back = value_roundtrip("sq_struct_nan", &w);
-    match back {
-        Ok(Some(b)) => assert!(
-            b.ratio.is_nan() && b.width == 1280.0,
-            "the struct came back as {b:?}"
-        ),
-        other => panic!(
-            "one bad field cost the whole struct, the other field with it: {}",
-            first_line(&format!("{other:?}"))
-        ),
-    }
+
+    let file = TempPath::new("sq_struct_nan");
+    let store = opened(file.path());
+    let refused = store.set(["probe", "v"], &w).unwrap_err();
+
+    assert!(
+        format!("{refused:?}").contains("NaN or an infinity"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        StoreBackend::get_raw(&store, &StorePath::from_segments(["probe", "v"])).unwrap(),
+        None
+    );
 }
 
-/// The one place a lost float reports nothing at all.
+/// The case that reported nothing at all before the write was refused.
 ///
-/// Everywhere else the value that replaced it will not decode as the type
-/// asked for, so a read fails loudly. `Option<f64>` decodes `null` perfectly
-/// well - as `None` - so the write returns `Ok`, the read returns `Ok`, and
-/// the value is gone.
+/// Everywhere else the value that replaced the float will not decode as the
+/// type asked for, so a read fails loudly. `Option<f64>` decodes `null`
+/// perfectly well - as `None` - so the write returned `Ok`, the read returned
+/// `Ok`, and the number was gone with nobody the wiser.
 #[test]
-fn an_optional_non_finite_float_is_still_there() {
-    let back = value_roundtrip("sq_opt_nan", &Some(f64::NAN)).expect("the read should not fail");
-    let inner = back.expect("the path should hold a value");
-    assert!(
-        inner.map(f64::is_nan) == Some(true),
-        "Some(NaN) came back as {inner:?}, and nothing anywhere reported it"
-    );
+fn an_optional_non_finite_float_is_refused() {
+    let file = TempPath::new("sq_opt_nan");
+    let store = opened(file.path());
+
+    let refused = store
+        .set(["probe", "v"], &Some(f64::NAN))
+        .expect_err("Some(NaN) was taken, and only a later read would have said so");
+
+    assert!(format!("{refused:?}").contains("NaN or an infinity"));
 }
 
 /// The same, one level further out, where a collection carries it.
 #[test]
-fn a_collection_of_optional_floats_keeps_what_it_held() {
+fn a_collection_holding_one_non_finite_float_is_refused() {
     let written = vec![Some(1.0f64), Some(f64::NAN), None, Some(f64::INFINITY)];
-    let back = value_roundtrip("sq_vec_opt_nan", &written).expect("the read should not fail");
-    let back = back.expect("the path should hold a value");
-    let shape: Vec<bool> = back.iter().map(Option::is_some).collect();
-    assert_eq!(
-        shape,
-        vec![true, true, true, false],
-        "the vector came back as {back:?}: entries that held a number now hold nothing"
-    );
+
+    let file = TempPath::new("sq_vec_opt_nan");
+    let store = opened(file.path());
+
+    let refused = store
+        .set(["probe", "v"], &written)
+        .expect_err("a vector with two unwritable entries was taken");
+
+    assert!(format!("{refused:?}").contains("NaN or an infinity"));
 }
 
 /// A write at the root, which is a path with no levels.

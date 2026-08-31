@@ -1,10 +1,12 @@
 # The codec's ceiling is a fact, key depth is a setting, portability is a policy
 
-**Status: partly built.** `key_depth` and the codec ceiling are enforced today,
-and `portable_across` lowers the depth ceiling to the lowest of the named
-engines and refuses two of the shapes below: a non-finite float, and an enum.
-The type-level walk of the declared shape is not built, and the four remaining
-rows of the portability table are still measurements rather than rules.
+**Status: the value-level half is built.** `key_depth` and the codec ceiling
+are enforced, and `portable_across` lowers the ceiling to the lowest of the
+named engines and refuses every shape in the table below that an engine cannot
+give back: a non-finite float, a `Some(None)`, an enum. What is left is one
+measured loss deliberately not refused - the sign of `-0.0` on sqlite - and the
+type-level walk of the declared shape, which would move all of this from the
+write to the compile and is not built.
 `landing/src/content/docs/Store/limits.md` documents the built behaviour and
 will have to be rewritten as the rest lands.
 
@@ -44,15 +46,30 @@ and depth is not the only thing that stops it - it is just the first instance
 that happened to be found. The measurements above are already a table of what
 each engine cannot hold:
 
-| | refused by |
-| --- | --- |
-| non-finite floats | json, and sqlite because it carries json |
-| `u64::MAX` and anything past `i64` | toml |
-| `Option<Option<T>>` kept as two layers | json, sqlite, redb |
-| an enum of any shape | ron, through its node type |
-| a non-string map key | every text engine |
-| the sign of `-0.0` | sqlite |
-| depth past the ceiling | all five, at different numbers |
+Measured across all five engines rather than reasoned about, because three of
+the rows as first written turned out to be wrong.
+
+| | cannot carry it | what happens now |
+| --- | --- | --- |
+| a non-finite float | json, and sqlite because it carries json | refused at the write |
+| `Some(None)`, told from `None` | all but ron | refused at the write |
+| an enum of any shape | ron, through its node type | refused at the write |
+| depth past the ceiling | all five, at different numbers | refused at the write |
+| `u64::MAX` and anything past `i64` | toml | toml's own codec refuses it, loudly |
+| the sign of `-0.0` | sqlite | kept as a documented loss |
+
+A non-string map key was on this list and should not have been: all five engines
+carry a `BTreeMap<u32, String>` and give it back.
+
+The sign of a zero is the one measured loss left alone. `-0.0` comes back
+`0.0`, which `==` cannot tell from what went in, so no comparison in any caller
+can see it, and refusing every `-0.0` on sqlite would cost more than the sign is
+worth. `f64::to_bits` is what notices, and `probe_sqlite.rs` records that it
+does.
+
+The `u64` row is toml's codec refusing a value it has no room for, which is a
+loud failure at the write and needs nothing from this document beyond saying
+so.
 
 That is the portability surface, and no single number describes it. So:
 
@@ -233,7 +250,36 @@ Separately, and not about floats: any decode failure leaves a handle reporting
 the past, and `StoreExt::decode` returning an error while a subscription
 silently keeps the old value is a split worth settling on its own.
 
-## The second row, and why it is a refusal rather than a fix
+## `Some(None)`, which serde and not the engine takes away
+
+Every engine but ron reads `Some(None)` back as `None`. The outer `Some` has
+nothing of its own to write, so both values reach the file as a single null -
+`c0` under msgpack, `null` under either JSON - and both decode as `None`.
+Measured on bare `rmp-serde`, outside this crate entirely:
+
+| written | bytes | read back |
+| --- | --- | --- |
+| `None` | `c0` | `None` |
+| `Some(None)` | `c0` | `None` |
+| `Some(Some(1))` | `01` | `Some(Some(1))` |
+
+So it is serde's representation of `Option` rather than anything an engine
+does, and no engine here can be taught otherwise. ron escapes it by spelling
+the `Option` out in the document; toml, having no null at all, refuses the pair
+in its own codec.
+
+The write is refused, which costs `Option<Option<T>>` as a storable type
+everywhere but ron. Only the `None` directly inside a `Some` counts: `Some` of
+a list holding a `None` is two levels apart, comes back whole, and is not
+refused - `Counting` arms the flag in `serialize_some` alone and every other
+method clears it.
+
+One refusal costs the whole write, because a store writes one value at one path
+and there is no half of a struct to keep. A struct with a good field beside a
+`Some(None)` loses both, which is the price of not storing a value that reads
+back as a different one.
+
+## The enum row, and why it is a refusal rather than a fix
 
 An enum on ron is the same defect wearing a different hat, and it costs more
 than a `NaN` does: four engines carry every shape, ron takes all three and

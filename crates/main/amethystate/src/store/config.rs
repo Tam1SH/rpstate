@@ -198,6 +198,16 @@ impl WriteLimits {
                 .iter()
                 .all(|engine| engine.holds_enums())
     }
+
+    /// The same for `Some(None)`, which every engine but ron reads back as
+    /// `None`.
+    pub fn keeps_a_nested_option(&self, running: Backend) -> bool {
+        running.keeps_a_nested_option()
+            && self
+                .portable_across
+                .iter()
+                .all(|engine| engine.keeps_a_nested_option())
+    }
 }
 
 /// What the store does about a flush that has been failing for longer than

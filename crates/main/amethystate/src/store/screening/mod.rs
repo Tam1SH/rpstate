@@ -49,6 +49,9 @@ pub struct Screening {
 
     /// The same for an enum of any shape.
     pub enums: bool,
+
+    /// The same for `Some(None)`, which only ron tells apart from `None`.
+    pub nested_options: bool,
 }
 
 impl Screening {
@@ -59,6 +62,7 @@ impl Screening {
             key_depth: limits.key_depth,
             non_finite_floats: limits.holds_non_finite_floats(engine),
             enums: limits.holds_enums(engine),
+            nested_options: limits.keeps_a_nested_option(engine),
         }
     }
 
@@ -84,6 +88,7 @@ impl Screening {
                     key_depth: limits.key_depth,
                     non_finite_floats: true,
                     enums: true,
+                    nested_options: true,
                 };
             }
         };
@@ -165,6 +170,20 @@ impl Screening {
                         "JSON has no spelling for either, so the codec writes `null` and \
                          decoding it as a float fails - on json, and on sqlite, which encodes \
                          with the same JSON",
+                    ),
+            );
+        }
+
+        if !self.nested_options && seen.saw_a_collapsing_option() {
+            return Some(
+                Report::new(StorageError::Codec)
+                    .attach(format!("path: {path}"))
+                    .attach("a `Some` holding nothing, which reads back as nothing at all")
+                    .attach(
+                        "the outer `Some` has nothing of its own to write, so `Some(None)` and \
+                         `None` reach the file as one null - `c0` under msgpack, `null` under \
+                         either JSON - and both come back `None`. ron is the one engine that \
+                         spells the `Option` out and keeps them apart",
                     ),
             );
         }

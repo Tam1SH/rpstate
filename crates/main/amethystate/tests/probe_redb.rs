@@ -911,25 +911,27 @@ fn option_none_survives() {
 
 /// `Some(None)` and `None` are two values, and msgpack spells both `nil`.
 ///
-/// **A silent alteration.** The write returns `Ok`, the flush lands, and the
-/// read of the same path answers `None` for a value that was `Some(None)`. The
-/// outer layer is gone and nothing anywhere says so - not the write, not the
-/// flush, not the read. This is the same defect toml has with `Option::None`,
-/// arrived at from the other side: there the inner absence could not be
-/// written, here the two absences cannot be told apart.
+/// Both reach the file as the single byte `c0` and both read back as `None`,
+/// so the write is refused rather than answering `Ok` for a value the store
+/// cannot return. It is serde's representation and not msgpack's doing: the
+/// outer `Some` has nothing of its own to write, and JSON does the same with
+/// `null`. ron is the one engine that spells the `Option` out.
 ///
-/// The layer that survives is the one carrying a value: `Some(Some(1))` comes
-/// back whole, and `None` comes back as itself. Only the middle case is lost.
+/// The layers carrying a value are untouched: `Some(Some(1))` goes and comes
+/// back whole, and `None` is written as itself.
 #[test]
-fn nested_option_loses_its_outer_layer() {
+fn nested_option_is_refused_where_its_outer_layer_would_be_lost() {
     let inner_none: Option<Option<u32>> = Some(None);
     let outer_none: Option<Option<u32>> = None;
 
-    assert_eq!(
-        trip("probe_opt_some_none", &inner_none).value(),
-        Some(None),
-        "Some(None) is kept today, which would be the repair"
+    let refused = trip("probe_opt_some_none", &inner_none)
+        .wrote
+        .expect_err("Some(None) was taken, and it reads back as None");
+    assert!(
+        format!("{refused:?}").contains("holding nothing"),
+        "{refused:?}"
     );
+
     assert_eq!(
         trip("probe_opt_none", &outer_none).value(),
         Some(outer_none)
@@ -960,46 +962,38 @@ struct HoldsNested {
     after: u32,
 }
 
-/// The collapse follows the value wherever it is nested: a struct field and a
-/// collection element lose it exactly as a bare value does, and the fields
-/// around it are untouched, so nothing about the read looks wrong.
+/// The refusal follows the value wherever it is nested.
+///
+/// A struct field, a collection element and a map entry each cost the whole
+/// write, because a store writes one value at one path and there is no half of
+/// a struct to keep. The fields around it go too, which is the price of not
+/// storing a value that comes back as a different one.
 #[test]
-fn the_nested_option_collapse_reaches_into_structures() {
+fn a_nested_option_inside_a_structure_costs_the_whole_write() {
     let held = HoldsNested {
         before: 1,
         maybe: Some(None),
         after: 2,
     };
-    assert_eq!(
-        trip("probe_nested_in_struct", &held).value(),
-        Some(HoldsNested {
-            before: 1,
-            maybe: None,
-            after: 2
-        }),
-        "the field is kept today, which would be the repair"
-    );
+    let in_a_struct = trip("probe_nested_in_struct", &held)
+        .wrote
+        .expect_err("the struct was taken, and its middle field reads back as None");
+    assert!(format!("{in_a_struct:?}").contains("holding nothing"));
 
     let list: Vec<Option<Option<u32>>> = vec![Some(Some(1)), Some(None), None];
-    assert_eq!(
-        trip("probe_nested_in_vec", &list).value(),
-        Some(vec![Some(Some(1)), None, None]),
-        "the second and third elements are told apart today"
-    );
+    let in_a_list = trip("probe_nested_in_vec", &list)
+        .wrote
+        .expect_err("the list was taken, and its second and third entries became one");
+    assert!(format!("{in_a_list:?}").contains("holding nothing"));
 
     let map: BTreeMap<String, Option<Option<u32>>> =
         [("a".to_string(), Some(None)), ("b".to_string(), None)]
             .into_iter()
             .collect();
-    assert_eq!(
-        trip("probe_nested_in_map", &map).value(),
-        Some(
-            [("a".to_string(), None), ("b".to_string(), None)]
-                .into_iter()
-                .collect::<BTreeMap<_, _>>()
-        ),
-        "the two entries are told apart today"
-    );
+    let in_a_map = trip("probe_nested_in_map", &map)
+        .wrote
+        .expect_err("the map was taken, and its two entries became one");
+    assert!(format!("{in_a_map:?}").contains("holding nothing"));
 }
 
 /// A field skipped on the way out.

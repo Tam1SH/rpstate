@@ -122,6 +122,31 @@ impl Backend {
         }
     }
 
+    /// Whether this engine tells `Some(None)` apart from `None`.
+    ///
+    /// Only ron does, and it is the one that writes an `Option` in words:
+    /// `Some(None)` is in the document as itself. Everywhere else the outer
+    /// `Some` has nothing of its own to write, so both values reach the file as
+    /// one null - `c0` under msgpack, `null` under either JSON - and both read
+    /// back as `None`. toml has no null at all and refuses the pair outright.
+    ///
+    /// It is serde's own representation rather than anything this crate does,
+    /// so no engine can be taught otherwise; the write is refused instead.
+    pub const fn keeps_a_nested_option(self) -> bool {
+        match self {
+            #[cfg(feature = "redb")]
+            Backend::Redb => false,
+            #[cfg(feature = "json")]
+            Backend::Json => false,
+            #[cfg(feature = "toml")]
+            Backend::Toml => false,
+            #[cfg(feature = "ron")]
+            Backend::Ron => true,
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => false,
+        }
+    }
+
     /// Opens a store on this engine directly, skipping the builder.
     ///
     /// [`StoreBuilder`] is the ordinary route - it also collects migrations
