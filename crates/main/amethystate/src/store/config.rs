@@ -174,6 +174,20 @@ impl WriteLimits {
             .min()
             .unwrap_or_else(|| running.depth_ceiling())
     }
+
+    /// Whether a `NaN` or an infinity survives here and everywhere else this
+    /// store promised to stay readable.
+    ///
+    /// The running engine counts for the same reason its ceiling does: a value
+    /// its codec cannot read back is lost whatever anyone configured, so this
+    /// is `false` on json and sqlite with nothing named at all.
+    pub fn holds_non_finite_floats(&self, running: Backend) -> bool {
+        running.holds_non_finite_floats()
+            && self
+                .portable_across
+                .iter()
+                .all(|engine| engine.holds_non_finite_floats())
+    }
 }
 
 /// What the store does about a flush that has been failing for longer than

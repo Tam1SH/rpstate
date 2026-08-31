@@ -608,6 +608,10 @@ impl StoreBackend for RedbStore {
                 }
             })?;
 
+        if let Some(refusal) = self.inner.budget.refused(&depth, &path) {
+            return Err(refusal.attach(StoreFile(self.inner.path.to_path_buf())));
+        }
+
         let old_bytes = self
             .committed_or_buffered(&path)
             .change_context(StorageError::Write)

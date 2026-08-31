@@ -1,11 +1,13 @@
 # The codec's ceiling is a fact, key depth is a setting, portability is a policy
 
-**Status: partly built.** `key_depth` and the codec ceiling are enforced today.
-`portable_across` currently does nothing but lower the depth ceiling to the
-lowest of the named engines - the type-level walk of the declared shape and the
-value-level check at the write, both described below, are not built.
+**Status: partly built.** `key_depth` and the codec ceiling are enforced today,
+and `portable_across` lowers the depth ceiling to the lowest of the named
+engines and refuses a non-finite float where the codec cannot read one back.
+The type-level walk of the declared shape is not built, and the value-level
+check covers floats alone - the other rows of the portability table below are
+still measurements rather than rules.
 `landing/src/content/docs/Store/limits.md` documents the built behaviour and
-will have to be rewritten when the rest lands.
+will have to be rewritten as the rest lands.
 
 ---
 
@@ -189,41 +191,44 @@ which is the extension bug recorded further down, where the builder named a file
 for one engine and opened it with another for exactly that reason. Nothing here
 takes a figure that only the engine can judge, so nothing here has to wait.
 
-## What a non-finite float does today
+## The first row, built: a non-finite float
 
-The first row of the portability table, measured end to end.
-`tests/non_finite_float.rs` writes `f64::NAN` through a field on every engine.
+Three of five engines carry `NaN` and the infinities intact. TOML and RON have
+`nan` and `inf` in their grammars, and msgpack under redb writes the IEEE bits.
+The two that cannot spell one are json and sqlite - sqlite because it encodes
+with `sonic_rs`, which answers the way `serde_json` does. So the split follows
+the **codec**, and the codec is not visible in the engine's name: reading the
+list as "the text ones" is what hid this, since two of the three text engines
+are fine and one of the two flat ones is not.
 
-Three of five carry it intact. TOML and RON have `nan` and `inf` in their
-grammars, and msgpack under redb has no trouble either. The two that cannot
-spell it are json and sqlite - sqlite because it encodes with `sonic_rs`, which
-answers the way `serde_json` does. So the split follows the **codec**, and the
-codec is not visible in the engine's name: reading the list as "the text ones"
-is what hid this, since two of the three text engines are fine and one of the
-two binary ones is not.
+A store whose codec cannot read the value back refuses the write, and so does
+one that named such an engine in `portable_across`. The running engine counts
+for the reason its ceiling does: a value it cannot read back is lost whatever
+anyone configured, so a json store refuses with nothing named at all.
 
-`set` returns `Ok`. The value reaches the file as `null`. The store event
-carries `null`, the field's subscription cannot decode it, and it logs and
-**leaves the signal alone** - so the handle goes on reporting the value it held
-before. A field last set to `5.0` says `5.0` about a store holding `null`.
-Meanwhile a typed `Store::get` of the same path answers `Err(Codec(..))`,
-because that path propagates the codec failure. The same bytes read two ways
-give two different answers, and neither says what happened at the write.
+The refusal is noticed on the pass that already happens. `Counting` walks the
+value to measure its depth, and `serialize_f32` and `serialize_f64` note a
+non-finite one going past for one comparison each. The budget then decides
+whether that is a refusal, since only it knows what the store promised.
 
-A stale value is worse here than a substituted default would be: a default is a
-value nobody wrote, while a stale one is indistinguishable from a write that
-worked.
+It has to be read after a **successful** write rather than a failed one: a
+codec with no spelling for `NaN` writes `null` and reports success, so there is
+no error to inspect. That is the whole reason the value has to be refused here.
+Left alone it lands as `null`, `set` answers `Ok`, and the field's subscription
+cannot decode what comes back - it logs and leaves the signal alone, so the
+handle goes on reporting the number it held before. A field last set to `5.0`
+says `5.0` about a store holding `null`, while a typed `Store::get` of the same
+path answers `Err`. The same bytes read two ways gave two different answers,
+and neither said what happened at the write. A stale value is worse there than
+a substituted default: a default is a value nobody wrote, while a stale one is
+indistinguishable from a write that worked.
 
-This is the value-level half of `portable_across` that is not built. When it
-is, a non-finite `f32` or `f64` is refused at the write whenever the named
-engines include one whose codec writes `null` for it - failing where the caller
-is standing, rather than surfacing as a confident handle three steps later.
-`landing/src/content/docs/Limitations/` says nothing about any of this and
-should.
+The upstream half was never worth waiting for: `serde-rs/json#202` has been
+open since January 2017, and JSON having no non-finite floats is a property of
+the format rather than of the crate.
 
-The upstream half is not waiting on anything: `serde-rs/json#202` has been open
-since January 2017, and JSON having no non-finite floats is a property of the
-format rather than of the crate.
+Measured per engine in `landing/src/content/docs/Limitations/non-finite-float.md`,
+which is generated from `tests/non_finite_float.rs`.
 
 Separately, and not about floats: any decode failure leaves a handle reporting
 the past, and `StoreExt::decode` returning an error while a subscription

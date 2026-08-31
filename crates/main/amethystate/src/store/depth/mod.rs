@@ -37,6 +37,10 @@ use error_stack::Report;
 pub struct DepthBudget {
     pub ceiling: usize,
     pub key_depth: Option<usize>,
+
+    /// Whether a `NaN` or an infinity survives on the running engine and on
+    /// every engine this store promised to stay readable on.
+    pub non_finite_floats: bool,
 }
 
 impl DepthBudget {
@@ -45,6 +49,7 @@ impl DepthBudget {
         Self {
             ceiling: limits.ceiling(engine),
             key_depth: limits.key_depth,
+            non_finite_floats: limits.holds_non_finite_floats(engine),
         }
     }
 
@@ -68,6 +73,7 @@ impl DepthBudget {
                 return Self {
                     ceiling: usize::MAX,
                     key_depth: limits.key_depth,
+                    non_finite_floats: true,
                 };
             }
         };
@@ -128,5 +134,31 @@ impl DepthBudget {
                 "a value deeper than the reader accepts is written without complaint and \
                  cannot be read back",
             )
+    }
+
+    /// Whether a pass that has finished wrote something this store cannot read
+    /// back, or cannot promise elsewhere.
+    ///
+    /// Asked after a *successful* write rather than after a failed one: a codec
+    /// with no spelling for a `NaN` writes `null` and reports success, so there
+    /// is no error to inspect. That is the whole reason the value has to be
+    /// refused here - left alone it lands as `null`, the write says `Ok`, and
+    /// the field goes on reporting the number it held before while the file
+    /// holds nothing of the sort.
+    pub fn refused(&self, depth: &Depth, path: &StorePath) -> Option<Report<StorageError>> {
+        if self.non_finite_floats || !depth.saw_a_non_finite_float() {
+            return None;
+        }
+
+        Some(
+            Report::new(StorageError::Codec)
+                .attach(format!("path: {path}"))
+                .attach("a NaN or an infinity, which this store cannot read back")
+                .attach(
+                    "JSON has no spelling for either, so the codec writes `null` and decoding \
+                     it as a float fails - on json, and on sqlite, which encodes with the same \
+                     JSON",
+                ),
+        )
     }
 }

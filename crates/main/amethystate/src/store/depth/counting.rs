@@ -26,6 +26,7 @@ pub struct Depth {
     depth: Cell<usize>,
     deepest: Cell<usize>,
     overflowed: Cell<bool>,
+    non_finite: Cell<bool>,
     limit: usize,
 }
 
@@ -36,6 +37,7 @@ impl Depth {
             depth: Cell::new(0),
             deepest: Cell::new(0),
             overflowed: Cell::new(false),
+            non_finite: Cell::new(false),
             limit,
         }
     }
@@ -79,6 +81,18 @@ impl Depth {
     /// type. This says whether that error was ours.
     pub fn overflowed(&self) -> bool {
         self.overflowed.get()
+    }
+
+    /// Whether a `NaN` or an infinity went past during the pass.
+    ///
+    /// Noticed here because the pass is already happening; whether it is a
+    /// refusal is the budget's question, since it depends on which codecs the
+    /// store promised to stay readable on.
+    ///
+    /// Read after the pass, not during: a codec that writes `null` for such a
+    /// value succeeds, so there is no error to carry the news.
+    pub fn saw_a_non_finite_float(&self) -> bool {
+        self.non_finite.get()
     }
 
     /// The deepest level reached, once a pass has finished.
@@ -168,8 +182,6 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         serialize_u32(v: u32);
         serialize_u64(v: u64);
         serialize_u128(v: u128);
-        serialize_f32(v: f32);
-        serialize_f64(v: f64);
         serialize_char(v: char);
         serialize_str(v: &str);
         serialize_bytes(v: &[u8]);
@@ -177,6 +189,26 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         serialize_unit();
         serialize_unit_struct(name: &'static str);
         serialize_unit_variant(name: &'static str, index: u32, variant: &'static str);
+    }
+
+    /// Forwarded like the rest, and noted on the way past.
+    ///
+    /// A `NaN` or an infinity is written by every codec here, and read back by
+    /// three of them; the two that carry JSON write `null` and then fail to
+    /// read it. Noting it costs one comparison on a pass that is happening
+    /// anyway.
+    fn serialize_f32(self, v: f32) -> Result<S::Ok, S::Error> {
+        if !v.is_finite() {
+            self.depth.non_finite.set(true);
+        }
+        self.inner.serialize_f32(v)
+    }
+
+    fn serialize_f64(self, v: f64) -> Result<S::Ok, S::Error> {
+        if !v.is_finite() {
+            self.depth.non_finite.set(true);
+        }
+        self.inner.serialize_f64(v)
     }
 
     /// `Some` is not a level: no format spends nesting on it, and counting it

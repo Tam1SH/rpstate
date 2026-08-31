@@ -327,6 +327,10 @@ impl SqliteStoreInner {
             }
         })?;
 
+        if let Some(refusal) = self.budget.refused(&depth, &path) {
+            return Err(refusal.attach(StoreFile(self.path.clone())));
+        }
+
         let old_bytes = self
             .committed_or_buffered(&path)
             .change_context(StorageError::Write)

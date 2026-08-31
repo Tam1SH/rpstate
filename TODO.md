@@ -226,14 +226,6 @@ consuming all 10 000, because the scan materialises every key and value before
 the iterator is handed over. Decoding is lazy; the scan is not, and the scan is
 the whole cost. The doc on `entries` should stop implying otherwise.
 
-## A non-finite float reaches the file as `null`, and the handle never says so
-
-Measured, and the account moved to `RFC-limits.md` - it is the first row of that
-document's portability table and the worked example of the value-level check
-`portable_across` does not yet make. The next pass is there: refuse the write
-when the named engines include a codec that cannot spell the value, and write
-the Limitations page.
-
 ## Toml answers "holds nothing" and "is not there" with the same document
 
 Measured in `tests/absent_or_null.rs`, writing `None` into an `Option<String>`

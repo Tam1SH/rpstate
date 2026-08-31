@@ -534,6 +534,11 @@ impl<D: TextDocument> TextStoreInner<D> {
                     .attach(Key(path.clone()))
             }
         })?;
+
+        if let Some(refusal) = self.budget.refused(&depth, path) {
+            return Err(refusal.attach(StoreFileFact(self.files.data.path.clone())));
+        }
+
         self.set_node(path.clone(), node, source)
     }
 

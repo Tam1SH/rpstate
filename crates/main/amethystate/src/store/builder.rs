@@ -73,6 +73,29 @@ impl Backend {
         }
     }
 
+    /// Whether this engine can write a `NaN` or an infinity and read it back.
+    ///
+    /// JSON has no spelling for either, and `serde_json` follows
+    /// `JSON.stringify` in writing `null` - which then fails to decode as a
+    /// float. sqlite answers the same way for the same reason: it encodes its
+    /// values with `sonic_rs`. So the split follows the codec rather than the
+    /// file, which is why the two are not the two text engines anyone would
+    /// guess: msgpack, TOML and RON all carry the value.
+    pub const fn holds_non_finite_floats(self) -> bool {
+        match self {
+            #[cfg(feature = "redb")]
+            Backend::Redb => true,
+            #[cfg(feature = "json")]
+            Backend::Json => false,
+            #[cfg(feature = "toml")]
+            Backend::Toml => true,
+            #[cfg(feature = "ron")]
+            Backend::Ron => true,
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => false,
+        }
+    }
+
     /// Opens a store on this engine directly, skipping the builder.
     ///
     /// [`StoreBuilder`] is the ordinary route - it also collects migrations

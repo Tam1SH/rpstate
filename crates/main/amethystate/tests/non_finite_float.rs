@@ -1,19 +1,34 @@
+//! Tags: codec, json, sqlite, choosing an engine
+//!
+//! Features: redb, sqlite, json, toml, ron
+//!
 //! What a float that is not a number does to a store.
 //!
 //! `NaN` and the infinities are ordinary `f64` values a GUI produces by
 //! dividing badly. Three of the five engines carry them: msgpack writes the
 //! IEEE bits, and TOML and RON have `nan` and `inf` in their grammars.
 //!
-//! JSON does not, and neither `serde_json` nor `sonic_rs` refuses it - both
-//! write `null`, which reads back as nothing at all. That costs two engines
-//! rather than one, because sqlite stores its values as JSON and nothing in
-//! its name says so.
+//! JSON has no spelling for either, and neither `serde_json` nor `sonic_rs`
+//! says so - both write `null`, which then fails to read back as a float. That
+//! costs two engines rather than one, because sqlite stores its values as JSON
+//! and nothing in its name says which format that is.
 //!
-//! So it is a property of the format rather than of the file, and the tests
-//! below say which engines have it.
+//! So which engines have it follows the codec rather than the file extension,
+//! and the two are not the pair anyone guesses. A store whose codec cannot
+//! read the value back refuses the write instead of taking it: left alone it
+//! lands as `null`, `set` answers `Ok`, and the field goes on reporting the
+//! number it held before while the file holds nothing of the sort.
+//!
+//! `limits(|l| l.portable_across(..))` extends the refusal to engines that are
+//! not running. A store on redb that promises to stay readable on json refuses
+//! what msgpack alone would have held.
 
 use amethystate::amethystate;
+#[cfg(feature = "json")]
+use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
+#[cfg(any(feature = "json", feature = "sqlite"))]
+use amethystate::store::builder::Backend;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
@@ -60,82 +75,139 @@ fn a_format_that_can_hold_it_keeps_it() {
     );
 }
 
-#[cfg(all(feature = "json", not(feature = "redb")))]
-#[test]
-fn json_takes_a_write_it_cannot_store() {
+#[cfg(any(feature = "json", feature = "sqlite"))]
+fn refuses_what_it_cannot_read_back(backend: Backend, label: &str) {
     use amethystate::StoreExt;
-    use amethystate::store::StoreBackend;
-    use amethystate::store::builder::Backend;
 
-    let path = TempPath::new("nonfinite_json");
+    let path = TempPath::new("nonfinite_refused");
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+
+    let state = Readings::new_with(&store).unwrap();
+    state.ratio().set(5.0).unwrap();
+
+    let refused = state
+        .ratio()
+        .set(f64::NAN)
+        .expect_err(&format!("{label} took a value it cannot read back"));
+    assert!(
+        format!("{refused:?}").contains("NaN or an infinity"),
+        "{label} said {refused:?}"
+    );
+
+    assert_eq!(state.ratio().get(), 5.0, "{label}");
+    assert_eq!(state.ratio().try_get().unwrap(), 5.0, "{label}");
+    assert_eq!(
+        StoreExt::get::<f64>(&store, ratio_path()).unwrap(),
+        Some(5.0),
+        "{label}: the refused write reached the store"
+    );
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn json_refuses_it() {
+    refuses_what_it_cannot_read_back(Backend::Json, "json");
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_refuses_it_too_because_it_stores_json() {
+    refuses_what_it_cannot_read_back(Backend::Sqlite, "sqlite");
+}
+
+#[cfg(all(feature = "redb", feature = "json"))]
+#[test]
+fn a_promise_to_stay_readable_on_json_refuses_it_where_it_would_fit() {
+    let path = TempPath::new("nonfinite_promised");
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Redb)
+        .limits(|l| l.portable_across([Backend::Json]))
+        .build()
+        .unwrap();
+
+    let state = Readings::new_with(&store).unwrap();
+
+    let refused = state
+        .ratio()
+        .set(f64::INFINITY)
+        .expect_err("msgpack holds it, but the store promised json too");
+
+    assert_eq!(
+        refused.current_context(),
+        &amethystate_core::primitives::error::WriteError::Storage
+    );
+    assert!(format!("{refused:?}").contains("NaN or an infinity"));
+}
+
+#[cfg(all(feature = "redb", feature = "json"))]
+#[test]
+fn a_store_promising_only_engines_that_hold_it_takes_it() {
+    let path = TempPath::new("nonfinite_promised_ok");
+    let store = StoreBuilder::new(path.path())
+        .backend(Backend::Redb)
+        .limits(|l| l.portable_across([Backend::Redb]))
+        .build()
+        .unwrap();
+
+    let state = Readings::new_with(&store).unwrap();
+    state.ratio().set(f64::NEG_INFINITY).unwrap();
+
+    assert!(state.ratio().get().is_infinite());
+}
+
+#[test]
+fn what_each_engine_does_with_a_nan() {
+    for backend in common::enabled_backends() {
+        let path = TempPath::new("nonfinite_run");
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
+
+        //@act
+        let readings = Readings::new_with(&store).unwrap();
+        readings.ratio().set(1.5).unwrap();
+
+        //@show the write
+        let written = readings.ratio().set(f64::NAN);
+        //@show-end
+
+        let after = readings.ratio().get();
+        //@end
+
+        let held = if after.is_nan() {
+            "NaN".to_string()
+        } else {
+            after.to_string()
+        };
+        let outcome = match &written {
+            Ok(()) => format!("taken, and the field holds {held}"),
+            Err(report) => common::shape(report),
+        };
+
+        common::measured(&[
+            ("engine", common::engine_name(backend)),
+            ("the write", &outcome),
+            ("what the field holds afterwards", &held),
+        ]);
+    }
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn the_refusal_names_the_kind_it_is() {
+    let path = TempPath::new("nonfinite_kind");
     let store = StoreBuilder::new(path.path())
         .backend(Backend::Json)
         .build()
         .unwrap();
 
-    let state = Readings::new_with(&store).unwrap();
-    state.ratio().set(5.0).unwrap();
+    let refused = store
+        .set(["loose", "ratio"], &f64::NAN)
+        .expect_err("a raw write is refused the same way");
 
-    assert!(
-        state.ratio().set(f64::NAN).is_ok(),
-        "the write is accepted today, which is the defect"
-    );
-    assert_eq!(
-        state.ratio().get(),
-        5.0,
-        "the handle keeps the last value the store agreed with"
-    );
-    assert!(
-        state.ratio().try_get().is_err(),
-        "and says the store no longer agrees, which is what separates it \
-         from a write that worked"
-    );
-    assert!(
-        StoreExt::get::<f64>(&store, ratio_path()).is_err(),
-        "a typed read of the same path fails, where the handle tolerates"
-    );
-
-    store.save_now().unwrap();
-    let document = std::fs::read_to_string(path.path()).unwrap();
-    assert!(
-        document.contains("null"),
-        "the document holds nothing where the value was: {document}"
-    );
-
-    // And the field says so for exactly as long as it is true.
-    state.ratio().set(1.5).unwrap();
-    assert_eq!(state.ratio().get(), 1.5);
-    assert_eq!(
-        state.ratio().try_get().unwrap(),
-        1.5,
-        "a change that decodes clears it"
-    );
-}
-
-#[cfg(all(feature = "sqlite", not(feature = "redb")))]
-#[test]
-fn sqlite_loses_it_too_because_it_stores_json() {
-    use amethystate::StoreExt;
-    use amethystate::store::builder::Backend;
-
-    let path = TempPath::new("nonfinite_sqlite");
-    let store = StoreBuilder::new(path.path())
-        .backend(Backend::Sqlite)
-        .build()
-        .unwrap();
-
-    let state = Readings::new_with(&store).unwrap();
-    state.ratio().set(5.0).unwrap();
-
-    assert!(state.ratio().set(f64::NAN).is_ok(), "the write is accepted");
-    assert_eq!(
-        state.ratio().get(),
-        5.0,
-        "the handle keeps the last value the store agreed with"
-    );
-    assert!(
-        state.ratio().try_get().is_err(),
-        "and says so, as it does on the json engine"
-    );
-    assert!(StoreExt::get::<f64>(&store, ratio_path()).is_err());
+    assert_eq!(refused.current_context(), &StorageError::Codec);
 }
