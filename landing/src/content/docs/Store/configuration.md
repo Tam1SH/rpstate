@@ -129,6 +129,14 @@ the split does not happen.
 
 ## What is not a setting
 
-`migrations` and `provide` sit on the same builder and are not configuration.
-They are **inputs**: the steps to run, and the values those steps are handed.
-[Migrations](/amethystate/migrations/overview/) covers both.
+`migrations`, `provide` and `context` sit on the same builder and are not
+configuration. They are **inputs**: the steps to run, the values those steps
+are handed, and the values the declared checks are handed.
+[Migrations](/amethystate/migrations/overview/) covers the first two, and
+[Defining structs](/amethystate/state/defining-structs/) the third.
+
+The two that hand over a value are separate because they are read from
+different places. A migration step runs once, inside `build`, on the thread
+that called it, so `provide` takes anything at all - an `Rc`, a handle its
+toolkit refuses to move. A check runs every time a value arrives, including
+from the thread watching the file, so `context` asks for `Send + Sync`.

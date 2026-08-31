@@ -19,6 +19,8 @@ pub struct MacroArgs {
     pub on_unreadable: Option<syn::Path>,
     #[darling(default)]
     pub on_delete: Option<syn::Path>,
+    #[darling(default)]
+    pub check: Option<syn::Path>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +34,7 @@ pub struct StoreFieldEntry {
     pub volatile: bool,
     pub on_unreadable: Option<syn::Path>,
     pub on_delete: Option<syn::Path>,
+    pub check: Option<syn::Path>,
 }
 
 impl StoreFieldEntry {
@@ -50,43 +53,27 @@ impl StoreFieldEntry {
 
 impl FromField for StoreFieldEntry {
     fn from_field(field: &syn::Field) -> darling::Result<Self> {
-        let ident = field.ident.clone();
-        let vis = field.vis.clone();
-        let ty = field.ty.clone();
-
-        let mut key = None;
-        let mut default = None;
-        let mut nested = false;
-        let mut volatile = false;
-        let mut on_unreadable = None;
-        let mut on_delete = None;
+        let mut entry = StoreFieldEntry {
+            ident: field.ident.clone(),
+            vis: field.vis.clone(),
+            ty: field.ty.clone(),
+            key: None,
+            default: None,
+            nested: false,
+            volatile: false,
+            on_unreadable: None,
+            on_delete: None,
+            check: None,
+        };
 
         for attr in &field.attrs {
             if attr.path().is_ident("amestate") {
                 let list = attr.meta.require_list().map_err(darling::Error::from)?;
-                parse_state_tokens(
-                    list.tokens.clone(),
-                    &mut key,
-                    &mut default,
-                    &mut nested,
-                    &mut volatile,
-                    &mut on_unreadable,
-                    &mut on_delete,
-                )?;
+                parse_state_tokens(list.tokens.clone(), &mut entry)?;
             }
         }
 
-        Ok(StoreFieldEntry {
-            ident,
-            vis,
-            ty,
-            key,
-            default,
-            nested,
-            volatile,
-            on_unreadable,
-            on_delete,
-        })
+        Ok(entry)
     }
 }
 
@@ -106,16 +93,7 @@ fn split_top_level_commas(tokens: TokenStream2) -> Vec<TokenStream2> {
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn parse_state_tokens(
-    tokens: TokenStream2,
-    key: &mut Option<SpannedValue<String>>,
-    default: &mut Option<TokenStream2>,
-    nested: &mut bool,
-    volatile: &mut bool,
-    on_unreadable: &mut Option<syn::Path>,
-    on_delete: &mut Option<syn::Path>,
-) -> darling::Result<()> {
+fn parse_state_tokens(tokens: TokenStream2, into: &mut StoreFieldEntry) -> darling::Result<()> {
     for item in split_top_level_commas(tokens) {
         let mut iter = item.into_iter().peekable();
 
@@ -137,28 +115,31 @@ fn parse_state_tokens(
             let value: TokenStream2 = iter.collect();
 
             match name.as_str() {
-                "default" => *default = Some(value),
+                "default" => into.default = Some(value),
                 "key" => {
                     let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
-                    *key = Some(SpannedValue::new(lit.value(), lit.span()));
+                    into.key = Some(SpannedValue::new(lit.value(), lit.span()));
                 }
                 "on_unreadable" => {
-                    *on_unreadable = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                    into.on_unreadable = Some(syn::parse2(value).map_err(darling::Error::from)?);
                 }
                 "on_delete" => {
-                    *on_delete = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                    into.on_delete = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                }
+                "check" => {
+                    into.check = Some(syn::parse2(value).map_err(darling::Error::from)?);
                 }
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
-                        &["default", "key", "on_unreadable", "on_delete"],
+                        &["default", "key", "on_unreadable", "on_delete", "check"],
                     ));
                 }
             }
         } else {
             match name.as_str() {
-                "volatile" => *volatile = true,
-                "nested" => *nested = true,
+                "volatile" => into.volatile = true,
+                "nested" => into.nested = true,
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,

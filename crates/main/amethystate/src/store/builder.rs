@@ -44,19 +44,20 @@ impl Backend {
     }
 
     /// How deeply this engine's codec will read, counting the path and the
-    /// value together.
+    /// value together. A fact about the codec, enforced whatever the store is
+    /// configured to allow.
     ///
-    /// Not a setting. Every codec here reads less deeply than it writes, so a
-    /// value past this is taken without complaint and cannot be read back -
-    /// which on the text engines means the whole file, since the document is
-    /// parsed as one. Measured rather than looked up: `tests/probe_*.rs` walked
-    /// each engine to its boundary.
+    /// Every codec here reads less deeply than it writes, so a value past this
+    /// is taken without complaint and cannot be read back - which on the text
+    /// engines means the whole file, since the document is parsed as one. Each
+    /// number comes from `tests/probe_*.rs`, which walks its engine to the
+    /// boundary.
     ///
-    /// `redb` has no limit of its own. `rmp_serde` recurses until the stack
-    /// ends, around three thousand levels, and the process dies rather than an
-    /// error being returned - on every later start, because the value is
-    /// already committed. The number here is imposed for that reason: far above
-    /// any data anyone means to store, far below where the stack gives out.
+    /// `redb` has no limit of its own: `rmp_serde` recurses until the stack
+    /// ends, around three thousand levels, and the process dies there - on
+    /// every later start, because the value is already committed. Its number is
+    /// imposed for that reason, far above any data anyone means to store and
+    /// far below where the stack gives out.
     pub const fn depth_ceiling(self) -> usize {
         match self {
             #[cfg(feature = "redb")]
@@ -186,6 +187,7 @@ pub struct StoreBuilder {
     backend: Backend,
     config: StoreConfig,
     migration_builder: MigrationBuilder,
+    check_context: crate::store::CheckContext,
     /// Whether the extension on the path was spelled by the caller.
     ///
     /// An extension this crate chose belongs to whichever engine is going to
@@ -196,30 +198,31 @@ pub struct StoreBuilder {
 
 /// Which convention decides where an application's files belong.
 ///
-/// They disagree about enough of the tree that a store written under one is not
-/// found under the other, so an application that has shipped should name the one
-/// it means rather than take whichever [`Location::app`] defaults to.
+/// A store is found under the layout it was written under, so an application
+/// that has shipped should name the one it means. [`Location::app`] takes
+/// [`Layout::App`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Layout {
-    /// The XDG layout, followed on every platform. What [`Location::app`] uses.
+    /// The convention a command-line application follows: the XDG configuration
+    /// directory on Linux and macOS, `AppData\Roaming\<app>\config` on Windows.
+    /// What [`Location::app`] uses.
     App,
 
-    /// Wherever the host system says an application's files go, which differs
-    /// from [`Layout::App`] off Linux. The one a desktop application usually
-    /// wants, since it is where the rest of the platform's software puts
-    /// things.
+    /// The convention the rest of the platform's software follows, which is
+    /// what a desktop application usually wants: `Library/Preferences/rs.<app>`
+    /// on macOS, and the same place as [`Layout::App`] on Linux and Windows.
     Native,
 
     /// The layout the `directories` crate produces: the XDG configuration
     /// directory on Linux, `AppData\Roaming\<app>\config` on Windows, and
     /// `Library/Application Support/rs.<app>` on macOS.
     ///
-    /// A third reading of the same question, close to [`Layout::App`] on Linux
-    /// and Windows and to [`Layout::Native`] on macOS without being either of
-    /// them everywhere. The one to name for an application whose files that
-    /// crate already placed, since where it put them is what the store has to
-    /// match.
+    /// The one to name for an application whose files that crate already
+    /// placed, since where it put them is what the store has to match. On
+    /// Windows it lands where [`Layout::App`] does; on Linux it spells the
+    /// application name as given, where [`Layout::App`] lowercases it and turns
+    /// spaces into hyphens.
     ProjectDirs,
 }
 
@@ -248,7 +251,7 @@ impl Location {
         self.app_under(Layout::default_for_build(), app_name, config_name)
     }
 
-    /// The same, under the layout named rather than the default one.
+    /// The same, under the layout named.
     pub fn app_under(
         self,
         layout: Layout,
@@ -300,11 +303,11 @@ impl Location {
     /// Beside the running executable, for an installation that is a folder
     /// somebody unpacked and can move.
     ///
-    /// Not where an installed application belongs: `Program Files` and
-    /// `/usr/bin` are not writable by the person running the program, and on
-    /// macOS the executable lives inside the bundle, so a file beside it is
-    /// inside a signed directory. Any of those shows up as a failure to open
-    /// the store, which is at startup rather than at the first write.
+    /// This wants a directory the person running the program can write to.
+    /// `Program Files` and `/usr/bin` are not, and on macOS the executable
+    /// lives inside the bundle, so a file beside it is inside a signed
+    /// directory. Any of those shows up as a failure to open the store, at
+    /// startup, before the first write.
     pub fn beside_the_executable(self, file_name: impl AsRef<Path>) -> StorageResult<PathBuf> {
         let exe = std::env::current_exe()
             .change_context(StorageError::Open)
@@ -351,18 +354,17 @@ impl StoreBuilder {
             backend: default_backend(),
             config: StoreConfig::new(path),
             migration_builder: MigrationBuilder::default(),
+            check_context: crate::store::CheckContext::default(),
             caller_named_extension,
         }
     }
 
-    /// A store where the machine says it goes, rather than at a path the caller
-    /// already has.
+    /// A store where the machine says it goes.
     ///
-    /// [`StoreBuilder::new`] is the whole of the simple case: there is a path,
-    /// and it is handed over. Everything else is a question about the machine -
-    /// which directory this platform keeps for an application, whether this
-    /// install is a folder somebody unpacked - and all of it is behind here, so
-    /// the answer is chosen in one place rather than assembled at the call site.
+    /// The questions about the machine - which directory this platform keeps
+    /// for an application, whether this install is a folder somebody unpacked -
+    /// are all answered behind here, in one place. [`StoreBuilder::new`] is the
+    /// way in when the path is already known.
     ///
     /// The closure is handed a [`Location`] and returns the path it picked.
     /// Every method on it makes sure the directory above the file exists, so
@@ -374,8 +376,8 @@ impl StoreBuilder {
     /// // The configuration directory this platform keeps for an application.
     /// let store = StoreBuilder::located(|at| at.app("my-app", "settings"))?.build()?;
     ///
-    /// // The same, under a named convention rather than whatever the build's
-    /// // features chose - worth spelling once an application has shipped.
+    /// // The same, under a named convention - worth spelling once an
+    /// // application has shipped.
     /// let store = StoreBuilder::located(|at| {
     ///     at.app_under(Layout::Native, "my-app", "settings")
     /// })?
@@ -419,8 +421,8 @@ impl StoreBuilder {
 
     /// How long a failed background flush waits before trying again.
     ///
-    /// A retry is not a second write: it is the same buffered changes,
-    /// tried again. Nothing is lost between attempts.
+    /// A retry carries the same buffered changes, tried again. Nothing is lost
+    /// between attempts.
     pub fn retry_interval(mut self, every: Duration) -> Self {
         self.config.retry_policy.interval = every;
         self
@@ -429,11 +431,10 @@ impl StoreBuilder {
     /// How long a streak of failing flushes may run before the store says so
     /// out loud.
     ///
-    /// Not a deadline for giving up: the flush keeps being retried until it
-    /// lands or the store is dropped, so a disk someone frees up heals it
-    /// without a restart. This bounds how long that goes on quietly before
-    /// [`StoreBuilder::on_persist_failure`] is asked what writers should be
-    /// told.
+    /// The flush keeps being retried until it lands or the store is dropped, so
+    /// a disk someone frees up heals it without a restart. This bounds how long
+    /// that goes on quietly before [`StoreBuilder::on_persist_failure`] is
+    /// asked what writers should be told.
     pub fn retry_budget(mut self, within: Duration) -> Self {
         self.config.retry_policy.budget = within;
         self
@@ -441,10 +442,10 @@ impl StoreBuilder {
 
     /// How hard one write to one file fights before it reports a failure.
     ///
-    /// Below [`retry_interval`], not beside it: this is what happens inside a
-    /// single attempt, and only once it has run out does a flush count as
-    /// having failed at all. It applies to the text engines, which replace a
-    /// file to write it; `redb` and `sqlite` hold their own handle.
+    /// This sits inside a single flush attempt, below [`retry_interval`]: only
+    /// once it has run out does a flush count as having failed at all. It
+    /// applies to the text engines, which replace a file to write it; `redb`
+    /// and `sqlite` hold their own handle.
     ///
     /// ```no_run
     /// # use amethystate::store::builder::StoreBuilder;
@@ -483,9 +484,9 @@ impl StoreBuilder {
     /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
     /// ```
     ///
-    /// Naming the engines rather than saying *all* is deliberate: "all" changes
-    /// under a store when one is added, and the honest requirement is usually
-    /// narrower than every engine this crate happens to carry.
+    /// The claim names the engines it means, so it stays what the application
+    /// asked for when this crate gains another one, and so it can be as narrow
+    /// as the requirement really is.
     pub fn limits(mut self, configure: impl FnOnce(WriteLimits) -> WriteLimits) -> Self {
         self.config.limits = configure(std::mem::take(&mut self.config.limits));
         self
@@ -564,6 +565,42 @@ impl StoreBuilder {
         self
     }
 
+    /// Hands a value to every check this store's declared structs run.
+    ///
+    /// A check written with `#[amestate(check = ..)]` is a bare `fn` and
+    /// captures nothing, so the world it has to judge a value against - which
+    /// monitors exist, which themes are installed, what this machine allows -
+    /// arrives here. One value per type; the check asks for it back with
+    /// [`CheckContext::get`] or [`CheckContext::require`].
+    ///
+    /// The `Send + Sync` bound is what separates this from
+    /// [`StoreBuilder::provide`]. A migration step runs once, inside
+    /// [`build`](StoreBuilder::build), on the thread that called it. A check
+    /// runs every time a value arrives, including from the thread that watches
+    /// the file, so what it reads has to be readable from there.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc_context");
+    /// struct Monitors {
+    ///     count: usize,
+    /// }
+    ///
+    /// let store = StoreBuilder::new(&*path)
+    ///     .context(Monitors { count: 2 })
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(store.context().get::<Monitors>().unwrap().count, 2);
+    /// ```
+    ///
+    /// [`CheckContext::get`]: crate::store::CheckContext::get
+    /// [`CheckContext::require`]: crate::store::CheckContext::require
+    pub fn context<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.check_context.insert(value);
+        self
+    }
+
     /// Lets reading a large collection back use more than one core.
     ///
     /// Parsing every stored key and decoding every value is around four
@@ -607,10 +644,11 @@ impl StoreBuilder {
     /// assert_eq!(store.kv().get::<u8>("a").unwrap(), Some(1));
     /// ```
     pub fn build(self) -> StorageResult<Store> {
+        let context = Arc::new(self.check_context);
         let migration_set = self.migration_builder.into_set();
         let (store, _) = self.backend.open_public(self.config, migration_set)?;
 
-        Ok(store)
+        Ok(store.with_context(context))
     }
 
     /// Opens the store and returns what the migration pass did.
@@ -620,10 +658,11 @@ impl StoreBuilder {
     /// by hand.
     pub fn build_with_migration(mut self) -> StorageResult<(Store, MigrationReport)> {
         self.migration_builder.collect_codegen();
+        let context = Arc::new(self.check_context);
         let migration_set = self.migration_builder.into_set();
         let (store, report) = self.backend.open_public(self.config, migration_set)?;
         report.log_to_tracing();
-        Ok((store, report))
+        Ok((store.with_context(context), report))
     }
 }
 
@@ -631,12 +670,6 @@ impl StoreBuilder {
 mod tests {
     use super::*;
 
-    /// A path with no extension gets one from the engine that is actually
-    /// going to open it, whenever the engine is named. Otherwise a store asked
-    /// for as `json` is opened on a file this crate called `.redb`, and the
-    /// engine meets another engine's bytes: a location names a config without
-    /// an extension, so this is the ordinary way to reach it rather than a
-    /// corner.
     #[cfg(all(feature = "redb", feature = "json"))]
     #[test]
     fn a_defaulted_extension_follows_the_engine_that_is_named() {
@@ -649,8 +682,6 @@ mod tests {
         );
     }
 
-    /// The engine named last is the one that runs, so it is the one the
-    /// extension has to agree with.
     #[cfg(all(feature = "redb", feature = "json", feature = "toml"))]
     #[test]
     fn the_last_engine_named_is_the_one_the_path_follows() {
@@ -664,9 +695,6 @@ mod tests {
         );
     }
 
-    /// An extension the caller spelled is the caller's, and naming an engine
-    /// does not overrule it - a `.conf` a user's tooling already looks for
-    /// stays `.conf`.
     #[cfg(all(feature = "redb", feature = "json"))]
     #[test]
     fn an_extension_the_caller_wrote_is_left_alone() {
@@ -678,7 +706,6 @@ mod tests {
         );
     }
 
-    /// Without a named engine the default's extension is right, and stays.
     #[test]
     fn an_unnamed_engine_keeps_the_default_extension() {
         let builder = StoreBuilder::new("app/settings");

@@ -174,6 +174,10 @@ pub(crate) fn data_impl(
         }
     });
 
+    let struct_policy = super::read_policy(macro_args.on_unreadable.as_ref())
+        .ok()
+        .flatten();
+
     let store_load_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
         let key = e.stored_name();
@@ -194,8 +198,39 @@ pub(crate) fn data_impl(
                 .as_ref()
                 .map(parse_default)
                 .unwrap_or_else(|| quote! { <#ty as ::std::default::Default>::default() });
+
+            let Some(check) = &e.check else {
+                return quote! {
+                    #fname: <#crate_name::Store as #crate_name::StoreExt>::get::<#ty>(store, &prefix.join(&#key_path))?.unwrap_or_else(|| #fallback)
+                };
+            };
+
+            let policy = match super::read_policy(e.on_unreadable.as_ref())
+                .ok()
+                .flatten()
+                .or_else(|| struct_policy.clone())
+                .as_deref()
+            {
+                Some("UseDefault") => quote!(#crate_name::store::OnUnreadable::UseDefault),
+                _ => quote!(#crate_name::store::OnUnreadable::Refuse),
+            };
+
             quote! {
-                #fname: <#crate_name::Store as #crate_name::StoreExt>::get::<#ty>(store, &prefix.join(&#key_path))?.unwrap_or_else(|| #fallback)
+                #fname: {
+                    let __ame_path = prefix.join(&#key_path);
+                    match <#crate_name::Store as #crate_name::StoreExt>::get::<#ty>(store, &__ame_path)? {
+                        ::core::option::Option::Some(__ame_value) => match #check(&__ame_value, store.context()) {
+                            ::core::result::Result::Ok(()) => __ame_value,
+                            ::core::result::Result::Err(__ame_invalid) => #crate_name::store::refused_or_default(
+                                &__ame_path,
+                                __ame_invalid,
+                                #policy,
+                                #fallback,
+                            )?,
+                        },
+                        ::core::option::Option::None => #fallback,
+                    }
+                }
             }
         }
     });

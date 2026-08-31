@@ -23,6 +23,7 @@ pub struct NetworkState { ... }
 |`as_root`| `flag` | If specified, fields are written directly to the store root without a namespace. |
 | `on_unreadable` | variant | What opening does about a stored value that will not decode. `Refuse` (the default) or `UseDefault`. |
 | `on_delete` | variant | What a field does when its key is deleted under it. `Keep` (the default) or `UseDefault`. |
+| `check` | `fn` | A rule about the whole struct, run once every field is built. |
 
 Structs without `prefix` are nested components, intended to be embedded in other structs via `nested`.
 
@@ -53,8 +54,9 @@ pub struct AppState {
 | `volatile` | flag | In-memory only. Never read from or written to the store. Resets to default on every restart. |
 | `on_unreadable` | variant | This field's answer, overriding the struct's. |
 | `on_delete` | variant | The same for a deleted key. |
+| `check` | `fn` | A rule every value coming in from the store has to pass. |
 
-Those six are the whole set; anything else is a compile error naming the six.
+Those seven are the whole set; anything else is a compile error naming the seven.
 
 ### What a value going wrong does
 
@@ -106,6 +108,144 @@ pub struct MixedDelete {
 **A live change that will not decode.** The field keeps the last value the store
 agreed with and no subscriber is called. `try_get` reports it, and clears itself
 as soon as a change decodes. There is nothing to declare here.
+
+### A value that decodes and is nonsense
+
+Everything above is about bytes that will not read. A window position of
+-32000, a font size of zero and the name of a theme nobody installed all decode
+perfectly, and a `check` is where the application says it will not have them.
+
+A field's check is a bare `fn` taking the value and a context, and it answers
+with a reason rather than a `bool` - the reason is what `try_get` reports and
+what a refused open carries, so it is written for whoever has to fix the file.
+
+<!-- shown: a check on a field, and the world it is judged against -->
+```rust
+fn a_size_that_renders(size: &u8, _cx: &CheckContext) -> Result<(), Invalid> {
+    if *size >= 6 {
+        Ok(())
+    } else {
+        Err(Invalid::new("a font size below 6 renders nothing"))
+    }
+}
+
+fn a_theme_that_is_installed(theme: &String, cx: &CheckContext) -> Result<(), Invalid> {
+    let installed = cx.require::<InstalledThemes>()?;
+
+    if installed.0.contains(&theme.as_str()) {
+        Ok(())
+    } else {
+        Err(Invalid::new(format!("no theme called {theme} is installed")))
+    }
+}
+
+#[amethystate(prefix = "checked_lenient", on_unreadable = UseDefault)]
+pub struct LenientUi {
+    #[amestate(default = 14u8, check = a_size_that_renders)]
+    pub font_size: u8,
+
+    #[amestate(default = "dark".to_string(), check = a_theme_that_is_installed)]
+    pub theme: String,
+}
+```
+<!-- /shown -->
+
+The context is the answer to a check being a bare `fn`: it captures nothing, so
+the world it judges a value against - which monitors exist, which themes are
+installed - is handed to the store when it opens.
+
+```rust
+let store = StoreBuilder::new(settings)
+    .context(InstalledThemes(installed))
+    .build()?;
+```
+
+One value per type, asked for with `cx.get::<T>()` or `cx.require::<T>()`.
+`require` refuses the value when nothing was given, because a check that cannot
+reach its world cannot say the value is good.
+
+A refused value is the situation `on_unreadable` already describes, and it is
+answered the same way: `Refuse` fails construction naming the path and the
+reason, `UseDefault` takes the declared default, leaves the stored value on disk
+and answers `try_get` with `Err` until a change passes.
+
+### A rule about the struct, not the value
+
+A field's check sees one value. It cannot see its siblings - fields are built
+one at a time, and the others do not exist yet - so an invariant between two of
+them goes on the struct, which is handed the whole thing once every field is
+built.
+
+<!-- shown: a check on the struct, for what one field cannot see -->
+```rust
+fn the_window_can_be_drawn(window: &LenientWindow, _cx: &CheckContext) -> Result<(), Invalid> {
+    if window.min().get() <= window.max().get() {
+        Ok(())
+    } else {
+        Err(Invalid::new("the smallest window is wider than the largest")
+            .at(&["min", "max"]))
+    }
+}
+
+#[amethystate(
+    prefix = "window_lenient",
+    on_unreadable = UseDefault,
+    check = the_window_can_be_drawn
+)]
+pub struct LenientWindow {
+    #[amestate(default = 400u32)]
+    pub min: u32,
+
+    #[amestate(default = 1600u32)]
+    pub max: u32,
+
+    #[amestate(default = "amethystate".to_string())]
+    pub title: String,
+}
+```
+<!-- /shown -->
+
+`at` names the fields the verdict is about, and only those report it: asking an
+unrelated `title` still answers what it holds. A verdict that names none is
+about all of them.
+
+Under `UseDefault` a refused struct **keeps what was stored** rather than
+resetting to the defaults. There is a declared default for a value and none for
+a relationship, and what is in the fields is still what the file says - the
+complaint arrives through `try_get` on the named fields, not by the values
+changing under the reader.
+
+A nested struct is settled before the struct holding it is built, so a parent's
+check sees children that have already had their own.
+
+### Where a check runs, and where it does not
+
+| a value arrives | a field's check | a struct's check |
+| --- | --- | --- |
+| the struct is built | runs | runs |
+| an edit from outside the process | runs; a refusal keeps the last good value and wakes nobody | does not run |
+| `load_with`, under `mode = "persistent"` | runs | cannot be declared |
+| a write this process made itself | does not run | does not run |
+| a migration step | does not run | does not run |
+
+Two of those rows are worth reading twice.
+
+**Your own `field.set(nonsense)` does not go through the check** and lands on
+disk; the refusal arrives at the next open. The door for a value this process
+is writing is an
+[interceptor](/amethystate/concepts/subscriptions/), which can refuse a write
+before it happens - a check cannot refuse what is already stored.
+
+**Under `mode = "persistent"` there is no `Field`, so there is no `try_get`.**
+A refused value under `UseDefault` takes the declared default and says so in the
+log, and that is the only place it is said. `Refuse` - the default - fails the
+load instead, which is the answer to reach for when a loaded struct has to be
+trustworthy.
+
+A struct's check is refused at compile time under `mode = "persistent"`, since
+there is no struct to hand it. So are checks on `volatile` fields, which nothing
+arrives at; on `nested` fields, which want the check on the nested struct
+itself; and on maps, whose entries are data rather than declared paths.
 
 ## #[derive(AmeType)]
 

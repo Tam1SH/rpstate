@@ -1,7 +1,8 @@
 use crate::amethystate::generate::{parse_default, path_literal};
 use amethystate_macros_core::StoreFieldEntry;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, quote_spanned};
+use syn::spanned::Spanned;
 
 pub(crate) fn init_fields(
     crate_name: &TokenStream2,
@@ -110,7 +111,21 @@ fn init_field(
         if e.volatile {
             quote! { #fname: #crate_name::Field::new_volatile_with_id(#path_expr, #def, instance_id) }
         } else {
-            quote! { #fname: #crate_name::store::field_with_path_where(store, #path_expr, #def, instance_id, #unreadable, #deleted)? }
+            let rules = match &e.check {
+                Some(check) => quote_spanned! {check.span()=>
+                    #crate_name::store::ReadRules::new()
+                        .on_unreadable(#unreadable)
+                        .on_delete(#deleted)
+                        .check(#check)
+                },
+                None => quote! {
+                    #crate_name::store::ReadRules::new()
+                        .on_unreadable(#unreadable)
+                        .on_delete(#deleted)
+                },
+            };
+
+            quote! { #fname: #crate_name::store::field_with_path_under(store, #path_expr, #def, instance_id, #rules)? }
         }
     }
 }

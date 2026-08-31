@@ -53,6 +53,17 @@ pub fn amethystate_impl(
         return e.to_compile_error().into();
     }
 
+    if let Some(check) = &macro_args.check
+        && macro_args.mode.as_deref() == Some("persistent")
+    {
+        return syn::Error::new(
+            check.span(),
+            "a struct's check is handed the struct, and `mode = \"persistent\"` builds none - what `load_with` returns is the stored data. Declare the check on the fields, which are read either way, or take the mode off",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let struct_vis = &input.vis;
@@ -98,6 +109,30 @@ pub fn amethystate_impl(
             )
             .to_compile_error()
             .into();
+        }
+
+        if let Some(check) = &entry.check {
+            let named = entry.stored_name();
+
+            let refusal = if entry.volatile {
+                Some(format!(
+                    "`{named}` is volatile, so nothing arrives from the store for a check to judge. A value this process holds and never stores is the interceptor's business"
+                ))
+            } else if entry.nested {
+                Some(format!(
+                    "`{named}` is a nested struct, and a check on one belongs on the struct itself - `#[amethystate(check = ..)]` there is handed every field of it at once, which is what a rule about a struct needs"
+                ))
+            } else if entry.get_map_types().is_some() {
+                Some(format!(
+                    "`{named}` is a map, and its entries are data rather than declared paths: one bad entry is no reason to withhold the struct, so a map wants dropping and reporting rather than this"
+                ))
+            } else {
+                None
+            };
+
+            if let Some(message) = refusal {
+                return syn::Error::new(check.span(), message).to_compile_error().into();
+            }
         }
 
         let on_field = match generate::read_policy(entry.on_unreadable.as_ref()) {

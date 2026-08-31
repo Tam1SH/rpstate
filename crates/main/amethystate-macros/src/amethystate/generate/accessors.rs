@@ -141,11 +141,87 @@ pub(crate) fn scope(
     })
 }
 
+/// Marks the fields a struct's own check named, so each of them answers
+/// `try_get` with what the check said.
+///
+/// A nested field is marked all the way down: what failed is a relationship
+/// the holder declared, and nothing inside the nested struct can be told apart
+/// by it.
+pub(crate) fn refused_marker(entries: &[StoreFieldEntry]) -> TokenStream2 {
+    let marks = entries.iter().filter(|e| e.get_map_types().is_none()).map(|e| {
+        let fname = e.ident.as_ref().unwrap();
+        let named = e.stored_name();
+
+        let mark = if e.nested {
+            quote! { self.#fname.__ame_refused(::core::option::Option::None, why); }
+        } else {
+            quote! { self.#fname.__ame_refused(why); }
+        };
+
+        quote! {
+            if fields.is_none_or(|named| named.contains(&#named)) {
+                #mark
+            }
+        }
+    });
+
+    quote! {
+        #[doc(hidden)]
+        pub fn __ame_refused(&self, fields: ::core::option::Option<&[&str]>, why: &str) {
+            let _ = (&fields, why);
+            #(#marks)*
+        }
+    }
+}
+
+/// What a struct's own check does when it refuses, in the constructor that
+/// has just built every field.
+fn struct_check(
+    crate_name: &TokenStream2,
+    is_root: bool,
+    check: Option<&syn::Path>,
+    on_unreadable: Option<&str>,
+) -> TokenStream2 {
+    let Some(check) = check else {
+        return quote! {};
+    };
+
+    let rule = match on_unreadable {
+        Some("UseDefault") => quote!(#crate_name::store::OnUnreadable::UseDefault),
+        Some(_) => quote!(#crate_name::store::OnUnreadable::Refuse),
+        None => quote!(__ame_on_unreadable),
+    };
+
+    let where_it_is = if is_root {
+        quote! { &<Self as #crate_name::StateScope>::PATH }
+    } else {
+        quote! { &namespace }
+    };
+
+    quote_spanned! {check.span()=>
+        if let ::core::result::Result::Err(__ame_invalid) = #check(&result, store.context()) {
+            match #rule {
+                #crate_name::store::OnUnreadable::Refuse => {
+                    return ::core::result::Result::Err(
+                        #crate_name::store::refused_under(#where_it_is, &__ame_invalid)
+                    );
+                }
+                #crate_name::store::OnUnreadable::UseDefault => {
+                    result.__ame_refused(__ame_invalid.fields(), __ame_invalid.reason());
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn constructor(
     crate_name: &TokenStream2,
     is_root: bool,
     init_fields: &[TokenStream2],
+    check: Option<&syn::Path>,
+    on_unreadable: Option<&str>,
 ) -> TokenStream2 {
+    let checked = struct_check(crate_name, is_root, check, on_unreadable);
     if is_root {
         quote! {
             pub fn new_with(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
@@ -178,6 +254,7 @@ pub(crate) fn constructor(
                     ::std::any::type_name::<Self>(),
                 );
                 let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
+                #checked
                 store.mark_initialized(&<Self as #crate_name::StateScope>::PATH)?;
                 Ok(result)
             }
@@ -224,6 +301,7 @@ pub(crate) fn constructor(
                     ::std::any::type_name::<Self>(),
                 );
                 let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
+                #checked
                 store.mark_initialized(&namespace)?;
                 Ok(result)
             }

@@ -14,12 +14,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// What building a struct does about a declared path the store holds a value
-/// for that will not decode into the field's type.
+/// What building a struct does about a stored value it will not accept: one
+/// that does not decode into the field's type, and one a declared check
+/// refuses.
 ///
 /// The value got there somehow - a file edited by hand, a migration that left
 /// something behind, a codec that took what it cannot read back - and the two
-/// answers serve different applications rather than one being safer.
+/// answers serve different applications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OnUnreadable {
     /// Construction fails, naming the path. Nothing half-built is handed out.
@@ -36,10 +37,10 @@ pub enum OnUnreadable {
 }
 
 impl OnUnreadable {
-    /// Whether this failure is the one the policy is about.
+    /// Whether this failure is one [`OnUnreadable::UseDefault`] stands in for.
     ///
-    /// Only a value that will not decode. A store that cannot be read at all is
-    /// nobody's policy - there is no default to stand in for a file that is not
+    /// A decode failure, and that alone. A store that cannot be read at all
+    /// propagates: there is no default to stand in for a file that is not
     /// there.
     fn covers(&self, why: &Report<StorageError>) -> bool {
         matches!(self, OnUnreadable::UseDefault)
@@ -69,6 +70,52 @@ pub enum OnDelete {
     /// The field reports its declared default again, as if it had never been
     /// written.
     UseDefault,
+}
+
+/// What a field does about the store disagreeing with it: a value it cannot
+/// read, a key removed under it, and a value its declared check refuses.
+///
+/// One value carries all of it, so "what did this field decide" has a single
+/// answer to hold and a single place to add to.
+pub struct ReadRules<TValue> {
+    on_unreadable: OnUnreadable,
+    on_delete: OnDelete,
+    check: Option<crate::store::Check<TValue>>,
+}
+
+impl<TValue> Default for ReadRules<TValue> {
+    fn default() -> Self {
+        Self {
+            on_unreadable: OnUnreadable::default(),
+            on_delete: OnDelete::default(),
+            check: None,
+        }
+    }
+}
+
+impl<TValue> ReadRules<TValue> {
+    /// The rules a field takes when nothing says otherwise: refuse a value
+    /// that will not decode, keep what it holds when the key is removed, and
+    /// judge nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn on_unreadable(mut self, policy: OnUnreadable) -> Self {
+        self.on_unreadable = policy;
+        self
+    }
+
+    pub fn on_delete(mut self, policy: OnDelete) -> Self {
+        self.on_delete = policy;
+        self
+    }
+
+    /// The rule every value coming in from the store has to pass.
+    pub fn check(mut self, check: crate::store::Check<TValue>) -> Self {
+        self.check = Some(check);
+        self
+    }
 }
 
 /// What a declared struct wrote about reading, so the struct holding it can be
@@ -119,14 +166,7 @@ pub fn field_with_path<TValue>(
 where
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
 {
-    field_with_path_where(
-        store,
-        path,
-        default,
-        instance_id,
-        OnUnreadable::Refuse,
-        OnDelete::Keep,
-    )
+    field_with_path_under(store, path, default, instance_id, ReadRules::new())
 }
 
 /// [`field_with_path`] with a say in what a value it cannot read, and a key
@@ -142,7 +182,33 @@ pub fn field_with_path_where<TValue>(
 where
     TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
 {
+    field_with_path_under(
+        store,
+        path,
+        default,
+        instance_id,
+        ReadRules::new().on_unreadable(policy).on_delete(on_delete),
+    )
+}
+
+/// [`field_with_path`] under everything the field declared about disagreeing
+/// with the store.
+pub fn field_with_path_under<TValue>(
+    store: &Store,
+    path: impl IntoStorePath,
+    default: TValue,
+    instance_id: Uuid,
+    rules: ReadRules<TValue>,
+) -> StorageResult<Field<TValue>>
+where
+    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+{
     let path = crate::store::to_path(path)?;
+    let ReadRules {
+        on_unreadable: policy,
+        on_delete,
+        check,
+    } = rules;
 
     claim(store, &path, instance_id)?;
     register_field::<TValue>(&path, instance_id);
@@ -150,7 +216,22 @@ where
     let mut refused: Option<Arc<str>> = None;
 
     let current = match store.get::<TValue>(&path) {
-        Ok(Some(stored)) => stored,
+        Ok(Some(stored)) => match check.map(|check| check(&stored, store.context())) {
+            None | Some(Ok(())) => stored,
+            Some(Err(invalid)) => {
+                if policy == OnUnreadable::Refuse {
+                    return Err(crate::store::refused(&path, &invalid));
+                }
+
+                tracing::error!(
+                    path = %path,
+                    reason = %invalid,
+                    "a declared check refused the stored value, so the field starts on its default"
+                );
+                refused = Some(Arc::from(invalid.reason()));
+                default.clone()
+            }
+        },
         Ok(None) => {
             seed(store, &path, &default)?;
             default.clone()
@@ -178,6 +259,20 @@ where
         Arc::new(move |event| match &event.new {
             Some(raw) => match store_clone.decode::<TValue>(raw) {
                 Ok(parsed) => {
+                    if let Some(check) = check.filter(|_| event.is_external_edit())
+                        && let Err(invalid) = check(&parsed, store_clone.context())
+                    {
+                        tracing::error!(
+                            path = %path_log,
+                            reason = %invalid,
+                            "a declared check refused an edit from outside, so the field kept what it had"
+                        );
+                        if let Ok(mut held) = unreadable_sub.lock() {
+                            *held = Some(Arc::from(invalid.reason()));
+                        }
+                        return;
+                    }
+
                     if let Ok(mut held) = unreadable_sub.lock() {
                         *held = None;
                     }

@@ -51,7 +51,6 @@ pub(crate) fn path_parts(dotted: &str) -> (Vec<&str>, String) {
     (segments, dotted.to_string())
 }
 
-/// Whether `ty` is written as `name`, however it is qualified.
 /// The variant an `on_unreadable = ..` names, checked here so a typo is a
 /// compile error that lists the two rather than a path that fails to resolve
 /// somewhere in generated code.
@@ -100,6 +99,7 @@ fn named_variant(
     ))
 }
 
+/// Whether `ty` is written as `name`, however it is qualified.
 pub(crate) fn names_type(ty: &syn::Type, name: &Ident) -> bool {
     match ty {
         syn::Type::Path(path) if path.qself.is_none() => path
@@ -268,7 +268,14 @@ pub fn generate_code(
     let node_impl = accessors::node_impl(&crate_name, name, is_root, entries);
     let methods = accessors::methods(&crate_name, entries);
     let scope = accessors::scope(&crate_name, name, prefix.clone());
-    let constructor = accessors::constructor(&crate_name, is_root, &init_fields);
+    let constructor = accessors::constructor(
+        &crate_name,
+        is_root,
+        &init_fields,
+        macro_args.check.as_ref(),
+        on_unreadable.as_deref(),
+    );
+    let refused_marker = accessors::refused_marker(entries);
 
     let schema_export =
         generate_schema_export(&crate_name, name, &prefix, macro_args.version, entries);
@@ -487,6 +494,7 @@ pub fn generate_code(
                 #scope
                 impl #name {
                     #constructor #(#methods)*
+                    #refused_marker
                     #fork_impl
                     #inherent_subs
                 }
