@@ -155,7 +155,12 @@ fn a_promise_to_stay_readable_on_json_refuses_it_on_ron() {
         .build()
         .unwrap();
 
-    store
+    let refused = store
         .set(["probe", "v"], &Some(None::<u32>))
         .expect_err("ron keeps it, but the store promised json too");
+
+    assert!(
+        format!("{refused:?}").contains("holding nothing"),
+        "{refused:?}"
+    );
 }

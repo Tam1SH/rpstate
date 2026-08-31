@@ -101,7 +101,9 @@ fn a_promise_to_stay_readable_on_ron_refuses_an_enum_where_it_would_fit() {
         .build()
         .unwrap();
 
-    store
+    let refused = store
         .set(["probe", "mode"], &Mode::Off)
         .expect_err("msgpack holds it, but the store promised ron too");
+
+    assert!(format!("{refused:?}").contains("an enum"), "{refused:?}");
 }

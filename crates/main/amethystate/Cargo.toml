@@ -77,6 +77,7 @@ etcetera = "0.11.0"
 uuid = { workspace = true, features = [ "v4", "js", "serde"] }
 
 [dev-dependencies]
+amethystate = { path = ".", features = ["redb", "sqlite", "json", "toml", "ron"] }
 insta.workspace = true
 serde_json = { workspace = true }
 amethystate-core = { workspace = true, features = ["test-utils", "proptest-strategies"] }
