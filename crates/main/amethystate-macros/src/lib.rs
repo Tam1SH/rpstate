@@ -121,7 +121,7 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Declares a migration step, discovered wherever it is written.
 ///
 /// The function takes the old shape and returns the new one; the engine finds
-/// it through [`StoreBuilder::build_with_migration`], so nothing has to register
+/// it through `StoreBuilder::build_with_migration`, so nothing has to register
 /// it by hand. `#[rename(old => new)]` moves a key whose value survives
 /// unchanged, so the body does not have to copy it.
 ///

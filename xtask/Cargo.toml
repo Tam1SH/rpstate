@@ -7,3 +7,4 @@ publish = false
 
 [dependencies]
 serde_json = { workspace = true, features = ["preserve_order"] }
+syn = { workspace = true }

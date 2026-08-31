@@ -144,7 +144,7 @@ html! {
 
 ### use_map
 
-Returns a `MapSignal<K, V>` for a writable `ReactiveMap` field. The signal holds a snapshot of all entries and updates on any external change. It exposes `set_or_create`, `set`, `remove`, and `clear` as direct methods.
+Returns a `MapSignal<K, V>` for a writable `ReactiveMap` field. The signal holds a snapshot of all entries and updates on any external change. It exposes `insert`, `set`, `remove`, and `clear` as direct methods.
 
 ```rust
 #[derive(Properties, PartialEq)]
@@ -159,7 +159,7 @@ fn env_map_editor(props: &EnvMapProps) -> Html {
     let on_add = {
         let map = map.clone();
         Callback::from(move |_| {
-            map.set_or_create("NEW_KEY".to_string(), "value".to_string());
+            map.insert("NEW_KEY".to_string(), "value".to_string());
         })
     };
 

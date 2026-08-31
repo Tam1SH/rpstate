@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -586,10 +586,13 @@ fn book() -> ExitCode {
         }
     };
 
+    let declared = methods_by_type(Path::new("crates"));
+
     let mut filled = 0;
     let mut behind: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut unprinted: Vec<String> = Vec::new();
+    let mut renamed: Vec<String> = Vec::new();
 
     for page in &pages {
         let Ok(source) = fs::read_to_string(page) else {
@@ -597,6 +600,10 @@ fn book() -> ExitCode {
         };
 
         let done = fill(&source, &regions, &printed, &version);
+
+        for name in unknown_names(&done.page, &declared) {
+            renamed.push(format!("{}: `{name}`", page.display()));
+        }
         for name in done.no_test_marks {
             missing.push(format!("{}: {name}", page.display()));
         }
@@ -635,6 +642,19 @@ fn book() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    if !renamed.is_empty() {
+        eprintln!("a page says a type has something it does not:");
+        for at in &renamed {
+            eprintln!("  {at}");
+        }
+        eprintln!(
+            "\nthe code blocks come from tests and cannot say this - it is the prose \
+             around them. Write `Type::member` there and this is checked; write the \
+             member on its own and nothing is."
+        );
+        return ExitCode::FAILURE;
+    }
+
     if behind.is_empty() {
         println!("{filled} block(s) in {BOOK} are what their tests run");
         return ExitCode::SUCCESS;
@@ -653,6 +673,145 @@ fn book() -> ExitCode {
         behind.len()
     );
     ExitCode::SUCCESS
+}
+
+
+/// What each type in the workspace has on it, read out of the syntax rather
+/// than looked for in the text.
+///
+/// Every `impl` contributes to the type it is for, its trait impls included,
+/// because a reader calling `store.close()` does not care which block it was
+/// written in.
+fn methods_by_type(at: &Path) -> BTreeMap<String, BTreeSet<String>> {
+    let mut found = BTreeMap::new();
+    collect_methods(at, &mut found);
+    found
+}
+
+fn collect_methods(at: &Path, into: &mut BTreeMap<String, BTreeSet<String>>) {
+    let Ok(entries) = fs::read_dir(at) else {
+        return;
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|n| n == "target" || n == "node_modules")
+            {
+                continue;
+            }
+            collect_methods(&path, into);
+            continue;
+        }
+        if path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(file) = syn::parse_file(&source) else {
+            continue;
+        };
+
+        for item in &file.items {
+            gather(item, into);
+        }
+    }
+}
+
+fn gather(item: &syn::Item, into: &mut BTreeMap<String, BTreeSet<String>>) {
+    match item {
+        syn::Item::Mod(m) => {
+            if let Some((_, items)) = &m.content {
+                for inner in items {
+                    gather(inner, into);
+                }
+            }
+        }
+        syn::Item::Impl(block) => {
+            let Some(name) = named(&block.self_ty) else {
+                return;
+            };
+            let on = into.entry(name).or_default();
+            for member in &block.items {
+                if let syn::ImplItem::Fn(f) = member {
+                    on.insert(f.sig.ident.to_string());
+                }
+            }
+        }
+        syn::Item::Trait(t) => {
+            let on = into.entry(t.ident.to_string()).or_default();
+            for member in &t.items {
+                if let syn::TraitItem::Fn(f) = member {
+                    on.insert(f.sig.ident.to_string());
+                }
+            }
+        }
+        syn::Item::Struct(s) => {
+            let on = into.entry(s.ident.to_string()).or_default();
+            for field in &s.fields {
+                if let Some(name) = &field.ident {
+                    on.insert(name.to_string());
+                }
+            }
+        }
+        syn::Item::Enum(e) => {
+            let on = into.entry(e.ident.to_string()).or_default();
+            for variant in &e.variants {
+                on.insert(variant.ident.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The bare name of a type, with any reference, generic or path stripped off.
+fn named(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        syn::Type::Reference(r) => named(&r.elem),
+        _ => None,
+    }
+}
+
+/// What a page's prose claims a type has, that the type does not have.
+///
+/// Fenced blocks are skipped: they are filled from tests that compile, so they
+/// cannot say a name the code does not have. Only the sentences around them
+/// can, and `Type::method` in backticks is what makes those checkable - the
+/// bare `method` was not, which is how `StoreBuilder::watch_debounce` outlived
+/// the method by a rename.
+fn unknown_names(page: &str, methods: &BTreeMap<String, BTreeSet<String>>) -> Vec<String> {
+    let prose: String = page.split("```").step_by(2).collect::<Vec<_>>().join("\n");
+
+    let mut wrong = Vec::new();
+    let mut rest = prose.as_str();
+
+    while let Some(open) = rest.find('`') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('`') else { break };
+        let token = &rest[..close];
+        rest = &rest[close + 1..];
+
+        let Some((ty, member)) = token.split_once("::") else {
+            continue;
+        };
+        if member.is_empty() || member.contains(|c: char| !c.is_alphanumeric() && c != '_') {
+            continue;
+        }
+
+        let Some(has) = methods.get(ty) else {
+            continue;
+        };
+
+        if !has.contains(member) && !wrong.contains(&token.to_string()) {
+            wrong.push(token.to_string());
+        }
+    }
+
+    wrong
 }
 
 fn markdown_under(at: &Path) -> Vec<PathBuf> {

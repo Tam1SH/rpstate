@@ -116,13 +116,13 @@ view! {
 
 ### use_map
 
-Returns a `MapSignal<K, V>` for a writable `ReactiveMap` field. The signal holds a snapshot of all entries and updates on any external change. It also exposes `set_or_create`, `remove`, and `clear`.
+Returns a `MapSignal<K, V>` for a writable `ReactiveMap` field. The signal holds a snapshot of all entries and updates on any external change. It also exposes `insert`, `remove`, and `clear`.
 
 ```rust
 let map = use_map(state.env);
 
 let on_add = move |_| {
-    map.set_or_create("NEW_KEY".to_string(), "value".to_string());
+    map.insert("NEW_KEY".to_string(), "value".to_string());
 };
 
 let on_remove = Callback::new(move |key: String| {

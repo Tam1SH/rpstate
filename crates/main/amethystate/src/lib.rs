@@ -1,6 +1,7 @@
 //! Persistent reactive state for Rust GUI apps.
 
 #![allow(clippy::complexity)]
+#![deny(rustdoc::broken_intra_doc_links)]
 mod codec;
 mod global;
 mod macros;

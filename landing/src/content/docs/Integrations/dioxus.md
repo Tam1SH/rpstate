@@ -119,7 +119,7 @@ rsx! {
     for (k, v) in map.entries.read().clone() {
         div { "{k} = {v}" }
     }
-    button { onclick: move |_| map.set_or_create("KEY".into(), "value".into()), "Add" }
+    button { onclick: move |_| map.insert("KEY".into(), "value".into()), "Add" }
     button { onclick: move |_| map.remove("KEY".into()), "Remove" }
 }
 ```
