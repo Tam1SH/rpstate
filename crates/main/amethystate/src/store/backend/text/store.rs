@@ -638,14 +638,15 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .delete(&parts)
                 .doing(StorageError::Delete, &self.files.data.path)
                 .attach_key(path)?;
+            if old.is_some() {
+                self.writes.fetch_add(1, Ordering::Release);
+            }
             old
         };
 
         let Some(old_bytes) = old_bytes else {
             return Ok(());
         };
-
-        self.writes.fetch_add(1, Ordering::Release);
 
         utils::emit_events(
             &self.subscriptions,
@@ -670,16 +671,13 @@ impl<D: TextDocument> TextStoreInner<D> {
         {
             let levels: Vec<Cow<'_, str>> = prefix.segments().collect();
             let parts: Vec<&str> = levels.iter().map(Cow::as_ref).collect();
-            self.files
-                .data
-                .doc
-                .write()
+            let mut guard = self.files.data.doc.write();
+            guard
                 .delete_subtree(&parts)
                 .doing(StorageError::Delete, &self.files.data.path)
                 .attach_prefix(prefix)?;
+            self.writes.fetch_add(1, Ordering::Release);
         }
-
-        self.writes.fetch_add(1, Ordering::Release);
 
         utils::emit_events(
             &self.subscriptions,
@@ -790,10 +788,10 @@ impl<D: TextDocument> TextStoreInner<D> {
                 .transpose()
                 .doing(StorageError::Write, &self.files.data.path)
                 .attach_key(&path_str)?;
+
+            self.writes.fetch_add(1, Ordering::Release);
             (old, new)
         };
-
-        self.writes.fetch_add(1, Ordering::Release);
 
         let event = match new_bytes {
             Some(new) => StoreEvent {
@@ -1091,12 +1089,28 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
     Ok(())
 }
 
+/// Takes an edit made to the file outside the process, unless doing so would
+/// throw away a write of our own.
+///
+/// The file is read before the document is locked, so what came back can be a
+/// version behind by the time the decision is made: a flush landing in that gap
+/// leaves the reader holding a document older than the one on disk, and
+/// installing it drops every write the flush had just saved. Which write
+/// counter the flush had reached is therefore read before the file and checked
+/// again under the lock, and a value that moved means the content is stale.
+///
+/// The other half of the guarantee is that a write raises `writes` while it
+/// still holds the document lock. Raised after, there is a window where the
+/// change is in the document and the store still looks saved, and a reader
+/// arriving inside it is entitled to overwrite it.
 fn sync_external_changes<D: TextDocument>(
     file: &StoreFile<D>,
     subscriptions: &Arc<RwLock<Vec<SubscriptionEntry>>>,
     writes: &AtomicU64,
     persisted: &AtomicU64,
 ) {
+    let read_after = persisted.load(Ordering::Acquire);
+
     let Ok(content) = std::fs::read_to_string(&file.path) else {
         return;
     };
@@ -1107,7 +1121,10 @@ fn sync_external_changes<D: TextDocument>(
     let events = {
         let mut guard = file.doc.write();
 
-        if writes.load(Ordering::Acquire) != persisted.load(Ordering::Acquire) {
+        let written = writes.load(Ordering::Acquire);
+        let saved = persisted.load(Ordering::Acquire);
+
+        if written != saved || saved != read_after {
             return;
         }
 
