@@ -23,12 +23,11 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 
-mod common;
-use common::once_per_engine;
-
-fn a_leaf_answers_with_itself(backend: Backend, label: &str) {
-    let path = TempPath::new(label);
+#[backends(all)]
+fn a_leaf_answers_with_itself(backend: Backend) {
+    let path = TempPath::new("leaf");
     let store = StoreBuilder::new(path.path())
         .backend(backend)
         .build()
@@ -64,8 +63,9 @@ fn a_leaf_answers_with_itself(backend: Backend, label: &str) {
     );
 }
 
-fn a_path_that_is_not_there_has_no_members(backend: Backend, label: &str) {
-    let path = TempPath::new(label);
+#[backends(all)]
+fn a_path_that_is_not_there_has_no_members(backend: Backend) {
+    let path = TempPath::new("absent");
     let store = StoreBuilder::new(path.path())
         .backend(backend)
         .build()
@@ -77,14 +77,3 @@ fn a_path_that_is_not_there_has_no_members(backend: Backend, label: &str) {
     );
 }
 
-once_per_engine! {
-    #[test]
-    fn a_leaf_answers_with_itself() {
-        super::a_leaf_answers_with_itself(BACKEND, &format!("leaf_{ENGINE}"));
-    }
-
-    #[test]
-    fn a_path_that_is_not_there_has_no_members() {
-        super::a_path_that_is_not_there_has_no_members(BACKEND, &format!("absent_{ENGINE}"));
-    }
-}

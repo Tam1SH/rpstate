@@ -1,13 +1,17 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 
 /// A prefix is a run of whole levels, so a sibling whose name merely starts
 /// with the same characters is a different subtree.
-#[test]
-fn scanning_a_prefix_stops_at_a_segment_boundary() {
+#[backends(all)]
+fn scanning_a_prefix_stops_at_a_segment_boundary(backend: Backend) {
     let path = TempPath::new("prefix_scan");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let kv = store.kv();
 
     kv.namespace("ui").set("width", &1280u32).unwrap();
@@ -23,10 +27,13 @@ fn scanning_a_prefix_stops_at_a_segment_boundary() {
 
 /// The same boundary reached through a delete, which is where getting it wrong
 /// costs data rather than an extra row.
-#[test]
-fn deleting_a_prefix_leaves_a_sibling_with_a_shared_leading_string() {
+#[backends(all)]
+fn deleting_a_prefix_leaves_a_sibling_with_a_shared_leading_string(backend: Backend) {
     let path = TempPath::new("prefix_delete");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let kv = store.kv();
 
     kv.namespace("ui").set("width", &1280u32).unwrap();
@@ -45,10 +52,13 @@ fn deleting_a_prefix_leaves_a_sibling_with_a_shared_leading_string() {
 /// A name may hold anything, including whatever a pattern language would treat
 /// as special - `cfg[a]` is a name, not a character class. The engines scan by
 /// comparison rather than by pattern, so there is nothing to escape.
-#[test]
-fn a_path_segment_with_glob_metacharacters_scans_as_a_literal() {
+#[backends(all)]
+fn a_path_segment_with_glob_metacharacters_scans_as_a_literal(backend: Backend) {
     let path = TempPath::new("prefix_glob");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let kv = store.kv();
 
     kv.namespace("cfg[a]").set("width", &1u32).unwrap();
@@ -67,10 +77,13 @@ fn a_path_segment_with_glob_metacharacters_scans_as_a_literal() {
 }
 
 /// The same over a map, whose `len`, `keys` and `clear` all ride the scan.
-#[test]
-fn a_map_at_a_path_with_glob_metacharacters_reports_its_entries() {
+#[backends(all)]
+fn a_map_at_a_path_with_glob_metacharacters_reports_its_entries(backend: Backend) {
     let path = TempPath::new("map_glob");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = store
         .kv()
         .namespace("panel[0]")
@@ -94,10 +107,13 @@ fn a_map_at_a_path_with_glob_metacharacters_reports_its_entries() {
 }
 
 /// Control: the identical map with no metacharacter in its path.
-#[test]
-fn a_map_at_a_plain_path_reports_its_entries() {
+#[backends(all)]
+fn a_map_at_a_plain_path_reports_its_entries(backend: Backend) {
     let path = TempPath::new("map_plain");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = store
         .kv()
         .namespace("panel0")

@@ -1,13 +1,17 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::reactive_map_with_path_only;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[test]
-fn keys_containing_the_separator_stay_separate_entries() {
+#[backends(all)]
+fn keys_containing_the_separator_stay_separate_entries(backend: Backend) {
     let path = TempPath::new("map_dotted");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = reactive_map_with_path_only::<String, u32>(
         &store,
         ["dotted", "items"],
@@ -40,10 +44,13 @@ fn keys_containing_the_separator_stay_separate_entries() {
     assert_eq!(reopened.get("a.exe"), Some(1), "get after a reopen");
 }
 
-#[test]
-fn a_key_that_is_a_prefix_of_another_keeps_its_own_value() {
+#[backends(all)]
+fn a_key_that_is_a_prefix_of_another_keeps_its_own_value(backend: Backend) {
     let path = TempPath::new("map_dotted_collide");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = reactive_map_with_path_only::<String, u32>(
         &store,
         ["collide", "items"],

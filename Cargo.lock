@@ -194,9 +194,11 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "amethystate"
 version = "0.20.0"
 dependencies = [
+ "amethystate",
  "amethystate-core",
  "amethystate-macros",
  "amethystate-tauri",
+ "amethystate-test-macros",
  "arc-swap",
  "criterion",
  "dashmap",
@@ -392,6 +394,15 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "amethystate-test-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

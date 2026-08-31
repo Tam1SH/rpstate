@@ -3,19 +3,23 @@
 //! than through the characters, or a name like `a.exe` turns back into two
 //! levels that address nothing.
 
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::reactive_map_with_path_only;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Deleting a subtree has to take the entries whose names hold the separator
 /// with it.
-#[test]
-fn deleting_a_subtree_takes_the_dotted_names_with_it() {
+#[backends(all)]
+fn deleting_a_subtree_takes_the_dotted_names_with_it(backend: Backend) {
     let path = TempPath::new("delete_prefix_dotted");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = reactive_map_with_path_only::<String, u32>(
         &store,
         ["dotted", "items"],
@@ -47,10 +51,13 @@ fn deleting_a_subtree_takes_the_dotted_names_with_it() {
 /// ending in the separator is a name like any other. Asking the joined form
 /// whether it ends in a dot cannot tell `cfg.b\.` - one level called `b.` -
 /// from a path with an empty level after it, and drops the value.
-#[test]
-fn a_scan_lists_the_value_at_a_prefix_whose_name_ends_in_the_separator() {
+#[backends(all)]
+fn a_scan_lists_the_value_at_a_prefix_whose_name_ends_in_the_separator(backend: Backend) {
     let path = TempPath::new("scan_dotted_prefix");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     store.set(["cfg", "b."], &7u32).unwrap();
 

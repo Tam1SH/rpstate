@@ -16,6 +16,7 @@ members = [
     "crates/adapters/amethystate-yew",
     "crates/adapters/amethystate-slint",
     "crates/amethystate-cli",
+    "crates/test/amethystate-test-macros",
     "xtask"
 ]
 
