@@ -1,22 +1,26 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveMap, Store};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::sync::mpsc;
 use std::time::Duration;
 
-fn open(tag: &str) -> (Store, TempPath, ReactiveMap<String, u64>) {
+fn open(backend: Backend, tag: &str) -> (Store, TempPath, ReactiveMap<String, u64>) {
     let path = TempPath::new(tag);
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let widths = store.kv().map::<String, u64>("columns").unwrap();
     (store, path, widths)
 }
 
-#[test]
-fn a_write_during_a_walk_lands_and_the_walk_keeps_its_own_version() {
+#[backends(all)]
+fn a_write_during_a_walk_lands_and_the_walk_keeps_its_own_version(backend: Backend) {
     let (report, outcome) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let (_store, _path, widths) = open("walk_write_same_thread");
+        let (_store, _path, widths) = open(backend, "walk_write_same_thread");
         widths.insert("cpu".into(), &120).unwrap();
         widths.insert("mem".into(), &80).unwrap();
 
@@ -41,9 +45,9 @@ fn a_write_during_a_walk_lands_and_the_walk_keeps_its_own_version() {
     }
 }
 
-#[test]
-fn a_write_from_another_thread_does_not_wait_for_the_walk() {
-    let (_store, _path, widths) = open("walk_write_other_thread");
+#[backends(all)]
+fn a_write_from_another_thread_does_not_wait_for_the_walk(backend: Backend) {
+    let (_store, _path, widths) = open(backend, "walk_write_other_thread");
 
     widths.insert("cpu".into(), &120).unwrap();
     widths.insert("mem".into(), &80).unwrap();
@@ -66,9 +70,9 @@ fn a_write_from_another_thread_does_not_wait_for_the_walk() {
     assert_eq!(widths.len(), 1);
 }
 
-#[test]
-fn a_walk_that_removes_every_key_offers_each_one_once() {
-    let (_store, _path, widths) = open("walk_removes_all");
+#[backends(all)]
+fn a_walk_that_removes_every_key_offers_each_one_once(backend: Backend) {
+    let (_store, _path, widths) = open(backend, "walk_removes_all");
 
     widths.insert("cpu".into(), &120).unwrap();
     widths.insert("disk".into(), &60).unwrap();
@@ -91,9 +95,9 @@ fn a_walk_that_removes_every_key_offers_each_one_once() {
     assert!(widths.is_empty());
 }
 
-#[test]
-fn a_view_held_across_a_write_keeps_what_it_was_given() {
-    let (_store, _path, widths) = open("walk_view_pinned");
+#[backends(all)]
+fn a_view_held_across_a_write_keeps_what_it_was_given(backend: Backend) {
+    let (_store, _path, widths) = open(backend, "walk_view_pinned");
 
     widths.insert("cpu".into(), &120).unwrap();
     widths.insert("mem".into(), &80).unwrap();
