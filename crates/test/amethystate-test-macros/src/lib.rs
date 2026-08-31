@@ -115,15 +115,31 @@ pub fn backends(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    let mut body = body;
+
+    // `#[ignore]` and `#[should_panic]` are about running a test, and the
+    // function the author wrote is no longer one - it is the body the cases
+    // call. Left where they were written they would be dropped in silence, and
+    // a test parked as known-broken would quietly start running again.
+    let (on_the_test, on_the_body): (Vec<_>, Vec<_>) = body
+        .attrs
+        .into_iter()
+        .partition(|attr| attr.path().is_ident("ignore") || attr.path().is_ident("should_panic"));
+    body.attrs = on_the_body;
+
     let name = &body.sig.ident;
+    let returns = &body.sig.output;
+
     let cases = which.wanted().into_iter().map(|(feature, variant)| {
+        let on_the_test = &on_the_test;
         let case = format_ident!("{}", feature);
         let variant = format_ident!("{}", variant);
         quote! {
             #[cfg(feature = #feature)]
             #[test]
-            fn #case() {
-                super::#name(::amethystate::store::builder::Backend::#variant);
+            #(#on_the_test)*
+            fn #case() #returns {
+                super::#name(::amethystate::store::builder::Backend::#variant)
             }
         }
     });

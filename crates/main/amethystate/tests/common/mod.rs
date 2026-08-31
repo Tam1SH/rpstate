@@ -38,11 +38,13 @@ pub fn shape<C>(report: &error_stack::Report<C>) -> String {
 
 /// A snapshot name carrying the engine, for a report the engine has a hand in
 /// writing - anything the codec or the file layout speaks through.
-pub fn per_engine(name: &str) -> String {
-    format!(
-        "{name}_{}",
-        amethystate::store::builder::default_backend().extension()
-    )
+///
+/// The engine is the one under test and not the build's default, which are two
+/// different things now that a test picks its own: named from the default, all
+/// five runs of a `#[backends(all)]` test wrote to one snapshot and four of
+/// them lost.
+pub fn per_engine(backend: amethystate::store::builder::Backend, name: &str) -> String {
+    format!("{name}_{}", backend.extension())
 }
 
 /// Every storage engine the build enabled, in the crate's own order: redb,
