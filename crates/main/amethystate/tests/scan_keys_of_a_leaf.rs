@@ -24,6 +24,9 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+use common::once_per_engine;
+
 fn a_leaf_answers_with_itself(backend: Backend, label: &str) {
     let path = TempPath::new(label);
     let store = StoreBuilder::new(path.path())
@@ -74,33 +77,14 @@ fn a_path_that_is_not_there_has_no_members(backend: Backend, label: &str) {
     );
 }
 
-macro_rules! per_engine {
-    ($feature:literal, $backend:expr, $mod_name:ident) => {
-        #[cfg(feature = $feature)]
-        mod $mod_name {
-            use super::*;
+once_per_engine! {
+    #[test]
+    fn a_leaf_answers_with_itself() {
+        super::a_leaf_answers_with_itself(BACKEND, &format!("leaf_{ENGINE}"));
+    }
 
-            #[test]
-            fn a_leaf_answers_with_itself() {
-                super::a_leaf_answers_with_itself(
-                    $backend,
-                    concat!("leaf_", stringify!($mod_name)),
-                );
-            }
-
-            #[test]
-            fn a_path_that_is_not_there_has_no_members() {
-                super::a_path_that_is_not_there_has_no_members(
-                    $backend,
-                    concat!("absent_", stringify!($mod_name)),
-                );
-            }
-        }
-    };
+    #[test]
+    fn a_path_that_is_not_there_has_no_members() {
+        super::a_path_that_is_not_there_has_no_members(BACKEND, &format!("absent_{ENGINE}"));
+    }
 }
-
-per_engine!("redb", Backend::Redb, redb);
-per_engine!("sqlite", Backend::Sqlite, sqlite);
-per_engine!("json", Backend::Json, json);
-per_engine!("toml", Backend::Toml, toml);
-per_engine!("ron", Backend::Ron, ron);

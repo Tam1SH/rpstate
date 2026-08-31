@@ -38,6 +38,8 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+mod common;
+
 /// One line of the report.
 struct Row {
     engine: String,
@@ -118,20 +120,11 @@ macro_rules! probe {
 /// Every engine this build enabled, named explicitly - the crate's default
 /// features include `redb`, so a store built without naming a backend runs on
 /// redb whatever `--features json` said.
-#[allow(clippy::vec_init_then_push)]
 fn engines() -> Vec<(&'static str, Backend)> {
-    let mut out: Vec<(&'static str, Backend)> = Vec::new();
-    #[cfg(feature = "redb")]
-    out.push(("redb", Backend::Redb));
-    #[cfg(feature = "sqlite")]
-    out.push(("sqlite", Backend::Sqlite));
-    #[cfg(feature = "json")]
-    out.push(("json", Backend::Json));
-    #[cfg(feature = "toml")]
-    out.push(("toml", Backend::Toml));
-    #[cfg(feature = "ron")]
-    out.push(("ron", Backend::Ron));
-    out
+    common::enabled_backends()
+        .into_iter()
+        .map(|backend| (common::engine_name(backend), backend))
+        .collect()
 }
 
 /// A store with the debouncer and the watcher pushed out of the way, so only

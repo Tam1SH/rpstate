@@ -17,6 +17,8 @@ use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+
 #[amethystate(prefix = "nonfinite")]
 pub struct Readings {
     #[amestate(default = 0.0f64)]
@@ -30,14 +32,10 @@ fn ratio_path() -> StorePath {
 #[cfg(any(feature = "redb", feature = "toml", feature = "ron"))]
 #[test]
 fn a_format_that_can_hold_it_keeps_it() {
-    use amethystate::store::builder::Backend;
-
-    #[cfg(feature = "redb")]
-    let backend = Backend::Redb;
-    #[cfg(all(feature = "toml", not(feature = "redb")))]
-    let backend = Backend::Toml;
-    #[cfg(all(feature = "ron", not(feature = "redb"), not(feature = "toml")))]
-    let backend = Backend::Ron;
+    let backend = common::enabled_backends()
+        .into_iter()
+        .find(|b| matches!(common::engine_name(*b), "redb" | "toml" | "ron"))
+        .expect("msgpack writes the bits, and toml and ron have the words");
 
     let path = TempPath::new("nonfinite_ok");
     let store = StoreBuilder::new(path.path())

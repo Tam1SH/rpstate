@@ -23,7 +23,7 @@ use amethystate_core::test_utils::TempPath;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod common;
-use common::shape;
+use common::{once_per_engine, shape};
 
 /// A snapshot name carrying the engine, because the ceiling is the engine's and
 /// so the report differs by it.
@@ -187,38 +187,19 @@ fn a_portable_store_holds_to_the_strictest_engine_it_named() {
         .expect("the same value is fine on redb alone - the claim is what refused it");
 }
 
-macro_rules! per_engine {
-    ($feature:literal, $backend:expr, $mod_name:ident) => {
-        #[cfg(feature = $feature)]
-        mod $mod_name {
-            use super::*;
+once_per_engine! {
+    #[test]
+    fn the_ceiling_is_the_codecs_own() {
+        the_ceiling_is_the_codec_s(BACKEND, &format!("depth_c_{ENGINE}"));
+    }
 
-            #[test]
-            fn the_ceiling_is_the_codecs_own() {
-                the_ceiling_is_the_codec_s($backend, concat!("depth_c_", stringify!($mod_name)));
-            }
+    #[test]
+    fn a_refusal_costs_nothing_else() {
+        super::a_refusal_costs_nothing_else(BACKEND, &format!("depth_r_{ENGINE}"));
+    }
 
-            #[test]
-            fn a_refusal_costs_nothing_else() {
-                super::a_refusal_costs_nothing_else(
-                    $backend,
-                    concat!("depth_r_", stringify!($mod_name)),
-                );
-            }
-
-            #[test]
-            fn a_key_depth_cap_is_the_stores_own() {
-                a_key_depth_cap_is_the_store_s_own(
-                    $backend,
-                    concat!("depth_k_", stringify!($mod_name)),
-                );
-            }
-        }
-    };
+    #[test]
+    fn a_key_depth_cap_is_the_stores_own() {
+        a_key_depth_cap_is_the_store_s_own(BACKEND, &format!("depth_k_{ENGINE}"));
+    }
 }
-
-per_engine!("redb", Backend::Redb, redb);
-per_engine!("sqlite", Backend::Sqlite, sqlite);
-per_engine!("json", Backend::Json, json);
-per_engine!("toml", Backend::Toml, toml);
-per_engine!("ron", Backend::Ron, ron);

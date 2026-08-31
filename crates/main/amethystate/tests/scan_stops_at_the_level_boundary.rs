@@ -25,6 +25,9 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
+mod common;
+use common::once_per_engine;
+
 /// Names that are one level, are not `ui`, and begin with `ui`.
 ///
 /// `key_range` bounds a scan of `ui` below by `"ui"` and above by
@@ -106,38 +109,19 @@ fn a_child_above_the_bound_is_still_a_child(backend: Backend, label: &str) {
     );
 }
 
-macro_rules! boundary_tests {
-    ($feature:literal, $backend:expr, $mod_name:ident) => {
-        #[cfg(feature = $feature)]
-        mod $mod_name {
-            use super::*;
+once_per_engine! {
+    #[test]
+    fn a_scan_lists_only_what_is_under_the_prefix() {
+        scan_lists_only_the_subtree(BACKEND, &format!("scan_{ENGINE}"));
+    }
 
-            #[test]
-            fn a_scan_lists_only_what_is_under_the_prefix() {
-                scan_lists_only_the_subtree($backend, concat!("scan_", stringify!($mod_name)));
-            }
+    #[test]
+    fn deleting_a_prefix_takes_only_its_subtree() {
+        delete_prefix_takes_only_the_subtree(BACKEND, &format!("del_{ENGINE}"));
+    }
 
-            #[test]
-            fn deleting_a_prefix_takes_only_its_subtree() {
-                delete_prefix_takes_only_the_subtree(
-                    $backend,
-                    concat!("del_", stringify!($mod_name)),
-                );
-            }
-
-            #[test]
-            fn a_child_above_the_range_bound_is_still_scanned() {
-                a_child_above_the_bound_is_still_a_child(
-                    $backend,
-                    concat!("bound_", stringify!($mod_name)),
-                );
-            }
-        }
-    };
+    #[test]
+    fn a_child_above_the_range_bound_is_still_scanned() {
+        a_child_above_the_bound_is_still_a_child(BACKEND, &format!("bound_{ENGINE}"));
+    }
 }
-
-boundary_tests!("redb", Backend::Redb, redb);
-boundary_tests!("json", Backend::Json, json);
-boundary_tests!("toml", Backend::Toml, toml);
-boundary_tests!("ron", Backend::Ron, ron);
-boundary_tests!("sqlite", Backend::Sqlite, sqlite);

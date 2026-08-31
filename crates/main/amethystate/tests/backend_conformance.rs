@@ -47,6 +47,9 @@ use amethystate::store::{
 use amethystate_core::test_utils::TempPath;
 use proptest::prelude::*;
 
+mod common;
+use common::once_per_engine;
+
 /// A namespace named the way a key on disk spells it.
 fn ns(joined: &str) -> StorePath {
     StorePath::parse_joined(joined).expect("a namespace the test wrote itself")
@@ -1237,21 +1240,6 @@ macro_rules! conformance_suite {
     };
 }
 
-macro_rules! engine {
-    ($feature:literal, $engine:ident, $backend:expr) => {
-        #[cfg(feature = $feature)]
-        mod $engine {
-            use super::Backend;
-
-            const BACKEND: Backend = $backend;
-
-            conformance_suite!();
-        }
-    };
+once_per_engine! {
+    conformance_suite!();
 }
-
-engine!("redb", redb, Backend::Redb);
-engine!("sqlite", sqlite, Backend::Sqlite);
-engine!("json", json, Backend::Json);
-engine!("toml", toml, Backend::Toml);
-engine!("ron", ron, Backend::Ron);

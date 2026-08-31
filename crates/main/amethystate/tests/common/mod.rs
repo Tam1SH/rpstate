@@ -45,6 +45,87 @@ pub fn per_engine(name: &str) -> String {
     )
 }
 
+/// Every storage engine the build enabled, in the crate's own order: redb,
+/// sqlite, json, toml, ron.
+///
+/// For a test whose body loops and asserts once per engine.
+/// [`once_per_engine`] is the other shape - one `#[test]` per engine, each
+/// with its own name in the output.
+#[allow(clippy::vec_init_then_push)]
+pub fn enabled_backends() -> Vec<amethystate::store::builder::Backend> {
+    use amethystate::store::builder::Backend;
+
+    let mut enabled = Vec::new();
+    #[cfg(feature = "redb")]
+    enabled.push(Backend::Redb);
+    #[cfg(feature = "sqlite")]
+    enabled.push(Backend::Sqlite);
+    #[cfg(feature = "json")]
+    enabled.push(Backend::Json);
+    #[cfg(feature = "toml")]
+    enabled.push(Backend::Toml);
+    #[cfg(feature = "ron")]
+    enabled.push(Backend::Ron);
+    enabled
+}
+
+/// The engine's name as the feature that enables it spells it, which is not
+/// always its file extension - sqlite writes a `.db`.
+pub fn engine_name(backend: amethystate::store::builder::Backend) -> &'static str {
+    use amethystate::store::builder::Backend;
+
+    match backend {
+        #[cfg(feature = "redb")]
+        Backend::Redb => "redb",
+        #[cfg(feature = "sqlite")]
+        Backend::Sqlite => "sqlite",
+        #[cfg(feature = "json")]
+        Backend::Json => "json",
+        #[cfg(feature = "toml")]
+        Backend::Toml => "toml",
+        #[cfg(feature = "ron")]
+        Backend::Ron => "ron",
+    }
+}
+
+/// The items inside, once per enabled engine, each in a module named after the
+/// engine so every case gets its own name in the test output.
+///
+/// Each generated module carries `BACKEND`, the engine's
+/// [`Backend`](amethystate::store::builder::Backend), and `ENGINE`, its name;
+/// it also glob-imports the enclosing module, so a body may call the file's own
+/// helpers through `super::`.
+///
+/// [`enabled_backends`] is the other shape - one `#[test]` looping over the
+/// engines - and is enough where the failure need not have a name of its own.
+#[allow(unused_macros)]
+macro_rules! once_per_engine {
+    (@one $feature:literal, $engine:ident, $variant:ident, $($body:tt)*) => {
+        #[cfg(feature = $feature)]
+        mod $engine {
+            #![allow(dead_code, unused_imports)]
+
+            use super::*;
+
+            const BACKEND: ::amethystate::store::builder::Backend =
+                ::amethystate::store::builder::Backend::$variant;
+            const ENGINE: &str = $feature;
+
+            $($body)*
+        }
+    };
+    ($($body:tt)*) => {
+        once_per_engine!(@one "redb", redb, Redb, $($body)*);
+        once_per_engine!(@one "sqlite", sqlite, Sqlite, $($body)*);
+        once_per_engine!(@one "json", json, Json, $($body)*);
+        once_per_engine!(@one "toml", toml, Toml, $($body)*);
+        once_per_engine!(@one "ron", ron, Ron, $($body)*);
+    };
+}
+
+#[allow(unused_imports)]
+pub(crate) use once_per_engine;
+
 /// The document engine a test about documents must name: the first of json,
 /// toml, ron, which is the order the seeded text is chosen in too.
 ///
