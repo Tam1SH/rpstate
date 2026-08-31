@@ -587,6 +587,7 @@ fn book() -> ExitCode {
     };
 
     let declared = methods_by_type(Path::new("crates"));
+    let crates = crate_names(Path::new("crates"));
 
     let mut filled = 0;
     let mut behind: Vec<String> = Vec::new();
@@ -601,7 +602,7 @@ fn book() -> ExitCode {
 
         let done = fill(&source, &regions, &printed, &version);
 
-        for name in unknown_names(&done.page, &declared) {
+        for name in unknown_names(&done.page, &declared, &crates) {
             renamed.push(format!("{}: `{name}`", page.display()));
         }
         for name in done.no_test_marks {
@@ -783,7 +784,11 @@ fn named(ty: &syn::Type) -> Option<String> {
 /// can, and `Type::method` in backticks is what makes those checkable - the
 /// bare `method` was not, which is how `StoreBuilder::watch_debounce` outlived
 /// the method by a rename.
-fn unknown_names(page: &str, methods: &BTreeMap<String, BTreeSet<String>>) -> Vec<String> {
+fn unknown_names(
+    page: &str,
+    methods: &BTreeMap<String, BTreeSet<String>>,
+    crates: &BTreeSet<String>,
+) -> Vec<String> {
     let prose: String = page.split("```").step_by(2).collect::<Vec<_>>().join("\n");
 
     let mut wrong = Vec::new();
@@ -795,23 +800,76 @@ fn unknown_names(page: &str, methods: &BTreeMap<String, BTreeSet<String>>) -> Ve
         let token = &rest[..close];
         rest = &rest[close + 1..];
 
-        let Some((ty, member)) = token.split_once("::") else {
+        let path: Vec<&str> = token.split("::").collect();
+        if path.len() < 2 || path.iter().any(|s| s.is_empty()) {
             continue;
-        };
-        if member.is_empty() || member.contains(|c: char| !c.is_alphanumeric() && c != '_') {
+        }
+        if path
+            .iter()
+            .any(|s| s.contains(|c: char| !c.is_alphanumeric() && c != '_'))
+        {
             continue;
         }
 
-        let Some(has) = methods.get(ty) else {
+        let root = path[0];
+        let ours = methods.contains_key(root) || crates.contains(root);
+        if !ours {
             continue;
+        }
+
+        let last = path[path.len() - 1];
+        let owner = path[path.len() - 2];
+
+        // The owner decides what the last segment is, not its case: a variant
+        // is a member spelled like a type, and both live on the type here.
+        let complaint = match methods.get(owner) {
+            Some(has) if !has.contains(last) => {
+                Some(format!("{token} - `{owner}` has no `{last}`"))
+            }
+            Some(_) => None,
+            None if last.starts_with(|c: char| c.is_uppercase()) => {
+                (!methods.contains_key(last)).then(|| format!("{token} - no such type"))
+            }
+            // A path through modules to a module or a free function. Neither is
+            // indexed, so there is nothing to check and nothing to claim.
+            None => None,
         };
 
-        if !has.contains(member) && !wrong.contains(&token.to_string()) {
-            wrong.push(token.to_string());
+        if let Some(said) = complaint
+            && !wrong.contains(&said)
+        {
+            wrong.push(said);
         }
     }
 
     wrong
+}
+
+/// What this workspace's crates are called, as a path in the book would spell
+/// them: the directory name with its dashes turned into underscores.
+///
+/// A qualified name rooted here is ours and gets checked. One rooted anywhere
+/// else - `std`, `serde_json`, `anyhow` - belongs to somebody whose source is
+/// not in this tree, and guessing at it would only produce noise.
+fn crate_names(at: &Path) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let Ok(entries) = fs::read_dir(at) else {
+        return found;
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.join("Cargo.toml").is_file()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                found.insert(name.replace('-', "_"));
+            }
+            found.extend(crate_names(&path));
+        }
+    }
+
+    found
 }
 
 fn markdown_under(at: &Path) -> Vec<PathBuf> {

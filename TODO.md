@@ -9,6 +9,42 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
+## Nothing on the TypeScript side is checked by anything
+
+For the pass that takes the integrations together. `Integrations/typescript.md`
+is corrected and every block on it now compiles against the local `js/src`,
+which is how the rest of this was found - the page was the symptom.
+
+**The example cannot catch drift, and the pin is the smaller half of why.**
+`examples/tauri-settings/package.json` asks for `amethystate` at `0.3.1` from
+npm, so `js/` in this tree is never exercised. That is fixable with a `file:`
+dependency and it buys nothing on its own, because
+`examples/tauri-settings/src/bindings/amethystate.ts` opens with
+`// @ts-nocheck` - and that is the only file importing the package. Rename a
+class and the imports resolve to `any`, every field of `AppSettings` becomes
+`any`, and `tsc --noEmit` still exits zero. It does today: the file imports
+`ReadonlyReactiveField` and never uses it, which `noUnusedLocals` would
+otherwise reject.
+
+**No CI reaches the examples at all.** `.github/workflows/ci.yml` runs fmt,
+clippy, tests and `cargo doc`. Nothing there mentions `examples/` or npm.
+
+**`ReadonlyReactiveField` cannot be produced by codegen.** `FieldKind` in
+`crates/core/amethystate-core/src/scheme.rs` has `Plain`, `Nested`, `Volatile`
+and `ReactiveMap`, and the TypeScript emitter maps `Plain` and `Volatile` alike
+to `ReactiveField`. The class is exported, imported into every generated file,
+and reachable only by writing bindings by hand. Either something emits it or
+the import stops being generated.
+
+**`js/package.json` points at `tam1sh/amethystate` and `js/README.md` links
+`uniproc-dev.github.io`,** while the landing pages use `uniproc-dev`
+throughout.
+
+What would close it: the example building against the local package, the
+`@ts-nocheck` gone, a CI step that typechecks the example, and some check that
+ties the page to `js/src` the way `cargo xtask book` now ties the Rust pages to
+the crates.
+
 ## Every per-engine suite asks one engine unless told otherwise
 
 Three files are built as one statement asked of every engine, and `cargo test`
