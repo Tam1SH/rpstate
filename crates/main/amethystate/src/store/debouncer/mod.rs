@@ -73,7 +73,7 @@ pub struct FlushPolicy {
 impl Debouncer {
     fn spawn<F>(interval: Duration, mut run: F) -> Self
     where
-        F: FnMut(&mpsc::Receiver<Trigger>) -> Next + Send + 'static,
+        F: FnMut(&mpsc::Receiver<Trigger>, bool) -> Next + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<Trigger>();
         let guard = Arc::new(Mutex::new(()));
@@ -107,7 +107,7 @@ impl Debouncer {
     where
         F: FnMut() + Send + 'static,
     {
-        Self::spawn(interval, move |_| {
+        Self::spawn(interval, move |_, _| {
             op();
             Next::Wake
         })
@@ -128,7 +128,9 @@ impl Debouncer {
     where
         F: FnMut() -> StorageResult<()> + Send + 'static,
     {
-        Self::spawn(interval, move |rx| run_with_retry(&mut op, &policy, rx))
+        Self::spawn(interval, move |rx, last| {
+            run_with_retry(&mut op, &policy, rx, last)
+        })
     }
 
     pub fn schedule(&self) {
@@ -265,7 +267,17 @@ fn run_with_retry(
     op: &mut dyn FnMut() -> StorageResult<()>,
     policy: &FlushPolicy,
     rx: &mpsc::Receiver<Trigger>,
+    last: bool,
 ) -> Next {
+    if last {
+        let landed = op();
+        policy.commits.finished(landed.is_ok());
+        if landed.is_ok() {
+            policy.health.landed();
+        }
+        return Next::Stop;
+    }
+
     let retry = &policy.retry;
     let mut streak = Streak::Fresh;
 

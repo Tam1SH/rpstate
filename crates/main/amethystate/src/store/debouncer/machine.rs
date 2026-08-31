@@ -45,11 +45,16 @@ pub(super) enum State {
 ///
 /// Every wait the thread does happens here, so `Stop` is read at each of them
 /// and a stop cannot be missed by a thread that happens to be asleep.
+///
+/// `run` is told whether this is the last pass. A flush reached through a stop
+/// has already consumed the `Stop` that would have ended it, so a retrying one
+/// left to its own devices would try for as long as the disk stays broken,
+/// with nobody able to call it off and a caller waiting on the join.
 pub(super) fn next_state(
     state: State,
     rx: &mpsc::Receiver<Trigger>,
     interval: Duration,
-    run: &mut dyn FnMut(&mpsc::Receiver<Trigger>) -> Next,
+    run: &mut dyn FnMut(&mpsc::Receiver<Trigger>, bool) -> Next,
 ) -> State {
     match state {
         State::Idle => match rx.recv() {
@@ -73,7 +78,7 @@ pub(super) fn next_state(
             }
         },
 
-        State::Flushing { then_stop } => match run(rx) {
+        State::Flushing { then_stop } => match run(rx, then_stop) {
             Next::Stop => State::Stopped,
             Next::Wake if then_stop => State::Stopped,
             Next::Wake => State::Idle,
@@ -92,11 +97,16 @@ mod tests {
     struct Work {
         runs: usize,
         answer: Next,
+        told_it_was_last: Option<bool>,
     }
 
     impl Work {
         fn answering(answer: Next) -> Self {
-            Self { runs: 0, answer }
+            Self {
+                runs: 0,
+                answer,
+                told_it_was_last: None,
+            }
         }
     }
 
@@ -105,8 +115,9 @@ mod tests {
         for trigger in sent {
             tx.send(*trigger).unwrap();
         }
-        next_state(state, &rx, QUIET, &mut |_| {
+        next_state(state, &rx, QUIET, &mut |_, last| {
             work.runs += 1;
+            work.told_it_was_last = Some(last);
             work.answer
         })
     }
@@ -118,8 +129,9 @@ mod tests {
     fn hung_up(state: State, work: &mut Work) -> State {
         let (tx, rx) = mpsc::channel::<Trigger>();
         drop(tx);
-        next_state(state, &rx, QUIET, &mut |_| {
+        next_state(state, &rx, QUIET, &mut |_, last| {
             work.runs += 1;
+            work.told_it_was_last = Some(last);
             work.answer
         })
     }
@@ -194,6 +206,17 @@ mod tests {
             State::Stopped
         );
         assert_eq!(work.runs, 1);
+    }
+
+    #[test]
+    fn a_write_reached_through_a_stop_is_told_it_is_the_last() {
+        let mut work = Work::answering(Next::Wake);
+        step(State::Flushing { then_stop: true }, &[], &mut work);
+        assert_eq!(work.told_it_was_last, Some(true));
+
+        let mut ordinary = Work::answering(Next::Wake);
+        step(State::Flushing { then_stop: false }, &[], &mut ordinary);
+        assert_eq!(ordinary.told_it_was_last, Some(false));
     }
 
     #[test]
