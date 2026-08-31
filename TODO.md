@@ -9,6 +9,30 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
+## ron takes an enum and cannot read one back
+
+Every shape, not only a unit variant: `Off`, `On(3)` and `Named { level: 7 }`
+are all written with `Ok` and all fail the next read. Pinned by the ignored
+half of `tests/an_enum_survives_a_round_trip.rs`; the other four engines carry
+all three.
+
+It is not the format. `ron` on its own round-trips every one of them - `Off`
+writes as `"Off"` and reads back as `Off`. It is `serialize_node`, which turns
+the value into ron text and then **parses that text back into
+`ron::value::Value`**, and that type has no way to hold an enum. The variant
+name is dropped there, so the reader is handed a unit, a sequence or a map and
+says so: `Expected enum Mode but found a sequence instead`.
+
+json survives the same round trip by accident. serde writes an enum as
+`{"On": 3}`, and an externally tagged map is a thing `serde_json::Value` can
+hold, so the tag comes back as a key. ron writes its own `On(3)` syntax, which
+`Value` cannot represent at all.
+
+The fix is a node type that keeps the variant - ron text held as text, or a
+representation of its own. Whichever, the write must stop reporting success:
+this is the same shape as the non-finite float that `RFC-limits.md` covers,
+and enums are a great deal more common than `NaN`.
+
 ## toml reads a table by splitting its rendering on the first `=`
 
 `TomlDoc::with_bytes_de` renders a node it cannot treat as a value and takes the

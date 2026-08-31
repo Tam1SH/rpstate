@@ -50,7 +50,7 @@ each engine cannot hold:
 | non-finite floats | json, and sqlite because it carries json |
 | `u64::MAX` and anything past `i64` | toml |
 | `Option<Option<T>>` kept as two layers | json, sqlite, redb |
-| a unit enum variant | ron, through its node type |
+| an enum of any shape | ron, through its node type |
 | a non-string map key | every text engine |
 | the sign of `-0.0` | sqlite |
 | depth past the ceiling | all five, at different numbers |
