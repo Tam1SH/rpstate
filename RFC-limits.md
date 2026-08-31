@@ -2,10 +2,9 @@
 
 **Status: partly built.** `key_depth` and the codec ceiling are enforced today,
 and `portable_across` lowers the depth ceiling to the lowest of the named
-engines and refuses a non-finite float where the codec cannot read one back.
-The type-level walk of the declared shape is not built, and the value-level
-check covers floats alone - the other rows of the portability table below are
-still measurements rather than rules.
+engines and refuses two of the shapes below: a non-finite float, and an enum.
+The type-level walk of the declared shape is not built, and the four remaining
+rows of the portability table are still measurements rather than rules.
 `landing/src/content/docs/Store/limits.md` documents the built behaviour and
 will have to be rewritten as the rest lands.
 
@@ -233,6 +232,26 @@ which is generated from `tests/non_finite_float.rs`.
 Separately, and not about floats: any decode failure leaves a handle reporting
 the past, and `StoreExt::decode` returning an error while a subscription
 silently keeps the old value is a split worth settling on its own.
+
+## The second row, and why it is a refusal rather than a fix
+
+An enum on ron is the same defect wearing a different hat, and it costs more
+than a `NaN` does: four engines carry every shape, ron takes all three and
+reads none of them back. The name is lost in `serialize_node`, which parses the
+rendered text into a `ron::value::Value` that has no variant to hold it.
+
+The refusal rides the machinery the float row built - the counting pass notes
+an enum going past, the budget decides, and `portable_across` extends it to an
+engine that is not running. Four methods on `Counting` set a flag instead of
+forwarding blindly, which is the whole cost.
+
+What is *not* built is a ron that carries enums, and that is a decision rather
+than an omission. It needs a `to_value` and a matching deserializer written
+here, because ron ships neither: [ron-rs/ron#140] has been open since 2018.
+Roughly 500 lines to hold up an engine nobody is on. `TODO.md` keeps the
+account for whenever somebody is.
+
+[ron-rs/ron#140]: https://github.com/ron-rs/ron/issues/140
 
 ## How the depth is measured without building anything
 

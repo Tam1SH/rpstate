@@ -188,6 +188,16 @@ impl WriteLimits {
                 .iter()
                 .all(|engine| engine.holds_non_finite_floats())
     }
+
+    /// Whether an enum survives here and everywhere else this store promised to
+    /// stay readable.
+    pub fn holds_enums(&self, running: Backend) -> bool {
+        running.holds_enums()
+            && self
+                .portable_across
+                .iter()
+                .all(|engine| engine.holds_enums())
+    }
 }
 
 /// What the store does about a flush that has been failing for longer than

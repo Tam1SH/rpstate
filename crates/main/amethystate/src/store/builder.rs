@@ -96,6 +96,32 @@ impl Backend {
         }
     }
 
+    /// Whether this engine can write an enum and read it back.
+    ///
+    /// ron cannot, and the reason is its document type rather than its syntax:
+    /// `ron::value::Value` holds nine shapes and none of them is a variant, so
+    /// a value rendered as `On(3)` and parsed back into a `Value` arrives as a
+    /// sequence with the name gone. `Value` says so about itself - "this does
+    /// not support enums" - and the `to_value` that would avoid the round trip
+    /// is [ron-rs/ron#140], open since 2018 across four releases that were
+    /// each meant to carry it.
+    ///
+    /// [ron-rs/ron#140]: https://github.com/ron-rs/ron/issues/140
+    pub const fn holds_enums(self) -> bool {
+        match self {
+            #[cfg(feature = "redb")]
+            Backend::Redb => true,
+            #[cfg(feature = "json")]
+            Backend::Json => true,
+            #[cfg(feature = "toml")]
+            Backend::Toml => true,
+            #[cfg(feature = "ron")]
+            Backend::Ron => false,
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => true,
+        }
+    }
+
     /// Opens a store on this engine directly, skipping the builder.
     ///
     /// [`StoreBuilder`] is the ordinary route - it also collects migrations

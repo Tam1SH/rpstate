@@ -41,6 +41,9 @@ pub struct DepthBudget {
     /// Whether a `NaN` or an infinity survives on the running engine and on
     /// every engine this store promised to stay readable on.
     pub non_finite_floats: bool,
+
+    /// The same for an enum of any shape.
+    pub enums: bool,
 }
 
 impl DepthBudget {
@@ -50,6 +53,7 @@ impl DepthBudget {
             ceiling: limits.ceiling(engine),
             key_depth: limits.key_depth,
             non_finite_floats: limits.holds_non_finite_floats(engine),
+            enums: limits.holds_enums(engine),
         }
     }
 
@@ -74,6 +78,7 @@ impl DepthBudget {
                     ceiling: usize::MAX,
                     key_depth: limits.key_depth,
                     non_finite_floats: true,
+                    enums: true,
                 };
             }
         };
@@ -146,19 +151,32 @@ impl DepthBudget {
     /// the field goes on reporting the number it held before while the file
     /// holds nothing of the sort.
     pub fn refused(&self, depth: &Depth, path: &StorePath) -> Option<Report<StorageError>> {
-        if self.non_finite_floats || !depth.saw_a_non_finite_float() {
-            return None;
+        if !self.non_finite_floats && depth.saw_a_non_finite_float() {
+            return Some(
+                Report::new(StorageError::Codec)
+                    .attach(format!("path: {path}"))
+                    .attach("a NaN or an infinity, which this store cannot read back")
+                    .attach(
+                        "JSON has no spelling for either, so the codec writes `null` and \
+                         decoding it as a float fails - on json, and on sqlite, which encodes \
+                         with the same JSON",
+                    ),
+            );
         }
 
-        Some(
-            Report::new(StorageError::Codec)
-                .attach(format!("path: {path}"))
-                .attach("a NaN or an infinity, which this store cannot read back")
-                .attach(
-                    "JSON has no spelling for either, so the codec writes `null` and decoding \
-                     it as a float fails - on json, and on sqlite, which encodes with the same \
-                     JSON",
-                ),
-        )
+        if !self.enums && depth.saw_an_enum() {
+            return Some(
+                Report::new(StorageError::Codec)
+                    .attach(format!("path: {path}"))
+                    .attach("an enum, which this store cannot read back")
+                    .attach(
+                        "ron writes one as `On(3)` and parses it back into a `ron::value::Value`, \
+                         which has no variant to put it in - the name is dropped there and the \
+                         next read is handed a sequence. See https://github.com/ron-rs/ron/issues/140",
+                    ),
+            );
+        }
+
+        None
     }
 }

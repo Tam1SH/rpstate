@@ -9,29 +9,36 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
-## ron takes an enum and cannot read one back
+## ron refuses an enum, and could carry one if somebody wrote the two halves
 
-Every shape, not only a unit variant: `Off`, `On(3)` and `Named { level: 7 }`
-are all written with `Ok` and all fail the next read. Pinned by the ignored
-half of `tests/an_enum_survives_a_round_trip.rs`; the other four engines carry
-all three.
+A store on ron refuses an enum of any shape at the write, the way it refuses a
+`NaN` on json. That is the whole of what is built, and it is deliberate: the
+alternative is a codec of our own for a format nobody is on yet.
 
-It is not the format. `ron` on its own round-trips every one of them - `Off`
-writes as `"Off"` and reads back as `Off`. It is `serialize_node`, which turns
-the value into ron text and then **parses that text back into
-`ron::value::Value`**, and that type has no way to hold an enum. The variant
-name is dropped there, so the reader is handed a unit, a sequence or a map and
-says so: `Expected enum Mode but found a sequence instead`.
+The engine cannot hold one because of its document type, not its syntax.
+`serialize_node` renders the value to ron text and parses that text back into
+`ron::value::Value`, which holds nine shapes and none of them is a variant. So
+`On(3)` arrives as a sequence with the name gone, and the reader says
+`Expected enum Mode but found a sequence instead`. ron says as much about its
+own deserializer: "this does not support enums (because `Value` does not store
+them)".
 
 json survives the same round trip by accident. serde writes an enum as
 `{"On": 3}`, and an externally tagged map is a thing `serde_json::Value` can
-hold, so the tag comes back as a key. ron writes its own `On(3)` syntax, which
-`Value` cannot represent at all.
+hold, so the tag comes back as a key. ron writes its own `On(3)`, which `Value`
+cannot represent at all.
 
-The fix is a node type that keeps the variant - ron text held as text, or a
-representation of its own. Whichever, the write must stop reporting success:
-this is the same shape as the non-finite float that `RFC-limits.md` covers,
-and enums are a great deal more common than `NaN`.
+Carrying one needs both directions written here, because upstream has neither.
+`to_value` is [ron-rs/ron#140], open since 2018, promised for 0.9 in a
+maintainer's comment and still absent four releases later at 0.12.1; the
+meta-issue is [#397]. `into_rust` covers the read direction only for types
+`Value` can already represent. Written out, both come to roughly 500 lines:
+serialize to a `Value` with an enum as a one-key map, and a deserializer whose
+`deserialize_enum` reads that map back. It was tried and set aside as the wrong
+thing to spend on an engine with no users.
+
+[ron-rs/ron#140]: https://github.com/ron-rs/ron/issues/140
+[#397]: https://github.com/ron-rs/ron/issues/397
 
 ## toml reads a table by splitting its rendering on the first `=`
 

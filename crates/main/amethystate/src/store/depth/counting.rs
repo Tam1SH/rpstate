@@ -27,6 +27,7 @@ pub struct Depth {
     deepest: Cell<usize>,
     overflowed: Cell<bool>,
     non_finite: Cell<bool>,
+    enum_variant: Cell<bool>,
     limit: usize,
 }
 
@@ -38,6 +39,7 @@ impl Depth {
             deepest: Cell::new(0),
             overflowed: Cell::new(false),
             non_finite: Cell::new(false),
+            enum_variant: Cell::new(false),
             limit,
         }
     }
@@ -93,6 +95,15 @@ impl Depth {
     /// value succeeds, so there is no error to carry the news.
     pub fn saw_a_non_finite_float(&self) -> bool {
         self.non_finite.get()
+    }
+
+    /// Whether an enum variant of any shape went past during the pass.
+    ///
+    /// Noticed here for the same reason and read the same way: whether it is a
+    /// refusal belongs to the budget, and the codec that cannot hold one says
+    /// nothing at the write.
+    pub fn saw_an_enum(&self) -> bool {
+        self.enum_variant.get()
     }
 
     /// The deepest level reached, once a pass has finished.
@@ -188,7 +199,16 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         serialize_none();
         serialize_unit();
         serialize_unit_struct(name: &'static str);
-        serialize_unit_variant(name: &'static str, index: u32, variant: &'static str);
+    }
+
+    fn serialize_unit_variant(
+        self,
+        name: &'static str,
+        index: u32,
+        variant: &'static str,
+    ) -> Result<S::Ok, S::Error> {
+        self.depth.enum_variant.set(true);
+        self.inner.serialize_unit_variant(name, index, variant)
     }
 
     /// Forwarded like the rest, and noted on the way past.
@@ -242,6 +262,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         T: Serialize + ?Sized,
     {
         let Counting { inner, depth } = self;
+        depth.enum_variant.set(true);
         depth.enter()?;
         let out = inner.serialize_newtype_variant(name, index, variant, &Counted { value, depth });
         depth.leave();
@@ -283,6 +304,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, S::Error> {
+        self.depth.enum_variant.set(true);
         self.depth.enter()?;
         Ok(Counting {
             inner: self
@@ -319,6 +341,7 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStructVariant, S::Error> {
+        self.depth.enum_variant.set(true);
         self.depth.enter()?;
         Ok(Counting {
             inner: self
