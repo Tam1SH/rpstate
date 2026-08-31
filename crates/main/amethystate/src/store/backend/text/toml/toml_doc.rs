@@ -5,7 +5,7 @@ use crate::store::backend::text::document::{
     Navigable, TextDocument, generic_delete, generic_delete_subtree, generic_get, generic_scan,
     generic_set,
 };
-use crate::store::depth::Depth;
+use crate::store::screening::Noticed;
 use crate::store::{CodecFormat, StorageError};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
@@ -130,7 +130,7 @@ impl TextDocument for TomlDocument {
 
     fn serialize_node<T: Serialize + ?Sized>(
         value: &T,
-        depth: &Depth,
+        seen: &Noticed,
     ) -> StorageResult<Self::Node> {
         #[derive(serde::Serialize)]
         struct Wrap<'a, T: ?Sized> {
@@ -138,7 +138,7 @@ impl TextDocument for TomlDocument {
         }
 
         let s = toml_edit::ser::to_string(&Wrap {
-            val: &depth.count(value),
+            val: &seen.count(value),
         })
         .map_err(|e| CodecError::Toml(e.to_string()))
         .map_err(TextStoreError::from)

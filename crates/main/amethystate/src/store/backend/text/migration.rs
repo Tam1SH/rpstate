@@ -4,7 +4,7 @@ use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::backend::text::document::TextDocument;
 use crate::store::backend::text::store;
-use crate::store::depth::Depth;
+use crate::store::screening::Noticed;
 use crate::store::facts::Facts;
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::traits::MigrationBackendAdapter;
@@ -96,7 +96,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()> {
         let key = store::meta_key("meta", prefix);
         let parts = [key.as_str()];
-        let node = D::serialize_node(meta, &Depth::unlimited())
+        let node = D::serialize_node(meta, &Noticed::unlimited())
             .change_context(StorageError::Meta)
             .attach_meta_node(key.as_str())?;
         self.meta_doc
@@ -126,7 +126,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     ) -> StorageResult<()> {
         let key = store::meta_key("schema", prefix);
         let parts = [key.as_str()];
-        let node = D::serialize_node(snapshot, &Depth::unlimited())
+        let node = D::serialize_node(snapshot, &Noticed::unlimited())
             .change_context(StorageError::Meta)
             .attach_meta_node(key.as_str())?;
         self.meta_doc
@@ -152,7 +152,7 @@ impl<D: TextDocument> MigrationBackendAdapter for TextMigrationBackend<'_, D> {
     fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()> {
         let key = store::meta_key("log", prefix);
         let parts = [key.as_str()];
-        let node = D::serialize_node(&log, &Depth::unlimited())
+        let node = D::serialize_node(&log, &Noticed::unlimited())
             .change_context(StorageError::Meta)
             .attach_meta_node(key.as_str())?;
         self.meta_doc

@@ -12,7 +12,7 @@ use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
-use crate::store::depth::DepthBudget;
+use crate::store::screening::Screening;
 use crate::store::facts::{Facts, Key, StoreFile};
 use crate::{
     MigrationReport,
@@ -125,7 +125,7 @@ struct RedbStoreInner {
     /// What this store may spend on a path and its value together. redb needs
     /// it most: `rmp_serde` has no limit of its own, so a value deep enough
     /// commits and then kills every process that opens the file afterwards.
-    budget: DepthBudget,
+    budget: Screening,
 }
 
 impl RedbStoreInner {
@@ -418,7 +418,7 @@ impl RedbStore {
             next_sub_id: Arc::new(AtomicU64::new(1)),
             write_lock,
             parallel_reads: config.parallel_reads,
-            budget: DepthBudget::resolve(&config.limits, Backend::Redb),
+            budget: Screening::resolve(&config.limits, Backend::Redb),
         });
 
         let store = Self { inner };

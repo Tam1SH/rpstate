@@ -8,7 +8,7 @@ use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
-use crate::store::depth::{Depth, DepthBudget};
+use crate::store::screening::{Noticed, Screening};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::facts::{Facts, Key, StoreFile as StoreFileFact};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
@@ -263,7 +263,7 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     pub(crate) persisted: Arc<AtomicU64>,
     /// What this store may spend on a path and its value together, worked out
     /// once from the codec's own ceiling and whatever the caller promised.
-    pub(crate) budget: DepthBudget,
+    pub(crate) budget: Screening,
     watch_debouncer: Arc<Debouncer>,
     _watcher: RecommendedWatcher,
 }
@@ -441,7 +441,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             health,
             writes,
             persisted,
-            budget: DepthBudget::for_codec(&config.limits, D::format()),
+            budget: Screening::for_codec(&config.limits, D::format()),
             watch_debouncer,
             _watcher: watcher,
         });
@@ -726,7 +726,7 @@ impl<D: TextDocument> TextStoreInner<D> {
 
             match state {
                 InitState::Seeded => {
-                    let node = D::serialize_node(&true, &Depth::unlimited())
+                    let node = D::serialize_node(&true, &Noticed::unlimited())
                         .in_meta(StorageError::Meta, &self.files.meta.path)
                         .attach_key(namespace)?;
                     guard.set(&parts, node)

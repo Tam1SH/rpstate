@@ -1,5 +1,5 @@
 use crate::store::CodecFormat;
-use crate::store::depth::Depth;
+use crate::store::screening::Noticed;
 use crate::store::{Occupied, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::Report;
@@ -28,9 +28,9 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     /// answers once.
     ///
     /// A refusal comes back as this codec's own error, because that is all a
-    /// `Serializer` may return; [`Depth::overflowed`] is how a caller asks
+    /// `Serializer` may return; [`Noticed::overflowed`] is how a caller asks
     /// whether the count was what stopped it.
-    fn serialize_node<T: Serialize + ?Sized>(value: &T, depth: &Depth)
+    fn serialize_node<T: Serialize + ?Sized>(value: &T, seen: &Noticed)
     -> StorageResult<Self::Node>;
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>>;
     fn bytes_to_node(bytes: &[u8]) -> StorageResult<Self::Node>;

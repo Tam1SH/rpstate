@@ -18,11 +18,17 @@ use serde::ser::{
 };
 use std::cell::Cell;
 
-/// How deep one serialization has gone, and how deep it may go.
+/// What one serialization went past, and how deep it may still go.
+///
+/// Depth is the part with a limit of its own, because a pass that goes too
+/// deep is stopped where it stands rather than read afterwards. The rest is
+/// recorded and left for [`Screening`](super::Screening) to judge, since
+/// whether a `NaN` or an enum is a refusal depends on the store rather than
+/// the value.
 ///
 /// Shared by every level of one pass: serde hands the serializer over by value
 /// at each level, so the running count cannot live in it.
-pub struct Depth {
+pub struct Noticed {
     depth: Cell<usize>,
     deepest: Cell<usize>,
     overflowed: Cell<bool>,
@@ -31,8 +37,8 @@ pub struct Depth {
     limit: usize,
 }
 
-impl Depth {
-    /// A budget of `limit` levels.
+impl Noticed {
+    /// A pass allowed `limit` levels.
     pub fn new(limit: usize) -> Self {
         Self {
             depth: Cell::new(0),
@@ -65,7 +71,7 @@ impl Depth {
     /// `value`, counted by whatever serializer it is eventually handed to.
     ///
     /// The way in for a codec whose entry point takes the value and builds its
-    /// own serializer inside, where [`Depth::wrap`] has nothing to hold. The
+    /// own serializer inside, where [`Noticed::wrap`] has nothing to hold. The
     /// budget travels with the value, so it works whatever the codec does with
     /// it, and `is_human_readable` stays the codec's own answer because the
     /// question reaches it through the wrapper.
@@ -132,10 +138,11 @@ impl Depth {
     }
 }
 
-/// A serializer that counts levels and forwards everything else.
+/// A serializer that counts levels, notes what the store may refuse, and
+/// forwards everything else.
 pub struct Counting<'a, S> {
     inner: S,
-    depth: &'a Depth,
+    depth: &'a Noticed,
 }
 
 /// A value carrying the budget with it.
@@ -146,7 +153,7 @@ pub struct Counting<'a, S> {
 /// the counter back in the way at every one of those levels.
 pub struct Counted<'v, 'd, T: ?Sized> {
     value: &'v T,
-    depth: &'d Depth,
+    depth: &'d Noticed,
 }
 
 impl<T> Serialize for Counted<'_, '_, T>

@@ -7,7 +7,7 @@ use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
-use crate::store::depth::DepthBudget;
+use crate::store::screening::Screening;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::facts::{Facts, Key, StoreFile};
@@ -105,7 +105,7 @@ struct SqliteStoreInner {
     /// What this store may spend on a path and its value together. sqlite's own
     /// path is a `TEXT` key and costs nothing, so almost all of it is the
     /// value's - until the store promises to stay readable somewhere stricter.
-    budget: DepthBudget,
+    budget: Screening,
 }
 
 impl SqliteStoreInner {
@@ -710,7 +710,7 @@ impl SqliteStore {
             subscriptions,
             next_sub_id,
             write_lock,
-            budget: DepthBudget::resolve(&config.limits, Backend::Sqlite),
+            budget: Screening::resolve(&config.limits, Backend::Sqlite),
         });
 
         let store = Self { inner };
