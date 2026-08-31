@@ -7,6 +7,7 @@ use serde_json::Value;
 
 const PROBES: &str = "crates/main/amethystate/tests";
 const SECTION: &str = "landing/src/content/docs/Limitations";
+const SECTION_RU: &str = "landing/src/content/docs/ru/Limitations";
 const INDEX: &str = "index.md";
 
 /// What a page may say it is about. Closed on purpose: search is by word, so a
@@ -80,8 +81,16 @@ fn main() -> ExitCode {
         };
 
         let name = title(probe);
-        let at = Path::new(SECTION).join(format!("{}.md", name.replace(' ', "-")));
-        pages.insert(at, render(&name, &preamble, &acts, &printed));
+        let file = format!("{}.md", name.replace(' ', "-"));
+
+        if let Some(english) = half(&preamble, false) {
+            let at = Path::new(SECTION).join(&file);
+            pages.insert(at, render(&name, &english, &acts, &printed));
+        }
+        if let Some(russian) = half(&preamble, true) {
+            let at = Path::new(SECTION_RU).join(&file);
+            pages.insert(at, render(&name, &russian, &acts, &printed));
+        }
     }
 
     if !unknown.is_empty() {
@@ -97,7 +106,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let stale = stale_pages(Path::new(SECTION), &pages);
+    let mut stale = stale_pages(Path::new(SECTION), &pages);
+    stale.extend(stale_pages(Path::new(SECTION_RU), &pages));
     let mut behind: Vec<String> = Vec::new();
 
     for (at, page) in &pages {
@@ -122,9 +132,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if let Err(e) = fs::create_dir_all(SECTION) {
-        eprintln!("cannot make {SECTION}: {e}");
-        return ExitCode::FAILURE;
+    for under in pages.keys().filter_map(|at| at.parent()) {
+        if let Err(e) = fs::create_dir_all(under) {
+            eprintln!("cannot make {}: {e}", under.display());
+            return ExitCode::FAILURE;
+        }
     }
     for (at, page) in &pages {
         if let Err(e) = fs::write(at, page) {
@@ -473,6 +485,50 @@ fn dedent(lines: &[&str]) -> String {
         .join("\n")
         .trim_end()
         .to_string()
+}
+
+/// The line a preamble writes to start its Russian half, in the same shape as
+/// `Tags:` and `Features:` above it.
+const RUSSIAN: &str = "Russian:";
+
+/// One language's half of a preamble.
+///
+/// A test says the page's prose twice, English first and Russian after a
+/// `Russian:` line of its own. Everything else the generator emits - the
+/// column headings of the measured table, the `//@show` captions above each
+/// block - stays English on both pages, deliberately: they name what the run
+/// printed, and a run prints in one language.
+///
+/// A test with no Russian half writes no Russian page, which is how the
+/// translation arrives a file at a time instead of all at once.
+fn half(preamble: &str, russian: bool) -> Option<String> {
+    let (english, translated) = match preamble.split_once(&format!("\n{RUSSIAN}")) {
+        Some((english, translated)) => (english, Some(translated)),
+        None => (preamble, None),
+    };
+
+    if !russian {
+        return Some(english.trim().to_string());
+    }
+
+    let translated = translated?.trim();
+    if translated.is_empty() {
+        return None;
+    }
+
+    // `Tags:` and `Features:` are declared once, above the split, and both
+    // pages need them: the tags are what search matches on, and a page that
+    // carries them in one language only is findable in one language only.
+    let fields: Vec<&str> = english
+        .lines()
+        .filter(|line| line.starts_with("Tags:") || line.starts_with("Features:"))
+        .collect();
+
+    if fields.is_empty() {
+        return Some(translated.to_string());
+    }
+
+    Some(format!("{}\n\n{translated}", fields.join("\n\n")))
 }
 
 fn preamble(source: &str) -> String {

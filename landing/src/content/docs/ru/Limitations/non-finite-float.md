@@ -9,26 +9,26 @@ Tags: codec, json, sqlite, choosing an engine
 
 Features: redb, sqlite, json, toml, ron
 
-What a float that is not a number does to a store.
+Что стор делает с флоатом, который не число.
 
-`NaN` and the infinities are ordinary `f64` values a GUI produces by
-dividing badly. Three of the five engines carry them: msgpack writes the
-IEEE bits, and TOML and RON have `nan` and `inf` in their grammars.
+`NaN` и бесконечности - обычные значения `f64`, которые GUI получает,
+поделив неудачно. Три движка из пяти доносят их: msgpack пишет биты IEEE, а
+у TOML и RON есть `nan` и `inf` в грамматике.
 
-JSON has no spelling for either, and neither `serde_json` nor `sonic_rs`
-says so - both write `null`, which then fails to read back as a float. That
-costs two engines rather than one, because sqlite stores its values as JSON
-and nothing in its name says which format that is.
+У JSON нет написания ни для того, ни для другого, и ни `serde_json`, ни
+`sonic_rs` об этом не говорят - оба пишут `null`, который потом не читается
+обратно как флоат. Это стоит двух движков, а не одного: sqlite хранит
+значения как JSON, и по его имени не видно, какой это формат.
 
-So which engines have it follows the codec rather than the file extension,
-and the two are not the pair anyone guesses. A store whose codec cannot
-read the value back refuses the write instead of taking it: left alone it
-lands as `null`, `set` answers `Ok`, and the field goes on reporting the
-number it held before while the file holds nothing of the sort.
+Значит какие движки его держат, решает кодек, а не расширение файла, и пара
+получается не та, которую ожидаешь. Стор, чей кодек не прочитает значение
+обратно, отказывает в записи вместо того чтобы её принять: если не мешать,
+значение ляжет как `null`, `set` ответит `Ok`, а поле продолжит сообщать
+прежнее число, которого в файле уже нет.
 
-`limits(|l| l.portable_across(..))` extends the refusal to engines that are
-not running. A store on redb that promises to stay readable on json refuses
-what msgpack alone would have held.
+`limits(|l| l.portable_across(..))` распространяет отказ на движки, которые
+не запущены. Стор на redb, пообещавший остаться читаемым на json, откажет в
+том, что один msgpack донёс бы.
 
 ## What was done
 
