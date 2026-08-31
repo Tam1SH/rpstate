@@ -4,7 +4,7 @@ expression: shape(&err)
 ---
 the value could not be encoded or decoded
 ├╴as: u16
-├╴decoding 14 bytes of json
+├╴value bytes: 14
 │
 ├─▶ Erased codec error: invalid type: string "not a number", expected u16 at line 1 column 14
 │   
