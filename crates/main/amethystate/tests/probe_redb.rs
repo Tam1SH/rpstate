@@ -33,8 +33,10 @@ fn ns(joined: &str) -> StorePath {
 fn open(file: &TempPath) -> Store {
     StoreBuilder::new(file.path())
         .backend(Backend::Redb)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build()
         .expect("the store opened")
 }
@@ -1288,8 +1290,10 @@ fn depth_store(depth: usize) {
 fn depth_write_into(file: &Path, depth: usize) {
     let store = StoreBuilder::new(file)
         .backend(Backend::Redb)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build()
         .expect("the store opened");
     store.set(["probe", "nest"], &nest(depth)).unwrap();
@@ -1300,8 +1304,10 @@ fn depth_write_into(file: &Path, depth: usize) {
 fn depth_read_from(file: &Path) {
     let store = StoreBuilder::new(file)
         .backend(Backend::Redb)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build()
         .expect("the store opened");
     let back = store.get::<Nest>(["probe", "nest"]);
@@ -1750,8 +1756,10 @@ fn a_prefix_that_spells_another_prefixs_init_flag() {
 
     let reopened = StoreBuilder::new(file.path())
         .backend(Backend::Redb)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build_with_migration();
 
     match reopened {
@@ -1816,8 +1824,10 @@ fn a_migration_scans_past_the_level_boundary_and_then_refuses_what_it_found() {
 
     let (store, report) = StoreBuilder::new(file.path())
         .backend(Backend::Redb)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build_with_migration()
         .expect("the file still opens");
 

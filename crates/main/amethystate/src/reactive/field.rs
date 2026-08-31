@@ -684,8 +684,17 @@ where
     ///   partial to write, so the flush serialises the whole file - and every
     ///   buffered write in the store becomes durable as a side effect.
     ///
-    /// So a text backend is accidentally stronger here. Do not build on that:
-    /// the same code on redb commits only what sits under this prefix.
+    /// So a text backend is stronger here, and deliberately left that way -
+    /// splitting an in-memory document into per-key writes would buy nothing,
+    /// since the file is rewritten either way, and would exist only to make
+    /// the two families behave alike.
+    ///
+    /// Do not build on it: the same code on redb commits only what sits under
+    /// this prefix. [`Backend::a_commit_covers_the_whole_store`] is which of
+    /// the two an engine is, and the durability tests ask it rather than each
+    /// naming the answer.
+    ///
+    /// [`Backend::a_commit_covers_the_whole_store`]: crate::store::builder::Backend::a_commit_covers_the_whole_store
     ///
     /// # Seeing it happen
     ///
@@ -707,7 +716,7 @@ where
     /// # let path = amethystate_core::test_utils::TempPath::new("doc");
     /// // A debouncer a minute out: nothing reaches disk on its own.
     /// # let store = StoreBuilder::new(&*path)
-    /// #     .debounce(std::time::Duration::from_secs(60))
+    /// #     .disk(|d| d.debounce(std::time::Duration::from_secs(60)))
     /// #     .build()
     /// #     .unwrap();
     /// let port = field_with_path::<u16>(

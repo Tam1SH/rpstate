@@ -1,5 +1,5 @@
 use crate::migration::builder::MigrationBuilder;
-use crate::store::config::{AfterGivingUp, FileWritePolicy, StoreConfig, WriteLimits};
+use crate::store::config::{Disk, FileWritePolicy, StoreConfig, WriteLimits};
 use crate::store::facts::Facts;
 use crate::store::{StorageError, StorageResult};
 use crate::{MigrationReport, Store};
@@ -7,7 +7,6 @@ use error_stack::{Report, ResultExt};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 /// Which engine backs a store.
 ///
@@ -58,6 +57,13 @@ impl Backend {
     /// every later start, because the value is already committed. Its number is
     /// imposed for that reason, far above any data anyone means to store and
     /// far below where the stack gives out.
+    ///
+    /// sqlite takes json's number. It stores its values as JSON, encoded by
+    /// `sonic_rs`, so it belongs beside json rather than out at the 254 a walk
+    /// to its give-out first suggested: a measured boundary is where a library
+    /// happened to stop, not a promise about its next release, and two engines
+    /// carrying the same format answering 127 levels apart is worse than
+    /// either answer.
     pub const fn depth_ceiling(self) -> usize {
         match self {
             #[cfg(feature = "redb")]
@@ -69,7 +75,63 @@ impl Backend {
             #[cfg(feature = "ron")]
             Backend::Ron => 64,
             #[cfg(feature = "sqlite")]
-            Backend::Sqlite => 254,
+            Backend::Sqlite => 127,
+        }
+    }
+
+    /// Whether committing one write on this engine commits every other write
+    /// waiting beside it.
+    ///
+    /// A document engine keeps the store in one file and rewrites the whole of
+    /// it to save any of it, so `flush_prefix` there ignores its prefix and
+    /// calls `save_now`: asking for one value to be durable makes every
+    /// buffered value durable with it. redb and sqlite commit the write that
+    /// was asked for and leave the rest in the buffer.
+    ///
+    /// The document engines are not going to be taught otherwise. Splitting an
+    /// in-memory document into per-key writes buys nothing a caller asked for -
+    /// the file is rewritten either way - and would exist only to make the two
+    /// kinds of engine behave alike. So this is the answer rather than a gap,
+    /// and the tests read it from here instead of each naming a number.
+    ///
+    /// What it decides is what survives a crash, which is the one place the
+    /// difference shows from outside: `tests/durability_crash.rs` kills a
+    /// process with one durable write and one plain one pending, and asks
+    /// this.
+    pub const fn a_commit_covers_the_whole_store(self) -> bool {
+        match self {
+            #[cfg(feature = "redb")]
+            Backend::Redb => false,
+            #[cfg(feature = "json")]
+            Backend::Json => true,
+            #[cfg(feature = "toml")]
+            Backend::Toml => true,
+            #[cfg(feature = "ron")]
+            Backend::Ron => true,
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => false,
+        }
+    }
+
+    /// Whether this engine can carry an integer that does not fit in an `i64`.
+    ///
+    /// TOML has one integer type and it is signed and 64 bits wide, so
+    /// `u64::MAX` has nowhere to go. Its own codec refuses the write, which is
+    /// loud enough while toml is the engine running - but a store on any other
+    /// engine that named toml in `portable_across` would otherwise take the
+    /// value and break the promise quietly.
+    pub const fn holds_an_integer_past_i64(self) -> bool {
+        match self {
+            #[cfg(feature = "redb")]
+            Backend::Redb => true,
+            #[cfg(feature = "json")]
+            Backend::Json => true,
+            #[cfg(feature = "toml")]
+            Backend::Toml => false,
+            #[cfg(feature = "ron")]
+            Backend::Ron => true,
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => true,
         }
     }
 
@@ -101,11 +163,15 @@ impl Backend {
     /// ron cannot, and the reason is its document type rather than its syntax:
     /// `ron::value::Value` holds nine shapes and none of them is a variant, so
     /// a value rendered as `On(3)` and parsed back into a `Value` arrives as a
-    /// sequence with the name gone. `Value` says so about itself - "this does
-    /// not support enums" - and the `to_value` that would avoid the round trip
-    /// is [ron-rs/ron#140], open since 2018 across four releases that were
-    /// each meant to carry it.
+    /// sequence with the name gone. Upstream lists it - "enums not supported"
+    /// is an open item of [ron-rs/ron#122] - and ron's own deserializer says
+    /// the same of itself.
     ///
+    /// Avoiding the round trip would take a `to_value`, which ron does not
+    /// have either: [ron-rs/ron#140], open since 2018 across four releases
+    /// that were each meant to carry it.
+    ///
+    /// [ron-rs/ron#122]: https://github.com/ron-rs/ron/issues/122
     /// [ron-rs/ron#140]: https://github.com/ron-rs/ron/issues/140
     pub const fn holds_enums(self) -> bool {
         match self {
@@ -248,7 +314,7 @@ pub const fn default_backend() -> Backend {
 /// // example that has to compile under every one of them names none.
 /// let store = StoreBuilder::located(|at| at.app_under(Layout::Native, "my-app", "settings"))?
 ///     .backend(default_backend())
-///     .debounce(Duration::from_millis(500))
+///     .disk(|d| d.debounce(Duration::from_millis(500)))
 ///     .file_write(|w| w.replacing(WriteAttempts::times(20).apart(Duration::from_millis(250))))
 ///     .build()?;
 /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
@@ -471,52 +537,40 @@ impl StoreBuilder {
 
     /// How long a write waits in the buffer before it is flushed.
     ///
-    /// Raising this batches more writes into one commit; lowering it narrows
-    /// the window a crash can take. Neither affects reads, which see buffered
-    /// writes immediately either way.
-    pub fn debounce(mut self, every: Duration) -> Self {
-        self.config.save_debounce = every;
-        self
-    }
-
-    /// How long the file must sit still before a change made outside the
-    /// process is read back.
+    /// When this store touches the file, and what it does when the file will
+    /// not be touched.
     ///
-    /// Nothing polls. The watcher is event-driven - inotify, ReadDirectoryChangesW,
-    /// FSEvents - and this is the quiet period after the last event before the
-    /// file is re-read, so an editor writing in several bursts is one re-read
-    /// rather than several. Lowering it makes an external edit visible sooner;
-    /// raising it costs nothing until somebody is writing the file
-    /// continuously.
-    pub fn watch_debounce(mut self, every: Duration) -> Self {
-        self.config.watch_debounce = every;
-        self
-    }
-
-    /// How long a failed background flush waits before trying again.
+    /// The closure is handed the defaults and gives back what it changed, so
+    /// nothing has to be restated and nothing can be silently zeroed by
+    /// forgetting to. See [`Disk`] for the knobs.
     ///
-    /// A retry carries the same buffered changes, tried again. Nothing is lost
-    /// between attempts.
-    pub fn retry_interval(mut self, every: Duration) -> Self {
-        self.config.retry_policy.interval = every;
-        self
-    }
+    /// ```no_run
+    /// # use amethystate::store::builder::StoreBuilder;
+    /// # use std::time::Duration;
+    /// let store = StoreBuilder::new("settings.json")
+    ///     .disk(|d| d.debounce(Duration::from_millis(200)))
+    ///     .build()?;
+    /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+    /// ```
+    pub fn disk(mut self, configure: impl FnOnce(Disk) -> Disk) -> Self {
+        let settled = configure(Disk {
+            save_debounce: self.config.save_debounce,
+            watch_debounce: self.config.watch_debounce,
+            retry_policy: self.config.retry_policy.clone(),
+            on_persist_failure: self.config.on_persist_failure.clone(),
+        });
 
-    /// How long a streak of failing flushes may run before the store says so
-    /// out loud.
-    ///
-    /// The flush keeps being retried until it lands or the store is dropped, so
-    /// a disk someone frees up heals it without a restart. This bounds how long
-    /// that goes on quietly before [`StoreBuilder::on_persist_failure`] is
-    /// asked what writers should be told.
-    pub fn retry_budget(mut self, within: Duration) -> Self {
-        self.config.retry_policy.budget = within;
+        self.config.save_debounce = settled.save_debounce;
+        self.config.watch_debounce = settled.watch_debounce;
+        self.config.retry_policy = settled.retry_policy;
+        self.config.on_persist_failure = settled.on_persist_failure;
         self
     }
 
     /// How hard one write to one file fights before it reports a failure.
     ///
-    /// This sits inside a single flush attempt, below [`retry_interval`]: only
+    /// This sits inside a single flush attempt, below [`Disk::retry_every`]:
+    /// only
     /// once it has run out does a flush count as having failed at all. It
     /// applies to the text engines, which replace a file to write it; `redb`
     /// and `sqlite` hold their own handle.
@@ -532,8 +586,6 @@ impl StoreBuilder {
     ///     .build()?;
     /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
     /// ```
-    ///
-    /// [`retry_interval`]: StoreBuilder::retry_interval
     pub fn file_write(
         mut self,
         configure: impl FnOnce(FileWritePolicy) -> FileWritePolicy,
@@ -563,38 +615,6 @@ impl StoreBuilder {
     /// as the requirement really is.
     pub fn limits(mut self, configure: impl FnOnce(WriteLimits) -> WriteLimits) -> Self {
         self.config.limits = configure(std::mem::take(&mut self.config.limits));
-        self
-    }
-
-    /// Runs once per failing streak, with the failure, when a flush has been
-    /// failing for longer than the retry budget - after any write awaiting
-    /// that flush has been told it failed.
-    ///
-    /// What it returns decides what writers see from then until a flush
-    /// lands: an error each ([`AfterGivingUp::Fail`], the default without a
-    /// callback), nothing at all ([`AfterGivingUp::Ignore`]), or a panic
-    /// ([`AfterGivingUp::Poison`]).
-    ///
-    /// ```no_run
-    /// # use amethystate::store::builder::StoreBuilder;
-    /// # use amethystate::store::config::AfterGivingUp;
-    /// # use amethystate::store::StorageError;
-    /// let store = StoreBuilder::new("./settings")
-    ///     .on_persist_failure(|failure| match failure.current_context() {
-    ///         // A value this format cannot hold will not become writable by
-    ///         // being tried again in five seconds.
-    ///         StorageError::Codec => AfterGivingUp::Poison,
-    ///         // A full disk is usually someone deleting something.
-    ///         _ => AfterGivingUp::Ignore,
-    ///     })
-    ///     .build()?;
-    /// # Ok::<(), error_stack::Report<StorageError>>(())
-    /// ```
-    pub fn on_persist_failure<F>(mut self, callback: F) -> Self
-    where
-        F: Fn(&Report<StorageError>) -> AfterGivingUp + Send + Sync + 'static,
-    {
-        self.config.on_persist_failure = Some(Arc::new(callback));
         self
     }
 
@@ -708,7 +728,12 @@ impl StoreBuilder {
         self
     }
 
-    /// Opens the store.
+    /// Opens the store, running the migrations declared by hand and no others.
+    ///
+    /// `#[migrate]` steps are collected by
+    /// [`StoreBuilder::build_with_migration`], which is the only path that
+    /// finds them; a store opened here never sees them and says nothing about
+    /// it.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;

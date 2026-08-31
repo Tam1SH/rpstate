@@ -20,7 +20,7 @@ const CHILD: &str = "AME_DURABILITY_CHILD";
 fn write_then_abort(backend: Backend, path: &Path) -> ! {
     let store = StoreBuilder::new(path)
         .backend(backend)
-        .debounce(Duration::from_secs(60))
+        .disk(|d| d.debounce(Duration::from_secs(60)))
         .build()
         .unwrap();
 
@@ -41,21 +41,7 @@ fn write_then_abort(backend: Backend, path: &Path) -> ! {
     std::process::abort();
 }
 
-/// How much of what was pending a commit takes with it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum Granularity {
-    /// The commit covers the durable write and nothing else, so a plain write
-    /// still buffered when the process died is gone.
-    OneWrite,
-
-    /// The commit covers the whole store, so every buffered write rides along.
-    /// The text engines rewrite the document to save any of it - `flush_prefix`
-    /// there ignores its prefix and calls `save_now`.
-    EveryWrite,
-}
-
-fn crash_then_reopen(test_name: &str, backend: Backend, granularity: Granularity) {
+fn crash_then_reopen(test_name: &str, backend: Backend) {
     if let Ok(child_path) = std::env::var(CHILD) {
         write_then_abort(backend, Path::new(&child_path));
     }
@@ -88,56 +74,36 @@ fn crash_then_reopen(test_name: &str, backend: Backend, granularity: Granularity
     );
 
     let plain = n.get::<u16>("plain").unwrap();
-    match granularity {
-        Granularity::OneWrite => assert_eq!(
-            plain, None,
-            "the plain write was still buffered and died with the process"
-        ),
-        Granularity::EveryWrite => assert_eq!(
+    if backend.a_commit_covers_the_whole_store() {
+        assert_eq!(
             plain,
             Some(777),
             "committing anything on this engine commits everything"
-        ),
+        );
+    } else {
+        assert_eq!(
+            plain, None,
+            "the plain write was still buffered and died with the process"
+        );
     }
 }
 
 macro_rules! durability_across_a_crash {
-    ($feature:literal, $name:ident, $backend:expr, $granularity:expr) => {
+    ($feature:literal, $name:ident, $backend:expr) => {
         #[cfg(feature = $feature)]
         #[test]
         fn $name() {
-            crash_then_reopen(stringify!($name), $backend, $granularity);
+            crash_then_reopen(stringify!($name), $backend);
         }
     };
 }
 
-durability_across_a_crash!(
-    "redb",
-    a_durable_write_survives_a_crash_on_redb,
-    Backend::Redb,
-    Granularity::OneWrite
-);
+durability_across_a_crash!("redb", a_durable_write_survives_a_crash_on_redb, Backend::Redb);
 durability_across_a_crash!(
     "sqlite",
     a_durable_write_survives_a_crash_on_sqlite,
-    Backend::Sqlite,
-    Granularity::OneWrite
+    Backend::Sqlite
 );
-durability_across_a_crash!(
-    "json",
-    a_durable_write_survives_a_crash_on_json,
-    Backend::Json,
-    Granularity::EveryWrite
-);
-durability_across_a_crash!(
-    "toml",
-    a_durable_write_survives_a_crash_on_toml,
-    Backend::Toml,
-    Granularity::EveryWrite
-);
-durability_across_a_crash!(
-    "ron",
-    a_durable_write_survives_a_crash_on_ron,
-    Backend::Ron,
-    Granularity::EveryWrite
-);
+durability_across_a_crash!("json", a_durable_write_survives_a_crash_on_json, Backend::Json);
+durability_across_a_crash!("toml", a_durable_write_survives_a_crash_on_toml, Backend::Toml);
+durability_across_a_crash!("ron", a_durable_write_survives_a_crash_on_ron, Backend::Ron);

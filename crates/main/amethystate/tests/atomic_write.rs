@@ -453,8 +453,8 @@ fn a_policy_that_says_not_to_retry_is_obeyed() {
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn valid_content_followed_by_rubbish_is_refused() {
-    let path = TempPath::new("atomic_rubbish");
+fn a_whole_document_with_bytes_left_after_its_end_is_refused() {
+    let path = TempPath::new("atomic_trailing_bytes");
 
     {
         let store = StoreBuilder::new(path.path())
@@ -478,6 +478,7 @@ fn valid_content_followed_by_rubbish_is_refused() {
             .backend(common::text_backend())
             .build()
             .is_err(),
-        "a file whose tail is rubbish parsed as if the rubbish were not there"
+        "the document parsed and what followed it was never looked at, which is \
+         how a shorter write over a longer file reads as healthy"
     );
 }

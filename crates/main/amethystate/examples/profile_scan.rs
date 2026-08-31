@@ -75,7 +75,7 @@ fn main() {
 
     let path = TempPath::new("profile-scan");
     let store: Store = StoreBuilder::new(path.path())
-        .debounce(Duration::from_secs(600))
+        .disk(|d| d.debounce(Duration::from_secs(600)))
         .parallel_reads(parallel)
         .build()
         .unwrap();

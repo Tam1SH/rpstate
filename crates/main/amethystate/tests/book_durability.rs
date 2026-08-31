@@ -100,7 +100,7 @@ fn the_window_is_set_at_the_builder() -> Result<(), Box<dyn Error + Send + Sync>
 
     //@show narrowing the window
     let store = StoreBuilder::new(path.path())
-        .debounce(Duration::from_millis(50))
+        .disk(|d| d.debounce(Duration::from_millis(50)))
         .build()?;
     //@show-end
 

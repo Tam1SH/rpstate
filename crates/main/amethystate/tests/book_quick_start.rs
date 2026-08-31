@@ -55,7 +55,7 @@ fn opening_a_store_and_reading_a_field() -> Result<(), Box<dyn Error + Send + Sy
 
     //@show opening a store you hold yourself
     let store = StoreBuilder::new(settings)
-        .debounce(Duration::from_millis(500))
+        .disk(|d| d.debounce(Duration::from_millis(500)))
         .build()?;
 
     let state = NetworkState::new_with(&store)?;

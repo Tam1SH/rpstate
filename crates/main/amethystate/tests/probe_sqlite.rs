@@ -33,8 +33,10 @@ fn ns(joined: &str) -> StorePath {
 fn open(path: &Path) -> StorageResult<Store> {
     StoreBuilder::new(path)
         .backend(Backend::Sqlite)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build()
 }
 
@@ -198,10 +200,15 @@ fn nest_survives(label: &str, segments: usize, value: u32) -> bool {
     nest_roundtrip(label, segments, value) == Ok(value)
 }
 
-/// The depth a value may reach before sqlite stops reading it back, found by
-/// bisection.
+/// Where a value stops round-tripping, and which half of the store stopped it.
+///
+/// The number itself is not the finding - it moves with the ceiling and with
+/// how many levels the path spends. What matters is that the first depth that
+/// does not come back is one the **write** turned away, not one it took and
+/// the reader could not return. The second is a value committed and lost, and
+/// the ceiling exists so that it cannot happen.
 #[test]
-fn value_depth_boundary() {
+fn the_first_depth_that_fails_is_refused_rather_than_lost() {
     thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(|| {
@@ -210,10 +217,6 @@ fn value_depth_boundary() {
                 println!("value depth: {ceiling} still reads back");
                 return;
             }
-            println!(
-                "value depth {ceiling}: {:?}",
-                nest_roundtrip("sq_depth_hi_why", 1, ceiling)
-            );
 
             let mut good = 0u32;
             let mut bad = ceiling;
@@ -225,14 +228,14 @@ fn value_depth_boundary() {
                     bad = mid;
                 }
             }
+
+            let why = nest_roundtrip("sq_depth_edge", 1, bad)
+                .expect_err("the first lost depth came back after all");
             println!("value depth at a two-level path: last kept = {good}, first lost = {bad}");
-            println!(
-                "what {bad} does: {:?}",
-                nest_roundtrip("sq_depth_edge", 1, bad)
-            );
-            panic!(
-                "a value nested {bad} deep is accepted by the write and does not read \
-                 back; {good} does"
+
+            assert!(
+                why.starts_with("write:"),
+                "a value nested {bad} deep was taken and cannot be read back: {why}"
             );
         })
         .unwrap()
@@ -240,27 +243,44 @@ fn value_depth_boundary() {
         .unwrap();
 }
 
-/// Whether the levels of the path are spent out of the same budget as the
-/// value.
+/// The path spends the value's budget, and where it runs out the write is
+/// refused rather than taken.
+///
+/// One budget for the two is the decision `Screening::for_value` records: on a
+/// text engine the path's levels become the document's, so a shallow value at
+/// a deep path is exactly as unreadable as the reverse, and the flat engines
+/// pay a handful of levels to be spared a second rule. What must not happen is
+/// the same value being taken at a deep path and lost.
 #[test]
-fn path_depth_does_not_spend_the_value_budget() {
+fn a_deeper_path_leaves_the_value_less_room_and_says_so() {
     thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(|| {
-            let mut disagreed = Vec::new();
+            let mut taken_and_lost = Vec::new();
+            let mut narrowed = 0;
+
             for probe in [64u32, 120, 126, 127, 128, 200, 250, 500, 1000] {
                 let shallow = nest_roundtrip(&format!("sq_pd_s{probe}"), 1, probe);
                 let deeper = nest_roundtrip(&format!("sq_pd_d{probe}"), 60, probe);
                 println!("Nest({probe}): at 1 level {shallow:?}, at 60 levels {deeper:?}");
-                if shallow == Ok(probe) && deeper != Ok(probe) {
-                    disagreed.push(format!("Nest({probe}): 1 level ok, 60 levels {deeper:?}"));
+
+                match (&shallow, &deeper) {
+                    (Ok(_), Err(why)) if why.starts_with("write:") => narrowed += 1,
+                    (Ok(_), Err(why)) => {
+                        taken_and_lost.push(format!("Nest({probe}) at 60 levels: {why}"))
+                    }
+                    _ => {}
                 }
             }
+
             assert!(
-                disagreed.is_empty(),
-                "the same value reads back at a shallow path and not at a deep one, \
-                 so the path spends the value's budget:\n{}",
-                disagreed.join("\n")
+                taken_and_lost.is_empty(),
+                "a deep path took a value it cannot read back:\n{}",
+                taken_and_lost.join("\n")
+            );
+            assert!(
+                narrowed > 0,
+                "no depth was narrowed by the path, so this proves nothing"
             );
         })
         .unwrap()
@@ -268,21 +288,31 @@ fn path_depth_does_not_spend_the_value_budget() {
         .unwrap();
 }
 
-/// A store must still open after it has written a value itself.
+/// A store must still open the file it wrote itself, which it now guarantees
+/// by never writing this one.
+///
+/// The question was whether a value deep enough to defeat the reader leaves a
+/// file the store cannot reopen. It cannot arise any more: the write is
+/// refused, and the file is as it was.
 #[test]
-fn a_deeply_nested_value_leaves_a_store_that_opens() {
+fn a_value_too_deep_to_reopen_over_never_reaches_the_file() {
     thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(|| {
             let file = TempPath::new("sq_depth_reopen");
             {
                 let store = opened(file.path());
-                store
+                store.set(["probe", "kept"], &1u32).unwrap();
+                let refused = store
                     .set(["probe", "v"], &Nest(4096))
-                    .expect("the write is accepted");
+                    .expect_err("a value 4096 deep was taken");
+                assert!(format!("{refused:?}").contains("deeper than"));
                 store.save_now().unwrap();
             }
-            open(file.path()).expect("the store cannot open the file it wrote itself");
+
+            let store = open(file.path()).expect("the store cannot open the file it wrote itself");
+            assert_eq!(store.get::<u32>(["probe", "kept"]).unwrap(), Some(1));
+            assert_eq!(store.get::<u32>(["probe", "v"]).unwrap(), None);
         })
         .unwrap()
         .join()

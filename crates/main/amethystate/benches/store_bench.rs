@@ -23,7 +23,7 @@ fn setup_store() -> Store {
     }
 
     StoreBuilder::new(&path)
-        .debounce(Duration::from_secs(100))
+        .disk(|d| d.debounce(Duration::from_secs(100)))
         .build()
         .unwrap()
 }

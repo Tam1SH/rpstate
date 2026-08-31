@@ -79,7 +79,7 @@ fn a_reader_never_meets_a_half_written_file() {
 
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
-        .debounce(Duration::from_millis(1))
+        .disk(|d| d.debounce(Duration::from_millis(1)))
         .build()
         .unwrap();
     let n = field_with_path::<u64>(&store, ["stress", "n"], 0, Uuid::new_v4()).unwrap();
@@ -180,7 +180,7 @@ fn writers_racing_each_other_all_land() {
     {
         let store = StoreBuilder::new(path.path())
             .backend(common::text_backend())
-            .debounce(Duration::from_millis(1))
+            .disk(|d| d.debounce(Duration::from_millis(1)))
             .build()
             .unwrap();
 
@@ -247,7 +247,7 @@ fn a_holder_coming_and_going_never_leaves_a_broken_file() {
 
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
-        .debounce(Duration::from_millis(1))
+        .disk(|d| d.debounce(Duration::from_millis(1)))
         .build()
         .unwrap();
     let n = field_with_path::<u64>(&store, ["stress", "n"], 0, Uuid::new_v4()).unwrap();
@@ -343,7 +343,7 @@ fn the_metadata_file_is_never_half_written_either() {
 
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
-        .debounce(Duration::from_millis(1))
+        .disk(|d| d.debounce(Duration::from_millis(1)))
         .build()
         .unwrap();
 

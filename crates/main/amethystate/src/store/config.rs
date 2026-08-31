@@ -18,6 +18,101 @@ pub struct RetryPolicy {
     pub budget: Duration,
 }
 
+/// When the store touches the file, and what it does when the file will not
+/// be touched.
+///
+/// Two-way on purpose. `debounce`, `retry_every`, `give_up_after` and
+/// `on_failure` are about writing; `watch_every` is about noticing somebody
+/// else's write. Both are the same question - how this store and this file
+/// keep up with each other - so they are one group rather than two.
+///
+/// Reached through [`StoreBuilder::disk`], which hands the defaults in and
+/// takes the result back, so only what changes is written:
+///
+/// ```no_run
+/// # use amethystate::store::builder::StoreBuilder;
+/// # use std::time::Duration;
+/// let store = StoreBuilder::new("settings.json")
+///     .disk(|d| d.debounce(Duration::from_millis(200))
+///                .watch_every(Duration::from_secs(1)))
+///     .build()?;
+/// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+/// ```
+///
+/// A named `fn(Disk) -> Disk` goes wherever the closure does, so a house style
+/// shared by several stores is a function with a name rather than a value
+/// passed around.
+///
+/// [`StoreBuilder::disk`]: crate::store::builder::StoreBuilder::disk
+#[derive(Clone)]
+pub struct Disk {
+    pub save_debounce: Duration,
+    pub watch_debounce: Duration,
+    pub retry_policy: RetryPolicy,
+    pub on_persist_failure: Option<PersistFailureCallback>,
+}
+
+impl Disk {
+    /// How long the buffer sits still before a write reaches the file.
+    ///
+    /// Raising this batches more writes into one commit; lowering it narrows
+    /// the window a crash can take. Neither affects reads, which see buffered
+    /// writes immediately either way.
+    pub fn debounce(mut self, every: Duration) -> Self {
+        self.save_debounce = every;
+        self
+    }
+
+    /// How long the file must sit still before a change made outside the
+    /// process is read back.
+    ///
+    /// Nothing polls. The watcher is event-driven - inotify,
+    /// ReadDirectoryChangesW, FSEvents - and this is the quiet period after the
+    /// last event before the file is re-read, so an editor writing in several
+    /// bursts is one re-read rather than several. Lowering it makes an external
+    /// edit visible sooner; raising it costs nothing until somebody is writing
+    /// the file continuously.
+    pub fn watch_every(mut self, every: Duration) -> Self {
+        self.watch_debounce = every;
+        self
+    }
+
+    /// How long a failed background flush waits before trying again.
+    ///
+    /// A retry carries the same buffered changes, tried again. Nothing is lost
+    /// between attempts.
+    pub fn retry_every(mut self, every: Duration) -> Self {
+        self.retry_policy.interval = every;
+        self
+    }
+
+    /// How long a streak of failing flushes may run before the store says so
+    /// out loud.
+    ///
+    /// The flush keeps being retried until it lands or the store is dropped, so
+    /// a disk someone frees up heals it without a restart. This bounds how long
+    /// that goes on quietly before [`Disk::on_failure`] is asked what writers
+    /// should be told.
+    pub fn give_up_after(mut self, within: Duration) -> Self {
+        self.retry_policy.budget = within;
+        self
+    }
+
+    /// Runs once per failing streak, with the failure, when a flush has been
+    /// failing for longer than [`Disk::give_up_after`].
+    ///
+    /// What it returns decides what writers are told from then on. Without one
+    /// the store keeps retrying quietly, which is right for a disk that fills
+    /// and is emptied again and wrong for a value the format can never hold.
+    pub fn on_failure<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&Report<StorageError>) -> AfterGivingUp + Send + Sync + 'static,
+    {
+        self.on_persist_failure = Some(Arc::new(callback));
+        self
+    }
+}
+
 /// How hard one step of a file write is fought before it is given up on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteAttempts {
@@ -197,6 +292,15 @@ impl WriteLimits {
                 .portable_across
                 .iter()
                 .all(|engine| engine.holds_enums())
+    }
+
+    /// The same for an integer wider than an `i64`, which toml has no room for.
+    pub fn holds_an_integer_past_i64(&self, running: Backend) -> bool {
+        running.holds_an_integer_past_i64()
+            && self
+                .portable_across
+                .iter()
+                .all(|engine| engine.holds_an_integer_past_i64())
     }
 
     /// The same for `Some(None)`, which every engine but ron reads back as

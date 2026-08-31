@@ -89,7 +89,7 @@ const OPEN_SIZES: [usize; 5] = [10, 1_000, 10_000, 100_000, 1_000_000];
 fn store(tag: &str) -> (TempPath, Store) {
     let path = TempPath::new(tag);
     let store = StoreBuilder::new(path.path())
-        .debounce(Duration::from_secs(100))
+        .disk(|d| d.debounce(Duration::from_secs(100)))
         .build()
         .unwrap();
     (path, store)
@@ -230,7 +230,7 @@ fn bench_windowed_reads(c: &mut Criterion) {
 
         let path = TempPath::new(&format!("map-window-heavy-{n}"));
         let heavy_store = StoreBuilder::new(path.path())
-            .debounce(Duration::from_secs(100))
+            .disk(|d| d.debounce(Duration::from_secs(100)))
             .build()
             .unwrap();
         let heavy = heavy_store.kv().map::<String, String>("bench").unwrap();

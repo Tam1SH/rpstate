@@ -301,7 +301,7 @@ fn one_buffered_write_does_not_erase_what_another_store_committed() {
 
         let first = StoreBuilder::new(path.path())
             .backend(backend)
-            .debounce(Duration::from_secs(60))
+            .disk(|d| d.debounce(Duration::from_secs(60)))
             .build()
             .unwrap();
         first.kv().namespace(PREFIX).set("a", &111u32).unwrap();
@@ -309,7 +309,7 @@ fn one_buffered_write_does_not_erase_what_another_store_committed() {
         {
             let second = StoreBuilder::new(path.path())
                 .backend(backend)
-                .debounce(Duration::from_secs(60))
+                .disk(|d| d.debounce(Duration::from_secs(60)))
                 .build()
                 .unwrap();
             second.kv().namespace(PREFIX).set("d", &444u32).unwrap();

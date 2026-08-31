@@ -14,8 +14,10 @@ fn the_two_intervals_are_set_apart() -> Result<(), Box<dyn Error + Send + Sync>>
 
     //@show how long a write waits, and how long an outside edit settles
     let store = StoreBuilder::new(settings)
-        .debounce(Duration::from_millis(500))
-        .watch_debounce(Duration::from_secs(2))
+        .disk(|d| {
+            d.debounce(Duration::from_millis(500))
+                .watch_every(Duration::from_secs(2))
+        })
         .build()?;
     //@show-end
 
@@ -30,11 +32,13 @@ fn a_failing_flush_is_retried_and_then_reported() -> Result<(), Box<dyn Error + 
 
     //@show how long a failing flush stays quiet
     let store = StoreBuilder::new(settings)
-        .retry_interval(Duration::from_millis(200))
-        .retry_budget(Duration::from_secs(10))
-        .on_persist_failure(|failure| match failure.current_context() {
-            StorageError::Codec => AfterGivingUp::Poison,
-            _ => AfterGivingUp::Ignore,
+        .disk(|d| {
+            d.retry_every(Duration::from_millis(200))
+                .give_up_after(Duration::from_secs(10))
+                .on_failure(|failure| match failure.current_context() {
+                    StorageError::Codec => AfterGivingUp::Poison,
+                    _ => AfterGivingUp::Ignore,
+                })
         })
         .build()?;
     //@show-end

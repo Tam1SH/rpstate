@@ -29,7 +29,7 @@ fn answered_within<T: Send + 'static>(what: impl FnOnce() -> T + Send + 'static)
 fn a_durable_write_after_a_close_is_refused_rather_than_awaited() {
     let path = TempPath::new("durable_after_close");
     let store = StoreBuilder::new(path.path())
-        .debounce(Duration::from_secs(600))
+        .disk(|d| d.debounce(Duration::from_secs(600)))
         .build()
         .unwrap();
     let state = Settings::new_with(&store).unwrap();
@@ -46,7 +46,7 @@ fn a_durable_write_after_a_close_is_refused_rather_than_awaited() {
 fn an_awaited_durable_write_after_a_close_is_refused_too() {
     let path = TempPath::new("durable_async_after_close");
     let store = StoreBuilder::new(path.path())
-        .debounce(Duration::from_secs(600))
+        .disk(|d| d.debounce(Duration::from_secs(600)))
         .build()
         .unwrap();
     let state = Settings::new_with(&store).unwrap();

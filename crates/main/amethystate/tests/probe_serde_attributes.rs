@@ -132,8 +132,10 @@ fn engines() -> Vec<(&'static str, Backend)> {
 fn open(file: &TempPath, backend: Backend) -> Result<Store, String> {
     StoreBuilder::new(file.path())
         .backend(backend)
-        .debounce(Duration::from_secs(60))
-        .watch_debounce(Duration::from_secs(60))
+        .disk(|d| {
+            d.debounce(Duration::from_secs(60))
+                .watch_every(Duration::from_secs(60))
+        })
         .build()
         .map_err(|e| brief(&format!("{e:#}")))
 }

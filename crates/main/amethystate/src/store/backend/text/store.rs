@@ -937,6 +937,19 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         commit
     }
 
+    /// Saves the whole document, whatever prefix was asked for.
+    ///
+    /// The store is one file and rendering any of it renders all of it, so
+    /// there is no narrower thing to do. Holding some keys back would mean
+    /// building a second document to write and re-reading it afterwards, which
+    /// buys a caller nothing and exists only to have the document engines
+    /// behave like the database ones.
+    ///
+    /// [`Backend::a_commit_covers_the_whole_store`] is where that is written
+    /// down, and it is what the durability tests ask rather than each naming
+    /// the answer for its own engine.
+    ///
+    /// [`Backend::a_commit_covers_the_whole_store`]: crate::store::builder::Backend::a_commit_covers_the_whole_store
     fn flush_prefix(&self, prefix: &StorePath) -> StorageResult<()> {
         self.save_now().attach_prefix(prefix)
     }

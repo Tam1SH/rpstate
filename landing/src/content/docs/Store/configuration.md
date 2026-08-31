@@ -13,17 +13,25 @@ is for the cases where it is not.
 <!-- shown: how long a write waits, and how long an outside edit settles -->
 ```rust
 let store = StoreBuilder::new(settings)
-    .debounce(Duration::from_millis(500))
-    .watch_debounce(Duration::from_secs(2))
+    .disk(|d| {
+        d.debounce(Duration::from_millis(500))
+            .watch_every(Duration::from_secs(2))
+    })
     .build()?;
 ```
 <!-- /shown -->
 
-`debounce` is how long a write sits in the buffer before the flush. Raising it
-batches more writes into one commit; lowering it narrows the window a crash can
-take. Reads are unaffected either way - a buffered write is visible at once.
+Everything about when this store touches its file lives under
+`StoreBuilder::disk`, which hands the defaults in and takes back what you
+changed - so only the settings you name are written, and forgetting one cannot
+zero the rest.
 
-`watch_debounce` is the other direction: how long the file has to sit still
+`Disk::debounce` is how long a write sits in the buffer before the flush.
+Raising it batches more writes into one commit; lowering it narrows the window
+a crash can take. Reads are unaffected either way - a buffered write is visible
+at once.
+
+`Disk::watch_every` is the other direction: how long the file has to sit still
 before a change made outside the process is read back. Nothing polls - the
 watcher is event-driven, on inotify, `ReadDirectoryChangesW` or FSEvents
 depending on the platform - and this is the quiet period after the last event,
@@ -43,19 +51,21 @@ does not stop:
 <!-- shown: how long a failing flush stays quiet -->
 ```rust
 let store = StoreBuilder::new(settings)
-    .retry_interval(Duration::from_millis(200))
-    .retry_budget(Duration::from_secs(10))
-    .on_persist_failure(|failure| match failure.current_context() {
-        StorageError::Codec => AfterGivingUp::Poison,
-        _ => AfterGivingUp::Ignore,
+    .disk(|d| {
+        d.retry_every(Duration::from_millis(200))
+            .give_up_after(Duration::from_secs(10))
+            .on_failure(|failure| match failure.current_context() {
+                StorageError::Codec => AfterGivingUp::Poison,
+                _ => AfterGivingUp::Ignore,
+            })
     })
     .build()?;
 ```
 <!-- /shown -->
 
-`retry_interval` is the gap between attempts. `retry_budget` is how long a
-failing streak may run before `on_persist_failure` is asked what writers should
-be told from then on:
+`Disk::retry_every` is the gap between attempts. `Disk::give_up_after` is how
+long a failing streak may run before `Disk::on_failure` is asked what writers
+should be told from then on:
 
 | answer | what a writer sees |
 | --- | --- |
@@ -70,7 +80,8 @@ render is in the same state on every attempt.
 
 Reads carry on in every case, and what is buffered stays buffered - which is
 also the catch. Retrying is unconditional: the same flush is attempted every
-`retry_interval` until it lands or the store is dropped, whatever failed. This
+`Disk::retry_every` until it lands or the store is dropped, whatever failed.
+This
 answers who is told, and never removes the cause.
 
 Most codec failures never get this far. A value is encoded where it is written,
