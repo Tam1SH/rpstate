@@ -8,14 +8,12 @@ use std::sync::Arc;
 ///
 /// Public because a backend that queries by comparison has to reason about it:
 /// the upper bound of a subtree's range is this character's successor, and
-/// spelling that out is better than a backend picking a high character and
-/// hoping nothing sorts above it.
+/// spelling it out here is what makes every backend compute the same bound.
 pub const SEPARATOR: char = '.';
 
 pub(crate) const ESCAPE: char = '\\';
 
-/// Where a value lives in the store, as the levels it is under rather than as
-/// one string.
+/// Where a value lives in the store, as the levels it is under.
 ///
 /// A path is built from segments and only from segments, so a name is a name:
 /// putting `"dark.mode"` in one addresses a single value with a dot in it, not
@@ -42,11 +40,10 @@ enum Segments {
     /// allocation for the list and one for each level, taken on every key of
     /// every scan, for levels nobody looks at.
     ///
-    /// Whoever does look at them walks the string then, and carries nothing:
-    /// a cache would be an allocation on every key a scan reads, for levels
-    /// the flat engines never ask about. The paths that are walked level by
-    /// level are the ones the document engines build *from* levels, and those
-    /// are `Owned`.
+    /// Whoever does look at them walks the string then and carries nothing
+    /// away, so a scan pays for levels only where something reads them. The
+    /// paths that are walked level by level are the ones the document engines
+    /// build *from* levels, and those are `Owned`.
     ///
     /// Which is why a level comes back as a `Cow`: one holding an escaped
     /// separator is not a run of the joined string and has to be assembled,
@@ -216,7 +213,8 @@ impl StorePath {
     /// Which is where the two differ: a written-out empty list means the root,
     /// and a computed one that filtered down to nothing means nobody decided.
     /// The second is refused with [`StorePathError::EmptyPath`], because it
-    /// used to name the whole store and a write through it replaced everything.
+    /// would name the whole store, and a write through it would replace
+    /// everything.
     pub fn try_from_segments<I, S>(segments: I) -> Result<Self, StorePathError>
     where
         I: IntoIterator<Item = S>,

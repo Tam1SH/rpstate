@@ -1,24 +1,16 @@
 //! A serializer that counts what goes through it and hands everything on.
 //!
-//! The store used to measure a value in a pass of its own and then let the
-//! codec serialize it again. That is the same work twice on every write, and
-//! worse than wasteful: the two passes were not the same pass. The counter
-//! answered `is_human_readable` for itself, so a value whose `Serialize`
-//! branches on it - `uuid` writes a string to json and sixteen bytes to
-//! msgpack, and it is far from alone - showed one shape to the count and
-//! another to the file.
+//! The count runs inside the codec's own pass, so one pass does both jobs and
+//! `is_human_readable` is the codec's own answer - the question is forwarded to
+//! it. A value whose `Serialize` branches on that answer, as `uuid` does when
+//! it writes a string to json and sixteen bytes to msgpack, therefore shows the
+//! count the shape that reaches the file.
 //!
-//! Wrapping the codec's own serializer settles both. There is one pass,
-//! `is_human_readable` is the codec's own answer because the question is
-//! forwarded to it, and a sixth engine cannot be added to one of the two halves
-//! and forgotten in the other.
-//!
-//! A decorator over `Serializer` alone would not do it. `serialize_some` and
-//! the compound methods take the nested value and hand it to *their* inner
-//! serializer, so everything below the first level would go past uncounted. So
-//! each nested value is paired with the budget and re-wraps whatever serializer
-//! it is given - the shape `serde_stacker` uses to grow a stack at every
-//! recursion point, counting instead of growing.
+//! `serialize_some` and the compound methods take the nested value and hand it
+//! to *their* inner serializer, so the wrapper has to reach every level through
+//! the value: each nested value is paired with the budget and re-wraps whatever
+//! serializer it is given. This is the shape `serde_stacker` uses to grow a
+//! stack at every recursion point, counting where that one grows.
 
 use serde::ser::{
     self, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant,
@@ -51,10 +43,9 @@ impl Depth {
     /// A budget nothing can exhaust, for the store's own writes.
     ///
     /// The schema snapshot, the migration log and the initialization markers
-    /// are shapes this crate declares rather than shapes an application hands
-    /// over, and a schema deep enough to matter would have had its data refused
-    /// first. Spelled out so that a write with no limit is a decision someone
-    /// made rather than a parameter someone forgot.
+    /// are shapes this crate declares itself, and a schema deep enough to
+    /// matter would have had its data refused first. Spelled out so that a
+    /// write with no limit reads as a decision someone made.
     pub fn unlimited() -> Self {
         Self::new(usize::MAX)
     }
@@ -69,12 +60,11 @@ impl Depth {
 
     /// `value`, counted by whatever serializer it is eventually handed to.
     ///
-    /// The way in that a call site actually wants: a codec's entry point takes
-    /// the value and builds its own serializer inside, so there is nothing to
-    /// wrap from outside. Wrapping the value instead works whatever the codec
-    /// does with it, and `is_human_readable` is still the codec's own answer,
-    /// because the question reaches it through the wrapper rather than around
-    /// it.
+    /// The way in for a codec whose entry point takes the value and builds its
+    /// own serializer inside, where [`Depth::wrap`] has nothing to hold. The
+    /// budget travels with the value, so it works whatever the codec does with
+    /// it, and `is_human_readable` stays the codec's own answer because the
+    /// question reaches it through the wrapper.
     pub fn count<'v, T>(&self, value: &'v T) -> Counted<'v, '_, T>
     where
         T: Serialize + ?Sized,
@@ -128,7 +118,7 @@ pub struct Counting<'a, S> {
 /// The inner serializer reaches for a nested value on its own - through
 /// `serialize_some`, `serialize_element`, `serialize_field` - and hands it a
 /// serializer of its own making. Pairing the value with the budget is what puts
-/// the counter back in the way at every level rather than only the first.
+/// the counter back in the way at every one of those levels.
 pub struct Counted<'v, 'd, T: ?Sized> {
     value: &'v T,
     depth: &'d Depth,
@@ -306,9 +296,9 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         })
     }
 
-    /// The codec's own answer, which is the whole reason for wrapping rather
-    /// than counting alongside: a `Serialize` that branches on this must be
-    /// shown the shape that is going to be written.
+    /// The codec's own answer, which is the whole reason the count runs inside
+    /// its pass: a `Serialize` that branches on this must be shown the shape
+    /// that is going to be written.
     fn is_human_readable(&self) -> bool {
         self.inner.is_human_readable()
     }

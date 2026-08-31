@@ -117,7 +117,7 @@ impl<W: Watchable> Watch<W> {
     ///
     /// [`Watch::external`] drops those changes before the callback runs, which
     /// is usually what you want; take the id yourself when a write of your own
-    /// needs different treatment rather than none.
+    /// calls for its own handling.
     ///
     /// Dropping the returned handle unsubscribes.
     ///

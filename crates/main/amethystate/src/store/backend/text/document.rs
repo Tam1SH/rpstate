@@ -22,11 +22,10 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     fn deserialize_node<T: DeserializeOwned>(node: &Self::Node) -> StorageResult<T>;
     /// Renders `value` into a node, counting the levels as they go past.
     ///
-    /// `depth` is carried rather than measured beforehand: a pass of its own
-    /// would be the same work twice, and it would not be the same pass - a
-    /// `Serialize` that branches on `is_human_readable` shows one shape to a
-    /// counter that answers for itself and another to the codec. Wrapping the
-    /// value hands the question to whichever serializer really runs.
+    /// `depth` is carried into the codec's own pass, so the count sees the
+    /// shape the file gets: wrapping the value hands `is_human_readable` to
+    /// whichever serializer really runs, and a `Serialize` that branches on it
+    /// answers once.
     ///
     /// A refusal comes back as this codec's own error, because that is all a
     /// `Serializer` may return; [`Depth::overflowed`] is how a caller asks

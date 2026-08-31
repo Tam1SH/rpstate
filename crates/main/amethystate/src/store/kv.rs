@@ -46,14 +46,13 @@ impl Kv {
 
     /// A handle on everything under `name`.
     ///
-    /// Nesting is spelled here rather than punched into a string, so a name
-    /// stays a name: `namespace("ui")` then `set("dark.mode", ..)` addresses one
-    /// value called `dark.mode`, where a single `"ui.dark.mode"` would have been
-    /// three levels. The namespace's own name is read the same way: a separator
-    /// in it is part of it.
+    /// Nesting is spelled here, so a name stays a name: `namespace("ui")` then
+    /// `set("dark.mode", ..)` addresses one value called `dark.mode` under
+    /// `ui`. The namespace's own name is read the same way: a separator in it
+    /// is part of it.
     ///
-    /// Writes through a namespace carry the same provenance as the handle it
-    /// came from - it is a view on the same `Kv`, not a second writer.
+    /// A namespace is a view on the same `Kv`, so writes through it carry the
+    /// provenance of the handle it came from.
     ///
     /// # Panics
     ///
@@ -149,11 +148,11 @@ impl Kv {
 
     /// Writes a value at `path`, creating it or replacing what was there.
     ///
-    /// Returns only once the change is on disk rather than buffered.
-    /// Writes a value at `path`, creating it or replacing what was there.
+    /// The write is buffered and flushed on the store's own schedule;
+    /// [`Kv::durable`] is the form that returns once it is on disk.
     ///
-    /// Unlike [`ReactiveMap::update`] this has no strict variant: `Kv` is
-    /// addressed by path and has no notion of a key that must already exist.
+    /// `Kv` is addressed by path and has no notion of a key that must already
+    /// exist, so every write here creates as readily as it replaces.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -164,8 +163,8 @@ impl Kv {
     /// kv.set("theme", &"dark".to_string()).unwrap();
     /// assert_eq!(kv.get::<String>("theme").unwrap(), Some("dark".into()));
     ///
-    /// // A name is a name: a separator in one is part of it, and nesting is
-    /// // asked for through `namespace` rather than punctuated into a string.
+    /// // A name is a name: a separator in one is part of it, and `namespace`
+    /// // is how a level is asked for.
     /// kv.set("ui.theme", &"solarized".to_string()).unwrap();
     /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("solarized".into()));
     /// assert_eq!(kv.namespace("ui").get::<String>("theme").unwrap(), None);
@@ -180,10 +179,10 @@ impl Kv {
         Ok(())
     }
 
-    /// Drops whatever is at `path`.
+    /// Drops whatever is at `path`. Removing an absent path succeeds.
     ///
-    /// Returns only once the change is on disk rather than buffered.
-    /// Drops whatever is at `path`. Removing an absent path is not an error.
+    /// The removal is buffered and flushed on the store's own schedule;
+    /// [`Kv::durable`] is the form that returns once it is on disk.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -318,11 +317,10 @@ impl Kv {
     /// wrong thing: the field's subscription fails to decode and keeps its old
     /// value, and the next startup fails outright when it reads the path back.
     ///
-    /// What is owned is the declared path, not the prefix it sits under. A
-    /// prefix-wide refusal reads as ownership of a whole subtree, and settings
-    /// do not work that way: an extension, a theme, a person editing the file
-    /// all put their own keys beside the declared ones, and none of them
-    /// collide. `app.width` is owned; `app.myplugin.enabled` is nobody's.
+    /// What is owned is the declared path and whatever lies inside it. The
+    /// prefix it sits under stays open, so an extension, a theme or a person
+    /// editing the file can put their own keys beside the declared ones:
+    /// `app.width` is owned, and `app.myplugin.enabled` is nobody's.
     fn guard(&self, path: &StorePath) -> WriteResult<()> {
         let Some((found, struct_name)) = schema_collision(path) else {
             return Ok(());
@@ -346,8 +344,9 @@ impl Kv {
     /// schema declares *under* it is descended into rather than skipped, so an
     /// undeclared key beside a declared one is still removed.
     ///
-    /// This is not "restore defaults": the declared values are left exactly as
-    /// they are, and their initialization markers are untouched.
+    /// The declared values are left exactly as they are, and their
+    /// initialization markers are untouched; [`Kv::reset_to_defaults`] is the
+    /// call that seeds them again.
     ///
     /// Returns what went and what stayed, because a settings screen that resets
     /// something should be able to say what it reset.
@@ -474,9 +473,9 @@ pub enum Collision {
 
 /// How `path` meets the paths a schema declared, if it meets them at all.
 ///
-/// A node is neither owned nor owning: it holds nothing itself and is only the
-/// way to the paths below it, so `app.panel` meets a schema only through its
-/// children.
+/// A node holds nothing itself and is only the way to the paths below it, so
+/// `app.panel` meets a schema through its children, as a
+/// [`Collision::Holds`] naming one of them.
 fn collision(at: &StorePath, fields: &[FieldDescriptor], path: &StorePath) -> Option<Collision> {
     for field in fields {
         let Ok(declared) = at.try_push(field.name) else {
@@ -581,9 +580,8 @@ impl Durable<'_, Kv> {
 
     /// Writes a value at `path`, creating it or replacing what was there.
     ///
-    /// Resolves once the change is on disk rather than buffered.
-    /// Like every future, this does nothing until awaited - the write
-    /// included. See [`Durable::set_async`].
+    /// Resolves once the change is on disk. Like every future, this does
+    /// nothing until awaited - the write included.
     pub async fn set_async<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
         self.0.set(name, value)?;
         let path = self.0.resolve(name)?;
@@ -612,9 +610,8 @@ impl Durable<'_, Kv> {
 
     /// Drops whatever is at `path`.
     ///
-    /// Resolves once the change is on disk rather than buffered.
-    /// Like every future, this does nothing until awaited - the write
-    /// included. See [`Durable::set_async`].
+    /// Resolves once the change is on disk. Like every future, this does
+    /// nothing until awaited - the removal included.
     pub async fn remove_async(&self, name: &str) -> WriteResult<()> {
         self.0.remove(name)?;
         let path = self.0.resolve(name)?;

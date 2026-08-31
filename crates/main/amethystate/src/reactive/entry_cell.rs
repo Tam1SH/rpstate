@@ -16,8 +16,9 @@ where
     /// An entry cell that keeps the map alive, for handing one entry somewhere
     /// and letting go of the map.
     ///
-    /// [`ReactiveMap::entry_cell`] is a view and holds the map weakly, which is
-    /// the wrong default when the cell is the only handle that survives.
+    /// The cell owns the map, so it stays readable and writable for as long as
+    /// it is held. [`ReactiveMap::entry_cell`] is the view onto a map something
+    /// else keeps.
     pub fn into_entry_cell(self, key: K) -> ReactiveCell<V> {
         let cell = self.entry_cell(key);
         cell.owning(Arc::new(self))
@@ -25,15 +26,14 @@ where
 
     /// A live cell over one map entry.
     ///
-    /// The cell is a view, and it keeps only a weak reference to the map: once
-    /// the map is dropped every write fails and [`get`](ReactiveCell::get)
-    /// reads `None`, rather than the cell keeping the store file open. Where
-    /// the cell is the only handle that survives, use
+    /// The cell is a view and keeps only a weak reference to the map, so a
+    /// forgotten cell lets the store file close: once the map is dropped every
+    /// write fails and [`get`](ReactiveCell::get) reads `None`. Where the cell
+    /// is the only handle that survives, use
     /// [`ReactiveMap::into_entry_cell`].
     ///
     /// An absent key reads `None`, and writing to one fails - creating the
-    /// entry is [`ReactiveMap::insert`]'s job, not a side effect of writing
-    /// through a view of something that is not there.
+    /// entry is [`ReactiveMap::insert`]'s job.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;

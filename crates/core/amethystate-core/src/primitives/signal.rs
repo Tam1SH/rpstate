@@ -34,9 +34,9 @@ impl<T> Clone for Signal<T> {
 /// Dropping this ends the subscription, so it has to be held for as long as the
 /// callback should keep firing.
 ///
-/// Not `Clone`, and not by omission: this is the right to end one subscription,
-/// and a second copy of that right is a second way to end it rather than a
-/// second owner. Hand it to one place; `ReactiveScope` is where several are
+/// This is the right to end one subscription, and it is deliberately not
+/// `Clone`: a copy of that right would be a second way to end the same
+/// subscription. Hand it to one place; `ReactiveScope` is where several are
 /// held together.
 #[must_use = "dropping a subscription unsubscribes; bind it to keep it alive"]
 pub struct SignalSubscription {
@@ -220,10 +220,9 @@ impl<T> Signal<T> {
     /// signals holding equal values.
     ///
     /// An associated function like [`Arc::ptr_eq`], and named after it, because
-    /// `a == b` would read as a question about the values. Callers comparing
-    /// handles used to reach into `value` and call `Arc::ptr_eq` on it
-    /// themselves, which made every one of them depend on how a signal is put
-    /// together.
+    /// `a == b` would read as a question about the values. It is the whole of
+    /// what a caller needs to compare handles, so none of them has to know how
+    /// a signal is put together.
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Arc::ptr_eq(&a.value, &b.value)
     }

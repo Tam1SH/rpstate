@@ -20,10 +20,9 @@ impl fmt::Display for Claimed {
 /// Who owns what, so that two owners cannot write over each other.
 ///
 /// A claim is made where a path is composed - the constructor of a field or a
-/// map - and belongs to the *name* that made it, not to the handle. So the same
-/// schema claiming the same path again is a no-op, and reconstructing a struct
-/// in one process works; nothing has to be released, and there is no window
-/// between releasing and taking.
+/// map - and belongs to the *name* that made it. So the same schema claiming
+/// the same path again is a no-op, reconstructing a struct in one process
+/// works, and a claim stands for the life of the process.
 #[derive(Default)]
 pub struct Owners {
     claims: RwLock<Vec<Claimed>>,
@@ -159,8 +158,6 @@ mod tests {
             .expect("two schemas may sit on one level while owning different keys");
     }
 
-    /// `!` is below the separator, so it sorts between `ui` and `ui.theme` -
-    /// which is why the walk cannot stop at the immediate neighbour.
     #[test]
     fn a_sibling_that_sorts_inside_the_run_does_not_hide_an_ancestor() {
         let owners = Owners::default();

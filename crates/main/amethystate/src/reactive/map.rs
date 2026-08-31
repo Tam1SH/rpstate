@@ -356,8 +356,9 @@ where
 
     /// Configures a subscription. See [`Watch`].
     ///
-    /// Map changes are events rather than a state, so pair `local` with
-    /// [`Watch::every`] unless dropping the intermediate ones is what you want.
+    /// Map changes are events, and every one is delivered.
+    /// [`Watch::external`] is how a subscriber skips the changes this handle
+    /// made itself.
     pub fn subscription_with(&self) -> Watch<Self> {
         Watch::new(self.clone())
     }
@@ -483,9 +484,9 @@ where
     /// Writes a key that is already there, and fails with
     /// [`ReactiveMapError::KeyNotFound`] when it is not.
     ///
-    /// The strictness is not a whim: subscribers receive
-    /// [`MapChange::Update`], which carries the previous value, and a key
-    /// that does not exist has none. Use [`ReactiveMap::insert`] to add one.
+    /// Subscribers receive [`MapChange::Update`], which carries the previous
+    /// value, and a key that does not exist has none. Use
+    /// [`ReactiveMap::insert`] to add one.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;

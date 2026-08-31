@@ -26,24 +26,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// The open database, or nothing while it is being replaced.
 ///
 /// redb holds an exclusive lock on the file for as long as a `Database` is
-/// alive, so reopening one is not "make the new and swap it in": the old has
-/// to be dropped first or `Database::create` meets its own lock. `None` is
-/// that gap, and it is short - a create, holding the write lock.
+/// alive, so a reopen has to drop the old handle before `Database::create` can
+/// take the lock back. `None` is that gap, and it is short - a create, holding
+/// the write lock.
 ///
-/// Which is also why nobody keeps a clone of the `Database` itself. One did:
-/// the background flush held its own, and it would have kept the file locked
-/// for the life of the thread, so a reopen could never have happened.
+/// Which is also why every holder reaches the database through this swap: a
+/// clone kept anywhere - a background thread, a primitive - would hold the file
+/// lock for its own lifetime and leave no moment when a reopen could happen.
 pub(super) type OpenDatabase = Arc<arc_swap::ArcSwapOption<Database>>;
 
-/// The one store file whose disk can be made to fail, named rather than
-/// flagged: a database is opened by whatever test is running at the time, and
-/// a global switch would hand a broken disk to every store that happened to
-/// open in parallel.
+/// The one store file whose disk can be made to fail, named by path so the
+/// breakage reaches that store alone while other tests open theirs in
+/// parallel.
 ///
 /// Armed before opening, since a `StorageBackend` can only be installed as the
-/// database is built. A real `PreviousIo` cannot be faked from outside redb -
-/// the flag lives in its `CachedFile` and only its own I/O sets it - so the
-/// hook belongs here rather than in the test.
+/// database is built. A real `PreviousIo` can only come from redb's own I/O -
+/// the flag lives in its `CachedFile` - so the hook lives here, beside the
+/// open.
 #[cfg(test)]
 static FAILING_DISK: parking_lot::Mutex<Option<std::path::PathBuf>> = parking_lot::Mutex::new(None);
 
@@ -187,11 +186,10 @@ pub(super) fn is_previous_io(report: &error_stack::Report<StorageError>) -> bool
 
 /// Drops the database and opens it again.
 ///
-/// Not "make the new one and swap it in": redb holds the file lock for as long
-/// as a `Database` lives, so the old has to be gone before `Database::create`
-/// can take the lock back. That is what the `None` is for, and why the caller
-/// holds `write_lock` across it - a commit waits rather than finding a store
-/// with no database under it.
+/// redb holds the file lock for as long as a `Database` lives, so the old
+/// handle goes first and `Database::create` takes the lock back after it. That
+/// is what the `None` is for, and why the caller holds `write_lock` across it:
+/// a commit arriving in the gap waits for the new handle.
 ///
 /// The buffer is untouched, so whatever was written and not yet committed goes
 /// to the new handle.
@@ -225,10 +223,6 @@ mod tests {
     use serial_test::serial;
     use std::time::Duration;
 
-    /// Reopening works while the store is live, which is the whole premise:
-    /// redb holds the file lock for as long as a `Database` is alive, so this
-    /// fails the moment anything keeps a second handle - a background thread
-    /// holding its own clone, a primitive that captured one. Nothing may.
     #[test]
     #[serial]
     fn the_database_can_be_traded_for_a_fresh_one_under_a_live_store() {
@@ -266,19 +260,6 @@ mod tests {
         );
     }
 
-    /// The whole chain against a disk that really stops taking writes: redb
-    /// latches, every later call answers `PreviousIo` without going near the
-    /// disk, the store notices and trades the handle in, and the write that
-    /// was buffered all along lands. No restart, and nothing lost.
-    ///
-    /// The failure is redb's own rather than a flag of ours, which is the
-    /// point - `SIMULATE_WRITE_FAILURE` returns before ever reaching the
-    /// database and so never reaches the state this exists to cover.
-    ///
-    /// The first flush meets the write itself failing; redb latches on that,
-    /// and only the call after it answers `PreviousIo` without going near the
-    /// disk. Then the disk comes back, nothing else changes, and nobody
-    /// restarts.
     #[test]
     #[serial]
     fn a_disk_that_fails_for_real_is_recovered_by_trading_the_handle() {
@@ -315,8 +296,6 @@ mod tests {
         );
     }
 
-    /// A buffered write survives the trade: the buffer belongs to the store,
-    /// not to the handle, so nothing already accepted is lost by reopening.
     #[test]
     #[serial]
     fn a_buffered_write_survives_the_reopen() {

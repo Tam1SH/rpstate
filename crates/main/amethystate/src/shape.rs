@@ -2,8 +2,8 @@
 //!
 //! A declared path contributes its role and whether it may hold nothing to the
 //! store's record of the shape. Both are facts about a type, so the type system
-//! is where they are read from - not from how the type was spelled, which sees
-//! an alias as a different type and a renamed import as an unknown one.
+//! is where they are read from: an alias and a renamed import answer the same
+//! as the type they name.
 //!
 //! [`Probe`] answers for **every** type, including types from crates this one
 //! has never heard of. The types this crate provides get an inherent impl; an

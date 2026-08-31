@@ -70,6 +70,14 @@ fact!(
     Table(String) => "table"
 );
 fact!(
+    /// Why a declared check would not have the value the store holds, in the
+    /// words the check itself gave.
+    ///
+    /// A value carrying this decoded perfectly well: what it failed is the
+    /// application's own rule about what the value may be.
+    Refused(String) => "refused"
+);
+fact!(
     /// One level below a prefix, as it was scanned rather than as a caller
     /// spelled it.
     Entry(String) => "entry"

@@ -13,19 +13,26 @@ mod ts_mapping;
 ///
 /// # Struct Attributes (`#[amethystate(...)]`)
 ///
-/// * `#[amethystate(prefix = "path", version = 1, mode = "reactive"), as_root]` - Defines a **Root** struct.
+/// * `#[amethystate(prefix = "path", version = 1, mode = "reactive", as_root)]` - Defines a **Root** struct.
 ///   * `as_root` (optional flag): If specified, fields are written directly to the store root without
 ///     a namespace.
 ///   * `prefix` (String): Sets the top-level namespace path in the store.
-///     Generates `pub fn new(store: &Arc<Store>) -> Result<Self>`.
+///     Generates `pub fn new() -> StorageResult<Self>`, which opens on the
+///     global store, and `pub fn new_with(store: &Store) -> StorageResult<Self>`
+///     for a store the caller holds.
 ///   * `version` (optional u32): Schema version for migrations (defaults to 0).
 ///   * `mode` (optional String): Controls the generated code paradigm. One of:
 ///     * `"reactive"` (default): Generates fine-grained reactive `Field<T>` accessors.
 ///     * `"persistent"`: Generates a flat struct with plain-type fields and synchronous `.save()` / `.save_lazy()` methods.
 ///     * `"both"`: Generates both reactive accessors on `#name` and a separate `#name_Persistent` flat struct.
+///   * `check` (optional path): A `fn(&Data, &CheckContext) -> Result<(), Invalid>`
+///     run over the whole struct as it is built.
+///   * `on_unreadable` / `on_delete` (optional paths): What every field of this
+///     struct falls back to when it says nothing itself - see
+///     `store::OnUnreadable` and `store::OnDelete`.
 /// * `#[amethystate]` - Defines a **Nested** struct.
 ///   * Used as a component within other structures.
-///   * Generates `pub fn new(store: &Arc<Store>, namespace: &str) -> Result<Self>`.
+///   * Generates `pub fn new(store: &Store, namespace: impl IntoStorePath) -> StorageResult<Self>`.
 ///
 /// # How a storage path is built
 ///
@@ -57,12 +64,18 @@ mod ts_mapping;
 ///
 /// # Field Attributes (`#[amestate(...)]`)
 ///
-/// | Option | Type | Description |
+/// | Option | Form | Description |
 /// | :--- | :--- | :--- |
-/// | `default` | `Expr` | Initial value if not present in store. Required for leaf fields. |
-/// | `key` | `String` | Overrides the storage key (defaults to field name). |
-/// | `nested` | `bool` | Marks field as another `#[amethystate]` struct. |
-/// | `volatile` | `bool` | In-memory only. Never saved to or loaded from disk. |
+/// | `default` | `= Expr` | Initial value if not present in store. Required for leaf fields. |
+/// | `key` | `= String` | Overrides the storage key (defaults to field name). |
+/// | `check` | `= path` | A `fn(&T, &CheckContext) -> Result<(), Invalid>` every value coming in from the store has to pass. |
+/// | `on_unreadable` | `= path` | What this field does about a stored value it will not accept - see `store::OnUnreadable`. |
+/// | `on_delete` | `= path` | What this field does when its key is deleted under it - see `store::OnDelete`. |
+/// | `nested` | flag | Marks field as another `#[amethystate]` struct. |
+/// | `volatile` | flag | In-memory only. Never saved to or loaded from disk. |
+///
+/// `nested` and `volatile` are bare flags: they are written on their own, with
+/// no `= true`.
 ///
 /// # Examples
 ///
@@ -135,11 +148,10 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     Ok(AmeData::<Config> { address: old.host, port: 9090 })
 /// }
 /// ```
-/// Transforms a function into a migration step between two state versions.
 ///
 /// The macro derives source and target types from the function signature:
 /// - **from**: the type of the first argument
-/// - **to**: the inner type of `Result<T>` return type
+/// - **to**: the inner type of the `Result<T>` return type
 ///
 /// The function name becomes the migration step description in the registry.
 ///
@@ -173,7 +185,7 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// #[migrate]
 /// #[rename(host => address)]
-/// fn migrate_config_v1_to_v2(old: AmeData<v1::Config>) -> amethystate::Result<AmeData<Config>> {
+/// fn migrate_config_v1_to_v2(old: AmeData<v1::Config>) -> amethystate::MigrationResult<AmeData<Config>> {
 ///     Ok(AmeData::<Config> { address: old.host, port: old.port })
 /// }
 /// ```
@@ -207,7 +219,7 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 /// fn migrate_proxy_config_v1_to_v2(
 ///     old: AmeData<v1::ProxyConfig>,
 ///     ctx: &mut amethystate::migration::MigrationContext,
-/// ) -> amethystate::Result<AmeData<ProxyConfig>> {
+/// ) -> amethystate::MigrationResult<AmeData<ProxyConfig>> {
 ///     for key in old.routes.keys() {
 ///         ctx.delete(&format!("routes.{}", key))?;
 ///     }
@@ -236,7 +248,7 @@ pub fn amethystate(args: TokenStream, input: TokenStream) -> TokenStream {
 /// fn migrate_settings_v1_to_v2(
 ///     old: AmeData<v1::Settings>,
 ///     ctx: &mut amethystate::migration::MigrationContext,
-/// ) -> amethystate::Result<AmeData<Settings>> {
+/// ) -> amethystate::MigrationResult<AmeData<Settings>> {
 ///     let legacy = ctx.require::<LegacyDefaults>()?;
 ///     Ok(AmeData::<Settings> { host: old.host, port: legacy.port })
 /// }

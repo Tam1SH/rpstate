@@ -27,10 +27,10 @@ pub(crate) struct CellCommit {
 /// [`WriteError::SourceGone`]
 /// and [`get`](ReactiveCell::get) returns `None`.
 ///
-/// Absence is a value here, not a hole to fill: a cell over a map entry whose
-/// key is missing reads `None` and refuses to write, because creating the entry
-/// is the map's job. A cell holding a value in memory has no source to lose and
-/// never takes either branch.
+/// Absence is a value here: a cell over a map entry whose key is missing reads
+/// `None` and refuses to write, because creating the entry is the map's job. A
+/// cell holding a value in memory has no source to lose and never takes either
+/// branch.
 pub struct ReactiveCell<T> {
     cache: Signal<Option<T>>,
     writer: Writer<T>,
@@ -84,8 +84,8 @@ where
     ///
     /// A cell is a view, and normally something else owns what it views. Where
     /// nothing does - a cell handed out for a bare path, whose field exists
-    /// only because the cell was asked for - the cell is the owner, and says so
-    /// here rather than by holding a strong reference it cannot explain.
+    /// only because the cell was asked for - the cell is the owner, and this is
+    /// where it says so.
     pub(crate) fn owning(mut self, owner: Arc<dyn Send + Sync>) -> Self {
         self._owner = Some(owner);
         self
@@ -265,8 +265,9 @@ where
         self.commit()
     }
 
-    /// Like every future, this does nothing until awaited - the write
-    /// included. See [`Durable::set_async`].
+    /// Writes the value, resolving once it is on disk.
+    ///
+    /// Like every future, this does nothing until awaited - the write included.
     pub async fn set_async(&self, value: T) -> WriteResult<()> {
         self.0.set(value)?;
         self.commit_async().await
@@ -284,8 +285,10 @@ where
         Ok(value)
     }
 
-    /// Like every future, this does nothing until awaited - the write
-    /// included. See [`Durable::set_async`].
+    /// Reads the value, writes back what `f` returns, and resolves once it is
+    /// on disk.
+    ///
+    /// Like every future, this does nothing until awaited - the write included.
     pub async fn update_async<F>(&self, f: F) -> WriteResult<T>
     where
         F: FnOnce(T) -> T,
@@ -306,8 +309,10 @@ where
         self.commit()
     }
 
-    /// Like every future, this does nothing until awaited - the write
-    /// included. See [`Durable::set_async`].
+    /// Reads the value, lets `f` change it in place, and resolves once it is on
+    /// disk.
+    ///
+    /// Like every future, this does nothing until awaited - the write included.
     pub async fn modify_async<F>(&self, f: F) -> WriteResult<()>
     where
         F: FnOnce(&mut T),

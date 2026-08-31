@@ -9,10 +9,9 @@ use std::time::Duration;
 /// attempts, and how long a streak of failures may run before the store
 /// says so out loud.
 ///
-/// `budget` is not how long the store keeps trying - it keeps trying until
-/// it lands or the store is dropped, since a full disk is usually someone
-/// deleting something in a minute. It is how long it stays quiet about it
-/// before escalating.
+/// `budget` is how long a failing streak stays quiet before it escalates. The
+/// store keeps trying until the flush lands or it is dropped, since a full disk
+/// is usually someone deleting something in a minute.
 #[derive(Clone)]
 pub struct RetryPolicy {
     pub interval: Duration,
@@ -109,7 +108,7 @@ impl Default for FileWritePolicy {
 
 /// What a store refuses to hold.
 ///
-/// Three things get confused as one and are not:
+/// Three separate things decide that:
 ///
 /// - **The codec's ceiling is a fact.** `ron` will not read past 64 levels
 ///   whatever anyone configures. A write past it produces a file that codec
@@ -120,10 +119,11 @@ impl Default for FileWritePolicy {
 ///   and capping it also reserves the rest of the shared budget for values,
 ///   which is the half nobody thinks about: sixty levels of path on ron leaves
 ///   four for whatever is stored there.
-/// - **Portability is a policy**, and depth is one row of it. What each engine
-///   cannot hold is a table, not a number: non-finite floats on json, anything
-///   past `i64` on toml, a unit enum variant on ron, a non-string map key on
-///   every text engine.
+/// - **Portability is a policy**, spelled as the set of engines the contents
+///   must stay readable on. Today it settles depth alone, by lowering the
+///   ceiling to the shallowest engine named. What a format can *express* -
+///   non-finite floats on json, anything past `i64` on toml, a non-string map
+///   key on every text engine - is a separate question no setting here answers.
 ///
 /// [`Backend::depth_ceiling`]: crate::store::builder::Backend::depth_ceiling
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -149,14 +149,16 @@ impl WriteLimits {
         self
     }
 
-    /// Refuse whatever these engines could not give back, whichever one is
-    /// running.
+    /// Keep the contents readable on these engines, whichever one is running.
     ///
-    /// The set rather than *all*, because "all" is a moving target - it changes
-    /// under a store when an engine is added - and because the honest
-    /// requirement is usually narrower: an application shipping json on the
-    /// desktop and sqlite on a phone needs those two and has no opinion about
-    /// ron.
+    /// This lowers the depth ceiling to the shallowest engine named, and
+    /// settles depth alone: a value a format could not *represent* still
+    /// writes.
+    ///
+    /// The claim names its engines, so it stays what the application asked for
+    /// when this crate gains another one, and so it can be as narrow as the
+    /// requirement really is: an application shipping json on the desktop and
+    /// sqlite on a phone needs those two and has no opinion about ron.
     pub fn portable_across(mut self, engines: impl IntoIterator<Item = Backend>) -> Self {
         self.portable_across = engines.into_iter().collect();
         self
@@ -201,8 +203,8 @@ pub enum AfterGivingUp {
 /// failed. What it returns decides what writers see next; without one the
 /// store defaults to [`AfterGivingUp::Fail`].
 ///
-/// It is handed the failure itself rather than a rendering of it, because the
-/// decision usually turns on which failure it is. A full disk is someone
+/// It is handed the failure itself, because the decision usually turns on which
+/// failure it is. A full disk is someone
 /// deleting something in a minute, and [`AfterGivingUp::Ignore`] rides it out;
 /// a value the format cannot hold will never be writable, and retrying it
 /// every interval for the life of the process is not waiting for anything.

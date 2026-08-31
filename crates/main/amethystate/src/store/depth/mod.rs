@@ -10,15 +10,13 @@
 //! which is the worst shape a defect can have: no error anywhere, and the file
 //! is gone.
 //!
-//! The value cannot be inspected to find out - by the time it reaches a store
-//! it is a `&dyn erased_serde::Serialize`, and a five-level struct is
-//! indistinguishable from a five-level tree. Nor can it be built and walked:
-//! building is the dangerous act, and on redb it is what overflows the stack.
+//! By the time a value reaches a store it is a `&dyn erased_serde::Serialize`,
+//! so the depth has to be learned from the write itself: building the value out
+//! to walk it is the dangerous act, and on redb it is what overflows the stack.
 //!
 //! Serde is a push protocol and the store is on the receiving end, so it counts
-//! what goes past - during the codec's own pass, by [`counting`], rather than
-//! in a pass of its own. `serde_json` does exactly this on the read side; this
-//! is the same thing on the write side, where nobody had put it.
+//! what goes past during the codec's own pass, through [`Counting`].
+//! `serde_json` does the same thing on the read side.
 
 mod counting;
 
@@ -101,9 +99,10 @@ impl DepthBudget {
     ///
     /// The path is counted with the value because the budget is shared: on
     /// every text engine the path's levels become the document's, so a shallow
-    /// value at a deep path is exactly as unreadable as the reverse. sqlite is
-    /// the exception - its path is a `TEXT` key - and paying the path there
-    /// costs a few levels out of 254, which is not worth a second rule.
+    /// value at a deep path is exactly as unreadable as a deep value at a
+    /// shallow one. The flat engines keep the path as one key - `&str` on redb,
+    /// `TEXT` on sqlite - and pay for it here anyway, which costs a handful of
+    /// levels out of 512 and 254 and saves a second rule.
     pub fn for_value(&self, path: &StorePath) -> Depth {
         Depth::new(self.ceiling.saturating_sub(path.segments().count()))
     }

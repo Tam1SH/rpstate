@@ -78,15 +78,14 @@ pub struct SubscriptionEntry {
 
 /// A store subscription that ends when this is dropped.
 ///
-/// Both fields are the store's to keep, not the holder's: `id` is the key the
-/// store removes the entry by, and `store` is which store it is removed from.
-/// While they were public, changing either turned the drop into something else
-/// entirely - an id nobody registered removes nothing and leaks the callback, a
-/// colliding one removes a stranger's subscription, and another store's handle
-/// unsubscribes from the wrong place.
+/// Both fields are private, and the drop is what they are for: `id` is the key
+/// the store removes the entry by, and `store` is which store it is removed
+/// from. An id nobody registered would remove nothing and leak the callback, a
+/// colliding one would remove a stranger's subscription, and another store's
+/// handle would unsubscribe from the wrong place.
 ///
-/// Here rather than beside `Field` because it is about a store: a map holds one
-/// too, and the primitives factory is what builds them.
+/// It lives here, with the store, because a map holds one as well as a field
+/// does, and the primitives factory is what builds them.
 pub struct StoreSubscription {
     store: crate::Store,
     id: SubscriptionId,

@@ -14,9 +14,8 @@ pub struct Durable<'a, T>(pub(crate) &'a T);
 
 /// Announces that a flush finished, to whoever is waiting on one.
 ///
-/// Waiters key off a counter rather than their own write, so several of them
-/// riding on one flush all resolve from the same commit instead of forcing a
-/// commit each.
+/// Waiters key off a generation counter, so several of them riding on one flush
+/// all resolve from that single commit.
 #[derive(Default)]
 pub struct CommitSignal {
     generation: AtomicU64,
@@ -66,10 +65,10 @@ pub struct PersistHealth {
 impl PersistHealth {
     /// Why writes are failing, if they are.
     ///
-    /// The failure itself rather than a rendering of it: a caller deciding what
-    /// to do about it wants `current_context()`, and one reporting it renders
-    /// with `{:#}`. Behind an `Arc` because a `Report` is not `Clone` and this
-    /// is read by every writer while the streak lasts.
+    /// The failure itself: a caller deciding what to do about it reads
+    /// `current_context()`, and one reporting it renders with `{:#}`. Behind an
+    /// `Arc` because a `Report` is not `Clone` and this is read by every writer
+    /// while the streak lasts.
     pub fn failure(&self) -> Option<Arc<Report<StorageError>>> {
         self.given_up.lock().unwrap().clone()
     }
@@ -96,7 +95,7 @@ impl Commit {
     }
 
     /// A commit for a store that is no longer there: already finished, and
-    /// finished as a failure, so an awaiting caller is told rather than hung.
+    /// finished as a failure, so an awaiting caller is told at once.
     pub(crate) fn gone() -> Self {
         let signal = Arc::new(CommitSignal::default());
         signal.finished(false);

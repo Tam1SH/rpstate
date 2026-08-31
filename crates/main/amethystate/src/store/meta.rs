@@ -10,7 +10,7 @@ pub struct PrefixMeta {
 /// What the type said a declared path is, written down.
 ///
 /// Read off the type by [`Probe`](crate::shape::Probe) and carried here so the
-/// store holds it rather than only the code that opened it.
+/// store holds it too, alongside the code that opened it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct StoredShape {
     pub role: Role,
@@ -42,8 +42,9 @@ pub struct StoredFieldEntry {
     pub name: String,
 
     /// How the type was spelled, for a person reading the file or the
-    /// inspector - not something to compare, because a spelling changes when a
-    /// rename or an alias does and the type has not.
+    /// inspector. A spelling changes when a rename or an alias does while the
+    /// type stays what it was, so drift is judged by the hashes and nothing
+    /// compares this.
     pub type_name: String,
 
     /// What the path is, as the type answered when it was written.
