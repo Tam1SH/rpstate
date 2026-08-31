@@ -1,6 +1,8 @@
 use amethystate::store::StorageError;
 use amethystate::store::builder::{StoreBuilder, default_backend};
-use amethystate::store::config::{AfterGivingUp, WriteAttempts};
+use amethystate::store::config::AfterGivingUp;
+#[cfg(feature = "json")]
+use amethystate::store::config::WriteAttempts;
 use amethystate_core::test_utils::TempPath;
 use std::error::Error;
 use std::time::Duration;

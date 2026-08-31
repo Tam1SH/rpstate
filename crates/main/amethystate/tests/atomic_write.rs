@@ -3,6 +3,7 @@ use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use amethystate::store::config::{FileWritePolicy, WriteAttempts};
+#[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 use amethystate::store::{StoreBackend, StoreLayout};
 use amethystate_core::facts::{StoreFile, all};
 use amethystate_core::test_utils::TempPath;

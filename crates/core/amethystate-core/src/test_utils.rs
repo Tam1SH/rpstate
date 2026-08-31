@@ -46,7 +46,7 @@ impl AsRef<Path> for TempPath {
 
 impl Drop for TempPath {
     fn drop(&mut self) {
-        let (Some(dir), Some(stem)) = (self.0.parent(), self.0.file_name()) else {
+        let (Some(dir), Some(stem)) = (self.0.parent(), self.0.file_stem()) else {
             return;
         };
         let stem = stem.to_string_lossy().to_string();

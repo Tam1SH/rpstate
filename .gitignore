@@ -15,3 +15,4 @@ examples/*/*/*.redb
 /mutants.out.old
 /.cache/
 /.idea/
+/.claude/

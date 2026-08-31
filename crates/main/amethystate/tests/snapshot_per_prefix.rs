@@ -1,6 +1,9 @@
 use amethystate::amethystate;
+#[cfg(feature = "redb")]
 use amethystate::observability::InspectorBackend;
+#[cfg(feature = "redb")]
 use amethystate::store::builder::StoreBuilder;
+#[cfg(feature = "redb")]
 use amethystate_core::test_utils::TempPath;
 
 #[amethystate(prefix = "ui", version = 1)]
@@ -15,9 +18,7 @@ pub struct UiLayout {
     pub density: u32,
 }
 
-/// Two schemas may share a level without either owning what the other owns -
-/// `accent` and `density` are different keys. The snapshot store is keyed by
-/// prefix alone, so it can hold only one of them.
+#[cfg(feature = "redb")]
 #[test]
 #[ignore = "known: the snapshot store is keyed by prefix alone - see TODO.md"]
 fn two_schemas_at_one_prefix_each_keep_their_own_snapshot() {
