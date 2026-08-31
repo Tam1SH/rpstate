@@ -23,11 +23,11 @@ serde.workspace = true
 tracing.workspace = true
 inventory.workspace = true
 
-futures = { version = "0.3.32", optional = true }
+futures = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-async-trait = { version = "0.1.89", optional = true }
+async-trait = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4"] }
-thiserror = "2.0.18"
+thiserror.workspace = true
 proptest = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
