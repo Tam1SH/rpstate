@@ -1366,10 +1366,13 @@ fn deepest_that_survives(mode: &str, ceiling: usize) -> usize {
 /// stack that runs out takes only the child with it.
 ///
 /// `serde_json` refuses past 128 by design, with an error. msgpack has no such
-/// limit written down, and rmp_serde counts nothing: the recursion simply runs
-/// until the stack does. That is the finding, and the number below is where it
-/// happened on an 8 MiB stack in a debug build - not a constant, but the right
-/// order of magnitude, and nothing anywhere refuses the write before it.
+/// limit written down, and rmp_serde counts nothing: the recursion runs until
+/// the stack does, which is why the store imposes a ceiling of its own.
+///
+/// That ceiling is what the two halves now stop at together, and the value of
+/// this probe is that they do. A write reaching deeper than a later read is a
+/// value committed and lost - the shape the depth budget exists to prevent -
+/// and this is where it would show up again.
 #[test]
 fn msgpack_nesting_boundary() {
     if let Ok(spec) = std::env::var(DEPTH_CHILD) {
@@ -1422,24 +1425,16 @@ fn msgpack_nesting_boundary() {
         "the codec carried a value the type itself could not be dropped at"
     );
 
-    // The write side outlives the read side, so there is a band of depths a
-    // store takes, commits, and then cannot be reopened over.
-    assert!(
-        write > store,
-        "the two halves of the codec gave out together, which would be the repair"
+    assert_eq!(
+        write, store,
+        "a depth the write takes and a later read cannot is a value committed and lost"
     );
 
-    let between = store + (write - store) / 2 + 1;
     let file = TempPath::new("probe_nest_unreadable");
-    let (wrote, _) = depth_child_at("write_at", between, Some(file.path()));
-    let (read, why) = depth_child_at("read_at", between, Some(file.path()));
+    let (wrote, why) = depth_child_at("write_at", store + 1, Some(file.path()));
 
-    println!("  at depth {between}: write {wrote}, later read {read} - {why}");
-    assert!(wrote, "the write at {between} did not land");
-    assert!(
-        !read,
-        "the value at {between} read back, so the band closed on its own"
-    );
+    println!("  writing one deeper: {wrote} - {why}");
+    assert!(!wrote, "a value past the ceiling was taken");
 }
 
 // ---------------------------------------------------------------------------

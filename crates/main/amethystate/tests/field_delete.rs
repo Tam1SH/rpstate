@@ -3,15 +3,12 @@ use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::unique_path;
 use std::sync::{Arc, Mutex};
 
-#[amethystate(prefix = "del")]
+#[amethystate(prefix = "del", on_delete = UseDefault)]
 pub struct Cfg {
     #[amestate(default = 7u64)]
     pub counter: u64,
 }
 
-/// The subscription used to look only at `event.new`, so a delete left the
-/// field reporting a value the store no longer had - and a restart then read
-/// the default, silently disagreeing with what the running process had shown.
 #[test]
 fn a_deleted_key_falls_back_to_the_default() {
     let path = unique_path("field_delete");
