@@ -14505,6 +14505,7 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+ "syn 2.0.117",
 ]
 
 [[package]]

@@ -1,11 +1,12 @@
-//! What a snapshot would cost in place of the projection's read guard.
+//! What a snapshot costs against the read guard it replaced.
 //!
-//! `MapCache` is `Arc<RwLock<BTreeMap<SmolStr, (K, V)>>>` and hands a walk the
-//! read guard for the life of the walk. `RFC-map-locking.md` asks what it would
-//! cost to hand out a snapshot instead, which removes the deadlock class rather
-//! than reporting it. Four shapes over the same data answer that:
+//! `MapCache` hands a walk its own version and holds nothing, so writing
+//! during a walk stops deadlocking. It reached that shape on these numbers,
+//! and it keeps them because the alternative is what the numbers are against:
+//! a `RwLock<BTreeMap>` holding its guard for the life of the walk. Four
+//! shapes over the same data:
 //!
-//! - `rwlock+btreemap`, the projection as it stands;
+//! - `rwlock+btreemap`, the shape this replaced;
 //! - `arcswap+clone`, a read that is `load()` and a write that copies the whole
 //!   map;
 //! - `arcswap+im`, the same read with `im::OrdMap` doing the write by path

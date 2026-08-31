@@ -64,8 +64,28 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static + Default> 
 ///
 /// A read takes a version and holds nothing, so a walk neither blocks a writer
 /// nor waits for one, whatever thread either is on. A write publishes a new
-/// version that shares every node it did not touch. What that costs, and why
-/// the shape is not selectable, is in `RFC-map-locking.md`.
+/// version that shares every node it did not touch, so it stays O(log n)
+/// rather than copying the map.
+///
+/// What that costs, measured by `benches/map_snapshot_bench.rs` against a
+/// `RwLock<BTreeMap>` holding its guard for the walk: a write goes from 369 ns
+/// to 2.32 µs at 100k entries, a walk costs 20-30% more at the sizes anything
+/// walks per frame, and memory goes from 7.0 MB to 13.2 MB. The ratios look
+/// bad and the absolute numbers are two microseconds on the cheapest operation
+/// in the library; the memory is the real recurring cost.
+///
+/// What it buys is that writing during a walk stops deadlocking. It does not
+/// make it correct: the walk goes on yielding its own version, so a write made
+/// inside the loop is invisible to the rest of it. `for k in keys { remove(k) }`
+/// wants exactly that; a loop that writes and reads the same key back gets a
+/// stale answer and nothing says so. Loud failure was traded for quiet
+/// staleness.
+///
+/// The shape is not selectable per map, though it could be - the backing type
+/// is private either way. Nothing would pick the locking one: it wins only
+/// where a map is written in bulk and never walked while it is written, and a
+/// map nobody observes is the store's job. The knob would cost two
+/// implementations of every operation and a branch in every `next()`.
 pub struct MapCache<K, V> {
     entries: ArcSwap<Snapshot<K, V>>,
 }

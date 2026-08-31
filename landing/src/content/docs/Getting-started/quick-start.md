@@ -35,7 +35,7 @@ interaction: [Defining structs](/amethystate/state/defining-structs/).
 <!-- shown: opening a store you hold yourself -->
 ```rust
 let store = StoreBuilder::new(settings)
-    .debounce(Duration::from_millis(500))
+    .disk(|d| d.debounce(Duration::from_millis(500)))
     .build()?;
 
 let state = NetworkState::new_with(&store)?;

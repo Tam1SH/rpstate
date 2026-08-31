@@ -48,7 +48,7 @@ let reads_back = state.port().get();
 <!-- shown: narrowing the window -->
 ```rust
 let store = StoreBuilder::new(path.path())
-    .debounce(Duration::from_millis(50))
+    .disk(|d| d.debounce(Duration::from_millis(50)))
     .build()?;
 ```
 <!-- /shown -->

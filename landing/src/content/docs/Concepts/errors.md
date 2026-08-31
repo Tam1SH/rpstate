@@ -143,7 +143,7 @@ let too_deep = shallow.set(["a", "b", "c", "d", "e"], &1u32).unwrap_err();
 <!-- printed: a path past the cap it was given from book_errors -->
 ```
 deeper than this store reads back
-├╴path: a.b.c.d.e
+├╴key: a.b.c.d.e
 ├╴levels: 5, and the limit is 4
 ├╴set by: limits(|l| l.key_depth(..))
 ╰╴what is stored here spends the same budget - this store reads 512 levels in all

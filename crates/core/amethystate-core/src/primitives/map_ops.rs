@@ -197,6 +197,15 @@ where
     Ok(())
 }
 
+/// The only writer to the key cache, and it has to stay that way.
+///
+/// It runs off the store subscription, so writes made here and edits made to
+/// the file from outside arrive down the same path - which is what keeps the
+/// cache and the store agreeing about which keys exist.
+///
+/// Add a second writer and they drift, and the failure is silent rather than
+/// loud: `remove` gates on the cache, so a key the cache has lost answers
+/// `Ok(None)` and deletes nothing, on a key that is really in the store.
 pub fn map_apply_remote_change<K, V>(core: &ReactiveMapCore<K, V>, change: &MapChange<K, V>)
 where
     K: ReactiveMapKey,
