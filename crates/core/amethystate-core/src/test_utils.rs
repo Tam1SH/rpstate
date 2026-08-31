@@ -14,8 +14,14 @@ pub fn unique_path(suffix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("amethystate-{suffix}-{pid}-{nanos}-{seq}.db"))
 }
 
-/// A [`unique_path`] that deletes itself, and anything a backend wrote beside
-/// it, when it goes out of scope.
+/// A store path in a directory of its own, taken away with everything a
+/// backend wrote beside it when it goes out of scope.
+///
+/// The directory is what makes the cleanup cheap. Sweeping the temporary
+/// directory for names starting with this one costs a scan of every file in
+/// it, per fixture, and that directory belongs to the whole machine: a test
+/// with two dozen fixtures pays for whatever else has collected there. One
+/// directory per fixture holds two or three files and is removed whole.
 ///
 /// Declare it before the store so the store drops first: a backend holding the
 /// file open would otherwise keep the removal from landing on Windows.
@@ -23,7 +29,9 @@ pub struct TempPath(PathBuf);
 
 impl TempPath {
     pub fn new(suffix: &str) -> Self {
-        Self(unique_path(suffix))
+        let at = unique_path(suffix).with_extension("");
+        let _ = std::fs::create_dir_all(&at);
+        Self(at.join(format!("{suffix}.db")))
     }
 
     pub fn path(&self) -> &Path {
@@ -46,17 +54,8 @@ impl AsRef<Path> for TempPath {
 
 impl Drop for TempPath {
     fn drop(&mut self) {
-        let (Some(dir), Some(stem)) = (self.0.parent(), self.0.file_stem()) else {
-            return;
-        };
-        let stem = stem.to_string_lossy().to_string();
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with(&stem) {
-                let _ = std::fs::remove_file(entry.path());
-            }
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(dir);
         }
     }
 }

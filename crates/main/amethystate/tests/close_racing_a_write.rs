@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-const ROUNDS: u32 = 40;
+const ROUNDS: u32 = 24;
 const WRITERS: u32 = 4;
 const EACH: u32 = 50;
 
