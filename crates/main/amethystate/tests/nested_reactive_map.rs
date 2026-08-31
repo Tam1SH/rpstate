@@ -1,5 +1,7 @@
 use amethystate::amethystate;
+use amethystate::store::builder::Backend;
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 
 #[amethystate]
 pub struct ColumnsSettings {
@@ -22,10 +24,13 @@ pub struct ProcessSettings {
     pub columns: ColumnsSettings,
 }
 
-#[test]
-fn reactive_map_inside_nested_struct_seeds_defaults() {
+#[backends(all)]
+fn reactive_map_inside_nested_struct_seeds_defaults(backend: Backend) {
     let path = unique_path("nested_reactive_map");
-    let store = amethystate::StoreBuilder::new(&path).build().unwrap();
+    let store = amethystate::StoreBuilder::new(&path)
+        .backend(backend)
+        .build()
+        .unwrap();
     let settings = ProcessSettings::new_with(&store).unwrap();
 
     let widths = settings.columns().widths_px();
@@ -33,12 +38,15 @@ fn reactive_map_inside_nested_struct_seeds_defaults() {
     assert_eq!(widths.get("cpu"), Some(90u64));
 }
 
-#[test]
-fn reactive_map_inside_nested_struct_seeds_defaults_only_once() {
+#[backends(all)]
+fn reactive_map_inside_nested_struct_seeds_defaults_only_once(backend: Backend) {
     let path = unique_path("nested_reactive_map_once");
 
     {
-        let store = amethystate::StoreBuilder::new(&path).build().unwrap();
+        let store = amethystate::StoreBuilder::new(&path)
+            .backend(backend)
+            .build()
+            .unwrap();
         let settings = ProcessSettings::new_with(&store).unwrap();
         settings
             .columns()
@@ -48,7 +56,10 @@ fn reactive_map_inside_nested_struct_seeds_defaults_only_once() {
     }
 
     {
-        let store = amethystate::StoreBuilder::new(&path).build().unwrap();
+        let store = amethystate::StoreBuilder::new(&path)
+            .backend(backend)
+            .build()
+            .unwrap();
         let settings = ProcessSettings::new_with(&store).unwrap();
 
         // Reopening must not re-seed the default over the user's edit.

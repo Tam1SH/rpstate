@@ -1,14 +1,18 @@
 use amethystate::errors::facts::{self, Entry, Key, Prefix};
 use amethystate::errors::{StorageError, WriteError};
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::error::Error;
 
 mod common;
 
-fn open(tag: &str) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
+fn open(
+    backend: Backend,
+    tag: &str,
+) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new(tag);
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     Ok((store, path))
 }
 
@@ -46,9 +50,11 @@ fn as_printed(report: &impl std::fmt::Debug) -> String {
     kept.join("\n")
 }
 
-#[test]
-fn the_top_of_a_report_names_the_operation() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_top")?;
+#[backends(all)]
+fn the_top_of_a_report_names_the_operation(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_top")?;
     store.set(["labels", "cpu"], &"text".to_string())?;
 
     //@show what a failure says it is
@@ -64,9 +70,11 @@ fn the_top_of_a_report_names_the_operation() -> Result<(), Box<dyn Error + Send 
     Ok(())
 }
 
-#[test]
-fn a_report_carries_the_entry_it_failed_on() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_entry")?;
+#[backends(all)]
+fn a_report_carries_the_entry_it_failed_on(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_entry")?;
     store.set(["ports", "http"], &1u64)?;
 
     //@show reaching the entry that failed
@@ -82,9 +90,11 @@ fn a_report_carries_the_entry_it_failed_on() -> Result<(), Box<dyn Error + Send 
     Ok(())
 }
 
-#[test]
-fn a_fact_that_is_not_there_reads_as_nothing() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_absent")?;
+#[backends(all)]
+fn a_fact_that_is_not_there_reads_as_nothing(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_absent")?;
     store.set(["ports", "http"], &1u64)?;
 
     //@show asking for a fact the report does not carry
@@ -98,9 +108,11 @@ fn a_fact_that_is_not_there_reads_as_nothing() -> Result<(), Box<dyn Error + Sen
     Ok(())
 }
 
-#[test]
-fn the_whole_chain_is_in_the_debug_form() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_chain")?;
+#[backends(all)]
+fn the_whole_chain_is_in_the_debug_form(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_chain")?;
     store.set(["ports", "http"], &1u64)?;
 
     let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
@@ -115,9 +127,11 @@ fn the_whole_chain_is_in_the_debug_form() -> Result<(), Box<dyn Error + Send + S
     Ok(())
 }
 
-#[test]
-fn into_error_keeps_what_the_report_carried() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_into")?;
+#[backends(all)]
+fn into_error_keeps_what_the_report_carried(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_into")?;
     store.set(["ports", "http"], &1u64)?;
 
     let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
@@ -135,9 +149,9 @@ fn into_error_keeps_what_the_report_carried() -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-#[test]
-fn what_different_refusals_look_like() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_shapes")?;
+#[backends(Redb)]
+fn what_different_refusals_look_like(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_shapes")?;
 
     //@show an entry that will not decode
     store.set(["ports", "http"], &1u64)?;
@@ -170,9 +184,9 @@ fn what_different_refusals_look_like() -> Result<(), Box<dyn Error + Send + Sync
     Ok(())
 }
 
-#[test]
-fn a_report_travels_as_a_boxed_error() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_err_boxed")?;
+#[backends(all)]
+fn a_report_travels_as_a_boxed_error(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_err_boxed")?;
 
     //@show handing a report to something that wants a std error
     fn writing(store: &amethystate::Store) -> Result<(), Box<dyn Error + Send + Sync>> {

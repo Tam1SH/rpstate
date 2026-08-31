@@ -1,9 +1,9 @@
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::facts::{Refused, all};
 use amethystate::store::{CheckContext, Invalid};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
+use amethystate_test_macros::backends;
 
 //@show a check on the struct, for what one field cannot see
 fn the_window_can_be_drawn(window: &LenientWindow, _cx: &CheckContext) -> Result<(), Invalid> {
@@ -72,12 +72,15 @@ pub struct Holder {
     pub panel: Inner,
 }
 
-#[test]
-fn a_struct_whose_invariant_fails_does_not_open() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_struct_whose_invariant_fails_does_not_open(backend: Backend) {
     let path = TempPath::new("struct_check_strict");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["window_strict", "min"], &2000u32)?;
+    store.set(["window_strict", "min"], &2000u32).unwrap();
 
     let refused = StrictWindow::new_with(&store).unwrap_err();
 
@@ -86,87 +89,88 @@ fn a_struct_whose_invariant_fails_does_not_open() -> Result<(), Box<dyn Error + 
         said.first().map(|r| r.0.as_str()),
         Some("the smallest window is wider than the largest")
     );
-
-    Ok(())
 }
 
-#[test]
-fn a_lenient_struct_goes_on_reporting_what_was_stored()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_lenient_struct_goes_on_reporting_what_was_stored(backend: Backend) {
     let path = TempPath::new("struct_check_lenient");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["window_lenient", "min"], &2000u32)?;
+    store.set(["window_lenient", "min"], &2000u32).unwrap();
 
-    let window = LenientWindow::new_with(&store)?;
+    let window = LenientWindow::new_with(&store).unwrap();
 
     assert_eq!(window.min().get(), 2000);
     assert_eq!(window.max().get(), 1600);
-
-    Ok(())
 }
 
-#[test]
-fn the_complaint_arrives_through_try_get_on_the_named_fields()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn the_complaint_arrives_through_try_get_on_the_named_fields(backend: Backend) {
     let path = TempPath::new("struct_check_named");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["window_lenient", "min"], &2000u32)?;
+    store.set(["window_lenient", "min"], &2000u32).unwrap();
 
-    let window = LenientWindow::new_with(&store)?;
+    let window = LenientWindow::new_with(&store).unwrap();
 
     assert!(window.min().try_get().is_err());
     assert!(window.max().try_get().is_err());
     assert!(window.title().try_get().is_ok());
-
-    Ok(())
 }
 
-#[test]
-fn a_refused_relationship_leaves_the_stored_values_where_they_are()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_refused_relationship_leaves_the_stored_values_where_they_are(backend: Backend) {
     let path = TempPath::new("struct_check_untouched");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["window_lenient", "min"], &2000u32)?;
-    let _window = LenientWindow::new_with(&store)?;
+    store.set(["window_lenient", "min"], &2000u32).unwrap();
+    let _window = LenientWindow::new_with(&store).unwrap();
 
-    assert_eq!(store.get::<u32>(["window_lenient", "min"])?, Some(2000));
-
-    Ok(())
+    assert_eq!(
+        store.get::<u32>(["window_lenient", "min"]).unwrap(),
+        Some(2000)
+    );
 }
 
-#[test]
-fn an_invariant_that_holds_leaves_every_field_alone()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn an_invariant_that_holds_leaves_every_field_alone(backend: Backend) {
     let path = TempPath::new("struct_check_ordinary");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["window_lenient", "min"], &800u32)?;
+    store.set(["window_lenient", "min"], &800u32).unwrap();
 
-    let window = LenientWindow::new_with(&store)?;
+    let window = LenientWindow::new_with(&store).unwrap();
 
-    assert_eq!(window.min().try_get()?, 800);
-    assert_eq!(window.max().try_get()?, 1600);
-    assert_eq!(window.title().try_get()?, "amethystate");
-
-    Ok(())
+    assert_eq!(window.min().try_get().unwrap(), 800);
+    assert_eq!(window.max().try_get().unwrap(), 1600);
+    assert_eq!(window.title().try_get().unwrap(), "amethystate");
 }
 
-#[test]
-fn a_nested_struct_is_settled_before_the_one_holding_it_is_built()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_nested_struct_is_settled_before_the_one_holding_it_is_built(backend: Backend) {
     let path = TempPath::new("struct_check_nested");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["holder", "panel", "height"], &2000u32)?;
+    store.set(["holder", "panel", "height"], &2000u32).unwrap();
 
-    let holder = Holder::new_with(&store)?;
+    let holder = Holder::new_with(&store).unwrap();
 
     assert_eq!(holder.panel().height().get(), 2000);
     assert!(holder.panel().height().try_get().is_err());
     assert!(holder.panel().width().try_get().is_err());
-
-    Ok(())
 }

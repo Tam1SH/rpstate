@@ -1,6 +1,7 @@
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
 #[amethystate(prefix = "del", on_delete = UseDefault)]
@@ -9,10 +10,10 @@ pub struct Cfg {
     pub counter: u64,
 }
 
-#[test]
-fn a_deleted_key_falls_back_to_the_default() {
+#[backends(all)]
+fn a_deleted_key_falls_back_to_the_default(backend: Backend) {
     let path = unique_path("field_delete");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     cfg.counter().set(42).unwrap();
@@ -24,10 +25,10 @@ fn a_deleted_key_falls_back_to_the_default() {
     assert_eq!(cfg.counter().get(), 7, "field must not outlive the key");
 }
 
-#[test]
-fn a_delete_notifies_subscribers() {
+#[backends(all)]
+fn a_delete_notifies_subscribers(backend: Backend) {
     let path = unique_path("field_delete_notify");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -42,10 +43,10 @@ fn a_delete_notifies_subscribers() {
     assert_eq!(*seen.lock().unwrap(), vec![42, 7]);
 }
 
-#[test]
-fn writing_again_after_a_delete_works() {
+#[backends(all)]
+fn writing_again_after_a_delete_works(backend: Backend) {
     let path = unique_path("field_delete_rewrite");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     store.delete(["del", "counter"]).unwrap();

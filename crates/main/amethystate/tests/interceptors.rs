@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
 #[amethystate(prefix = "ic")]
@@ -12,9 +13,9 @@ pub struct Cfg {
     pub items: ReactiveMap<String, u64>,
 }
 
-fn cfg() -> (amethystate::Store, Cfg) {
+fn cfg(backend: Backend) -> (amethystate::Store, Cfg) {
     let path = unique_path("interceptors");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
     (store, cfg)
 }
@@ -28,9 +29,9 @@ const REJECTED: u64 = 999;
 /// rather than let through. Letting it through means a validator stops being
 /// consulted exactly where recursion is deepest, and the value it exists to
 /// reject reaches the store.
-#[test]
-fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
-    let (store, cfg) = cfg();
+#[backends(all)]
+fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion(backend: Backend) {
+    let (store, cfg) = cfg(backend);
 
     let counter = cfg.counter();
     let nested = counter.clone();
@@ -65,9 +66,9 @@ fn a_rejected_value_never_reaches_the_store_however_deep_the_recursion() {
 /// A `Clear` is not about any one key, so key interceptors must not see it.
 /// Running all of them handed each the same change and accumulated their
 /// rewrites, in an order that varied between runs.
-#[test]
-fn clear_does_not_run_key_interceptors() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn clear_does_not_run_key_interceptors(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let items = cfg.items();
 
     let hits = Arc::new(Mutex::new(Vec::new()));
@@ -90,9 +91,9 @@ fn clear_does_not_run_key_interceptors() {
     );
 }
 
-#[test]
-fn key_interceptors_still_run_for_their_own_key() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn key_interceptors_still_run_for_their_own_key(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let items = cfg.items();
 
     let hits = Arc::new(Mutex::new(Vec::new()));
@@ -109,9 +110,9 @@ fn key_interceptors_still_run_for_their_own_key() {
 }
 
 /// A global interceptor is about the map, so it does see a `Clear`.
-#[test]
-fn clear_still_reaches_a_global_interceptor() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn clear_still_reaches_a_global_interceptor(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let items = cfg.items();
 
     let seen = Arc::new(Mutex::new(0usize));

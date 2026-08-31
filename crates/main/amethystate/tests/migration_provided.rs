@@ -7,10 +7,11 @@
 //! the step.
 
 use amethystate::migration::ComponentOutcome;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate};
 use amethystate_core::test_utils::unique_path;
 use amethystate_macros::amethystate;
+use amethystate_test_macros::backends;
 
 mod common;
 use common::shape;
@@ -53,12 +54,12 @@ fn migrate_settings_v1_to_v2(
 }
 
 /// The value reaches the step, and the step's output is what lands.
-#[test]
-fn a_provided_value_reaches_a_migration_step() {
+#[backends(all)]
+fn a_provided_value_reaches_a_migration_step(backend: Backend) {
     let path = unique_path("migration_provided");
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let _v1 = v1::Settings::new_with(&store).unwrap();
         store.save_now().unwrap();
     }
@@ -67,6 +68,7 @@ fn a_provided_value_reaches_a_migration_step() {
     // steps `#[migrate]` generated, which is the entry the store's own TODO
     // has open against it.
     let (store, report) = StoreBuilder::new(&path)
+        .backend(backend)
         .provide(LegacyDefaults { port: 4321 })
         .build_with_migration()
         .unwrap();
@@ -87,8 +89,8 @@ fn a_provided_value_reaches_a_migration_step() {
 /// migrations do not cross one: they run on whoever opened the store. `Rc`
 /// stands in here for the toolkit handles and `RefCell` graphs a GUI actually
 /// has - if this stops compiling, `Provided` has grown a `Send` bound back.
-#[test]
-fn a_value_that_is_not_send_can_still_be_provided() {
+#[backends(all)]
+fn a_value_that_is_not_send_can_still_be_provided(backend: Backend) {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -96,12 +98,13 @@ fn a_value_that_is_not_send_can_still_be_provided() {
     let seen: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let _v1 = v1::Settings::new_with(&store).unwrap();
         store.save_now().unwrap();
     }
 
     let (_store, report) = StoreBuilder::new(&path)
+        .backend(backend)
         .provide(LegacyDefaults { port: 7 })
         .provide(Rc::clone(&seen))
         .build_with_migration()
@@ -116,17 +119,20 @@ fn a_value_that_is_not_send_can_still_be_provided() {
 /// Pinned as a whole rather than searched for a substring: a wiring mistake is
 /// diagnosed by what the report *says*, and a `contains` passes just as
 /// happily on a report that names the type and explains nothing.
-#[test]
-fn a_step_that_needs_something_nobody_provided_says_which() {
+#[backends(all)]
+fn a_step_that_needs_something_nobody_provided_says_which(backend: Backend) {
     let path = unique_path("migration_provided_missing");
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let _v1 = v1::Settings::new_with(&store).unwrap();
         store.save_now().unwrap();
     }
 
-    let (_store, report) = StoreBuilder::new(&path).build_with_migration().unwrap();
+    let (_store, report) = StoreBuilder::new(&path)
+        .backend(backend)
+        .build_with_migration()
+        .unwrap();
 
     let failure = report
         .components

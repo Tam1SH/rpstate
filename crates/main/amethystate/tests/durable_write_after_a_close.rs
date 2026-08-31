@@ -1,5 +1,7 @@
-use amethystate::{StoreBuilder, amethystate};
+use amethystate::amethystate;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -25,10 +27,11 @@ fn answered_within<T: Send + 'static>(what: impl FnOnce() -> T + Send + 'static)
         .expect("a durable write after a close never answered")
 }
 
-#[test]
-fn a_durable_write_after_a_close_is_refused_rather_than_awaited() {
+#[backends(all)]
+fn a_durable_write_after_a_close_is_refused_rather_than_awaited(backend: Backend) {
     let path = TempPath::new("durable_after_close");
     let store = StoreBuilder::new(path.path())
+        .backend(backend)
         .disk(|d| d.debounce(Duration::from_secs(600)))
         .build()
         .unwrap();
@@ -42,10 +45,11 @@ fn a_durable_write_after_a_close_is_refused_rather_than_awaited() {
     insta::assert_snapshot!("durable_set_after_close", shape(&refused));
 }
 
-#[test]
-fn an_awaited_durable_write_after_a_close_is_refused_too() {
+#[backends(all)]
+fn an_awaited_durable_write_after_a_close_is_refused_too(backend: Backend) {
     let path = TempPath::new("durable_async_after_close");
     let store = StoreBuilder::new(path.path())
+        .backend(backend)
         .disk(|d| d.debounce(Duration::from_secs(600)))
         .build()
         .unwrap();

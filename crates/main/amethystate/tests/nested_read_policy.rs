@@ -1,7 +1,7 @@
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
+use amethystate_test_macros::backends;
 
 #[amethystate]
 pub struct Inherits {
@@ -27,43 +27,48 @@ pub struct StrictChild {
     pub db: Insists,
 }
 
-#[test]
-fn a_nested_struct_inherits_what_the_one_holding_it_decided()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_nested_struct_inherits_what_the_one_holding_it_decided(backend: Backend) {
     let path = TempPath::new("nested_policy_inherits");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["lenient_root", "db", "port"], &"not a number".to_string())?;
+    store
+        .set(["lenient_root", "db", "port"], &"not a number".to_string())
+        .unwrap();
 
-    let state = LenientRoot::new_with(&store)?;
+    let state = LenientRoot::new_with(&store).unwrap();
 
     assert_eq!(state.db().port().get(), 5432);
     assert!(state.db().port().try_get().is_err());
-
-    Ok(())
 }
 
-#[test]
-fn what_the_nested_struct_declared_wins() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn what_the_nested_struct_declared_wins(backend: Backend) {
     let path = TempPath::new("nested_policy_insists");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    store.set(["strict_child", "db", "port"], &"not a number".to_string())?;
+    store
+        .set(["strict_child", "db", "port"], &"not a number".to_string())
+        .unwrap();
 
     assert!(StrictChild::new_with(&store).is_err());
-
-    Ok(())
 }
 
-#[test]
-fn a_nested_struct_opens_normally_when_nothing_is_wrong() -> Result<(), Box<dyn Error + Send + Sync>>
-{
+#[backends(all)]
+fn a_nested_struct_opens_normally_when_nothing_is_wrong(backend: Backend) {
     let path = TempPath::new("nested_policy_ordinary");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
-    let state = LenientRoot::new_with(&store)?;
+    let state = LenientRoot::new_with(&store).unwrap();
 
-    assert_eq!(state.db().port().try_get()?, 5432);
-
-    Ok(())
+    assert_eq!(state.db().port().try_get().unwrap(), 5432);
 }

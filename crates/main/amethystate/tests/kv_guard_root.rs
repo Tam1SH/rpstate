@@ -1,5 +1,6 @@
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate_test_macros::backends;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
@@ -19,10 +20,13 @@ pub struct GuardedConfig {
 }
 
 /// Control: `Kv` refuses a path a prefixed struct owns.
-#[test]
-fn kv_refuses_a_path_owned_by_a_prefixed_struct() {
+#[backends(all)]
+fn kv_refuses_a_path_owned_by_a_prefixed_struct(backend: Backend) {
     let path = TempPath::new("kv_guard_prefixed");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let _cfg = GuardedConfig::new_with(&store).unwrap();
 
     let err = store
@@ -37,10 +41,13 @@ fn kv_refuses_a_path_owned_by_a_prefixed_struct() {
 /// A root struct's fields sit at bare paths, one level below nothing. Ownership
 /// is by declared path rather than by prefix, so those paths are declared like
 /// any others and a `Kv` write is refused there too.
-#[test]
-fn kv_refuses_a_path_owned_by_a_root_struct() {
+#[backends(all)]
+fn kv_refuses_a_path_owned_by_a_root_struct(backend: Backend) {
     let path = TempPath::new("kv_guard_root");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let cfg = RootConfig::new_with(&store).unwrap();
 
     let err = store.kv().set("width", &"oops".to_string()).unwrap_err();
@@ -53,18 +60,24 @@ fn kv_refuses_a_path_owned_by_a_root_struct() {
 /// What the refusal buys: a path written over with a type it cannot decode
 /// stops the struct loading on the next run, so the write has to be refused
 /// while the store is still open rather than found after a restart.
-#[test]
-fn a_root_field_survives_a_kv_write_of_another_type() {
+#[backends(all)]
+fn a_root_field_survives_a_kv_write_of_another_type(backend: Backend) {
     let path = TempPath::new("kv_guard_root_reopen");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let _cfg = RootConfig::new_with(&store).unwrap();
         store.kv().set("width", &"oops".to_string()).ok();
         store.flush_prefix(StorePath::root()).unwrap();
     }
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let cfg = RootConfig::new_with(&store);
     assert!(cfg.is_ok(), "the struct still loads after a reopen");
 }

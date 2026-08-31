@@ -2,9 +2,10 @@ use amethystate::amethystate;
 #[cfg(feature = "redb")]
 use amethystate::observability::InspectorBackend;
 #[cfg(feature = "redb")]
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 #[cfg(feature = "redb")]
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "ui", version = 1)]
 pub struct UiColors {
@@ -19,12 +20,15 @@ pub struct UiLayout {
 }
 
 #[cfg(feature = "redb")]
-#[test]
+#[backends(Redb)]
 #[ignore = "known: the snapshot store is keyed by prefix alone - see TODO.md"]
-fn two_schemas_at_one_prefix_each_keep_their_own_snapshot() {
+fn two_schemas_at_one_prefix_each_keep_their_own_snapshot(backend: Backend) {
     let path = TempPath::new("snapshot_per_prefix");
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let _a = UiColors::new_with(&store).unwrap();
         let _b = UiLayout::new_with(&store).unwrap();
         store.save_now().unwrap();

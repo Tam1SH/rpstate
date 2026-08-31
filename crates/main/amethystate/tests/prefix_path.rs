@@ -1,5 +1,7 @@
 use amethystate::store::StorePath;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{StateScope, amethystate};
+use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "ui.window")]
 pub struct WindowState {
@@ -73,13 +75,12 @@ fn a_written_prefix_keeps_the_levels_it_names() {
 
 /// A field key names a level under the prefix, and it is checked the same way -
 /// which is why a store written by the macro reads back through `StorePath`.
-#[test]
-fn a_field_key_names_a_level_under_the_prefix() {
-    let store = amethystate::store::builder::StoreBuilder::new(
-        amethystate_core::test_utils::unique_path("prefix_path_key"),
-    )
-    .build()
-    .unwrap();
+#[backends(all)]
+fn a_field_key_names_a_level_under_the_prefix(backend: Backend) {
+    let store = StoreBuilder::new(amethystate_core::test_utils::unique_path("prefix_path_key"))
+        .backend(backend)
+        .build()
+        .unwrap();
 
     let net = NetState::new_with(&store).unwrap();
     net.port().set(9090).unwrap();

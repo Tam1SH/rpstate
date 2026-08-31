@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveCell, ReactiveMap, amethystate};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -13,10 +14,10 @@ pub struct Ui {
     pub widths: ReactiveMap<String, u64>,
 }
 
-#[test]
-fn four_things_erase_into_one_type() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn four_things_erase_into_one_type(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_cell_sources");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
 
     //@show four ways to reach a cell
@@ -40,10 +41,12 @@ fn four_things_erase_into_one_type() -> Result<(), Box<dyn Error + Send + Sync>>
     Ok(())
 }
 
-#[test]
-fn a_cell_reads_writes_and_is_watched() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_cell_reads_writes_and_is_watched(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_cell_ops");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
     let cell = state.sidebar_width().cell();
 
@@ -64,11 +67,12 @@ fn a_cell_reads_writes_and_is_watched() -> Result<(), Box<dyn Error + Send + Syn
     Ok(())
 }
 
-#[test]
-fn an_entry_cell_is_empty_until_its_key_exists()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn an_entry_cell_is_empty_until_its_key_exists(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_cell_entry");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
 
     //@show a cell onto a map entry
@@ -85,11 +89,12 @@ fn an_entry_cell_is_empty_until_its_key_exists()
     Ok(())
 }
 
-#[test]
-fn a_view_dies_with_its_source_and_an_owning_cell_does_not()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_view_dies_with_its_source_and_an_owning_cell_does_not(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_cell_owning");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
 
     //@show a view, and a cell that owns what feeds it

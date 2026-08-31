@@ -1,20 +1,19 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{IntoGlobalStore, global_store};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
+use amethystate_test_macros::backends;
 
 mod common;
 use common::shape;
 
-#[test]
-fn a_write_after_shutdown_is_refused_and_what_came_before_it_is_on_disk()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(Redb)]
+fn a_write_after_shutdown_is_refused_and_what_came_before_it_is_on_disk(backend: Backend) {
     let path = TempPath::new("global_shutdown");
-    let guard = StoreBuilder::new(path.path()).init_global();
+    let guard = StoreBuilder::new(path.path()).backend(backend).init_global();
 
-    global_store().kv().set("port", &8080u16)?;
+    global_store().kv().set("port", &8080u16).unwrap();
 
-    amethystate::shutdown()?;
+    amethystate::shutdown().unwrap();
 
     let refused = global_store()
         .kv()
@@ -26,8 +25,9 @@ fn a_write_after_shutdown_is_refused_and_what_came_before_it_is_on_disk()
 
     drop(guard);
 
-    let reopened = StoreBuilder::new(path.path()).build()?;
-    assert_eq!(reopened.kv().get::<u16>("port")?, Some(8080));
-
-    Ok(())
+    let reopened = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+    assert_eq!(reopened.kv().get::<u16>("port").unwrap(), Some(8080));
 }

@@ -1,8 +1,9 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, ReactiveMap, migrate};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
+use amethystate_test_macros::backends;
 
 mod dropmap_v1 {
     use super::*;
@@ -33,16 +34,15 @@ fn migrate_dropmap_v1_to_v2(
 /// map's own path, and whether that takes the entries is the engine's answer,
 /// not the cleanup's. A document engine removes the subtree with the node; a
 /// flat engine has no key there and every entry survives.
-#[test]
-#[cfg_attr(
-    any(feature = "redb", feature = "sqlite"),
-    ignore = "known: on a flat engine the map's own path holds nothing, so deleting it leaves the entries - see TODO.md"
-)]
-fn dropping_a_reactive_map_field_removes_its_entries() {
+#[backends(all)]
+fn dropping_a_reactive_map_field_removes_its_entries(backend: Backend) {
     let path = TempPath::new("dropmap");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let v1 = dropmap_v1::DropMap::new_with(&store).unwrap();
         v1.cache().insert("alpha".into(), &7u32).unwrap();
         v1.cache().insert("beta".into(), &9u32).unwrap();
@@ -55,6 +55,7 @@ fn dropping_a_reactive_map_field_removes_its_entries() {
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
+        .backend(backend)
         .migrations(|m| {
             m.collect_codegen();
         })
@@ -102,12 +103,15 @@ fn migrate_dropscalar_v1_to_v2(
 
 /// Control: the same drop of a plain scalar field is cleaned up, so the map
 /// case above fails on the map, not on migration cleanup in general.
-#[test]
-fn dropping_a_scalar_field_removes_its_value() {
+#[backends(all)]
+fn dropping_a_scalar_field_removes_its_value(backend: Backend) {
     let path = TempPath::new("dropscalar");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let v1 = dropscalar_v1::DropScalar::new_with(&store).unwrap();
         v1.gone().set(42).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
@@ -115,6 +119,7 @@ fn dropping_a_scalar_field_removes_its_value() {
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
+        .backend(backend)
         .migrations(|m| {
             m.collect_codegen();
         })
@@ -161,16 +166,15 @@ fn migrate_dropnested_v1_to_v2(
 /// A `#[amestate(nested)]` field removed in v2: cleanup deletes the branch
 /// path. A document engine takes the sub-fields with it; a flat one holds
 /// nothing at a branch, so they survive.
-#[test]
-#[cfg_attr(
-    any(feature = "redb", feature = "sqlite"),
-    ignore = "known: on a flat engine the branch path holds nothing, so deleting it leaves the leaves - see TODO.md"
-)]
-fn dropping_a_nested_struct_field_removes_its_leaves() {
+#[backends(all)]
+fn dropping_a_nested_struct_field_removes_its_leaves(backend: Backend) {
     let path = TempPath::new("dropnested");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let v1 = dropnested_v1::DropNested::new_with(&store).unwrap();
         v1.legacy().inner().set(77).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
@@ -181,6 +185,7 @@ fn dropping_a_nested_struct_field_removes_its_leaves() {
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
+        .backend(backend)
         .migrations(|m| {
             m.collect_codegen();
         })

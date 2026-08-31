@@ -1,6 +1,7 @@
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::error::Error;
 
 #[amethystate(prefix = "network")]
@@ -9,10 +10,18 @@ pub struct Network {
     pub port: u16,
 }
 
-#[test]
-fn raw_values_at_paths() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_raw");
-    let store = StoreBuilder::new(path.path()).build()?;
+fn open(
+    backend: Backend,
+    tag: &str,
+) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
+    let path = TempPath::new(tag);
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
+    Ok((store, path))
+}
+
+#[backends(all)]
+fn raw_values_at_paths(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_raw")?;
 
     //@show reading and writing without a schema
     let kv = store.kv();
@@ -36,16 +45,9 @@ fn raw_values_at_paths() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-#[cfg_attr(
-    all(feature = "text", not(feature = "redb"), not(feature = "sqlite")),
-    ignore = "known: a text engine's scan stops one level below the handle, so a \
-              listing answers `ui` where the key is `ui.panel.left` - it caps at \
-              parts.len() + 1 and returns the node. Fixed when the schema is on disk"
-)]
-fn what_a_listing_covers() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_keys");
-    let store = StoreBuilder::new(path.path()).build()?;
+#[backends(all)]
+fn what_a_listing_covers(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_keys")?;
     let kv = store.kv();
 
     //@show what a listing covers
@@ -77,10 +79,9 @@ fn what_a_listing_covers() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn a_cell_and_a_map_without_a_struct() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_primitives");
-    let store = StoreBuilder::new(path.path()).build()?;
+#[backends(all)]
+fn a_cell_and_a_map_without_a_struct(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_primitives")?;
     let kv = store.kv();
 
     //@show a cell and a map with nothing declared
@@ -96,10 +97,11 @@ fn a_cell_and_a_map_without_a_struct() -> Result<(), Box<dyn Error + Send + Sync
     Ok(())
 }
 
-#[test]
-fn a_path_a_struct_declared_is_refused() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_owned");
-    let store = StoreBuilder::new(path.path()).build()?;
+#[backends(all)]
+fn a_path_a_struct_declared_is_refused(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_owned")?;
     let _network = Network::new_with(&store)?;
     let kv = store.kv();
 
@@ -114,10 +116,9 @@ fn a_path_a_struct_declared_is_refused() -> Result<(), Box<dyn Error + Send + Sy
     Ok(())
 }
 
-#[test]
-fn the_stored_value_decides_the_type() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_types");
-    let store = StoreBuilder::new(path.path()).build()?;
+#[backends(all)]
+fn the_stored_value_decides_the_type(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_types")?;
     let kv = store.kv();
 
     //@show asking for one path as two types
@@ -132,10 +133,11 @@ fn the_stored_value_decides_the_type() -> Result<(), Box<dyn Error + Send + Sync
     Ok(())
 }
 
-#[test]
-fn a_cell_fills_the_path_it_was_asked_about() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_empty");
-    let store = StoreBuilder::new(path.path()).build()?;
+#[backends(all)]
+fn a_cell_fills_the_path_it_was_asked_about(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_empty")?;
     let kv = store.kv();
     let empty = kv.namespace("never_written");
 
@@ -151,10 +153,9 @@ fn a_cell_fills_the_path_it_was_asked_about() -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-#[test]
-fn raw_writes_are_checked_by_nothing() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = TempPath::new("book_kv_raw_types");
-    let store = StoreBuilder::new(path.path()).build()?;
+#[backends(all)]
+fn raw_writes_are_checked_by_nothing(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_kv_raw_types")?;
     let kv = store.kv();
 
     kv.set("thing", &1u32)?;

@@ -5,7 +5,8 @@
 //! those go away again, and it must not take the declared settings with them.
 
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate_test_macros::backends;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
 
@@ -27,17 +28,20 @@ pub struct Panel {
     pub visible: bool,
 }
 
-fn store() -> amethystate::Store {
-    StoreBuilder::new(unique_path("kv_clear")).build().unwrap()
+fn store(backend: Backend) -> amethystate::Store {
+    StoreBuilder::new(unique_path("kv_clear"))
+        .backend(backend)
+        .build()
+        .unwrap()
 }
 
 fn at(joined: &str) -> StorePath {
     StorePath::parse_joined(joined).unwrap()
 }
 
-#[test]
-fn clearing_takes_what_no_schema_declared_and_leaves_the_rest() {
-    let store = store();
+#[backends(all)]
+fn clearing_takes_what_no_schema_declared_and_leaves_the_rest(backend: Backend) {
+    let store = store(backend);
     let app = App::new_with(&store).unwrap();
     let kv = store.kv().namespace("app");
 
@@ -84,9 +88,9 @@ fn clearing_takes_what_no_schema_declared_and_leaves_the_rest() {
 /// A declared path under an undeclared level is descended into, not skipped -
 /// otherwise an extension writing beside a nested struct's field would be
 /// immortal.
-#[test]
-fn clearing_descends_past_a_level_that_holds_a_declared_path() {
-    let store = store();
+#[backends(all)]
+fn clearing_descends_past_a_level_that_holds_a_declared_path(backend: Backend) {
+    let store = store(backend);
     let app = App::new_with(&store).unwrap();
     let panel = store.kv().namespace("app").namespace("panel");
 
@@ -112,9 +116,9 @@ fn clearing_descends_past_a_level_that_holds_a_declared_path() {
 
 /// Clearing is not restoring defaults: a declared value that was changed keeps
 /// its change.
-#[test]
-fn clearing_does_not_restore_a_declared_default() {
-    let store = store();
+#[backends(all)]
+fn clearing_does_not_restore_a_declared_default(backend: Backend) {
+    let store = store(backend);
     let app = App::new_with(&store).unwrap();
     app.width().set(640).unwrap();
 
@@ -128,12 +132,15 @@ fn clearing_does_not_restore_a_declared_default() {
 /// saying the namespace was seeded has to go with them, or the next
 /// construction reads "already been here" and writes nothing, and the settings
 /// are gone rather than reset.
-#[test]
-fn resetting_puts_the_declared_defaults_back_on_the_next_build() {
+#[backends(all)]
+fn resetting_puts_the_declared_defaults_back_on_the_next_build(backend: Backend) {
     let path = unique_path("kv_reset");
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(backend)
+            .build()
+            .unwrap();
         let app = App::new_with(&store).unwrap();
         app.width().set(640).unwrap();
         app.panel().visible().set(false).unwrap();
@@ -142,13 +149,19 @@ fn resetting_puts_the_declared_defaults_back_on_the_next_build() {
     }
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path)
+            .backend(backend)
+            .build()
+            .unwrap();
         let cleared = store.kv().namespace("app").reset_to_defaults().unwrap();
         assert!(!cleared.removed.is_empty(), "nothing was reset");
         store.save_now().unwrap();
     }
 
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path)
+        .backend(backend)
+        .build()
+        .unwrap();
     let app = App::new_with(&store).unwrap();
 
     assert_eq!(app.width().get(), 1280, "the default did not come back");

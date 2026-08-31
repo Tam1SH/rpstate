@@ -1,10 +1,11 @@
 use amethystate::store::StorageError;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::owners::Claimed;
 use amethystate::{StorageResult, Store};
 use amethystate_core::facts::all;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
+use amethystate_test_macros::backends;
 
 mod common;
 use common::shape;
@@ -40,12 +41,16 @@ pub struct TypedPanels {
 }
 
 fn contested(
+    backend: Backend,
     at: &str,
     first: fn(&Store) -> StorageResult<()>,
     second: fn(&Store) -> StorageResult<()>,
 ) -> String {
     let path = TempPath::new(at);
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     first(&store).expect("the first spelling is free to take it");
     let refused = second(&store).expect_err("the second wanted the same place");
@@ -74,11 +79,12 @@ fn contested(
     shape(&refused)
 }
 
-#[test]
-fn a_dotted_key_and_a_dotted_prefix_reach_one_place() {
+#[backends(all)]
+fn a_dotted_key_and_a_dotted_prefix_reach_one_place(backend: Backend) {
     insta::assert_snapshot!(
         "overlap_key_against_prefix",
         contested(
+            backend,
             "overlap_key_prefix",
             |s| Outer::new_with(s).map(|_| ()),
             |s| Panels::new_with(s).map(|_| ()),
@@ -86,11 +92,12 @@ fn a_dotted_key_and_a_dotted_prefix_reach_one_place() {
     );
 }
 
-#[test]
-fn a_dotted_key_and_a_prefix_all_the_way_down_reach_one_place() {
+#[backends(all)]
+fn a_dotted_key_and_a_prefix_all_the_way_down_reach_one_place(backend: Backend) {
     insta::assert_snapshot!(
         "overlap_key_against_deep_prefix",
         contested(
+            backend,
             "overlap_key_deep",
             |s| Outer::new_with(s).map(|_| ()),
             |s| Left::new_with(s).map(|_| ()),
@@ -98,11 +105,12 @@ fn a_dotted_key_and_a_prefix_all_the_way_down_reach_one_place() {
     );
 }
 
-#[test]
-fn two_prefixes_of_different_depth_reach_one_place() {
+#[backends(all)]
+fn two_prefixes_of_different_depth_reach_one_place(backend: Backend) {
     insta::assert_snapshot!(
         "overlap_prefix_against_deep_prefix",
         contested(
+            backend,
             "overlap_prefix_deep",
             |s| Panels::new_with(s).map(|_| ()),
             |s| Left::new_with(s).map(|_| ()),
@@ -110,10 +118,13 @@ fn two_prefixes_of_different_depth_reach_one_place() {
     );
 }
 
-#[test]
-fn one_claim_refuses_every_other_spelling_not_only_the_next() {
+#[backends(all)]
+fn one_claim_refuses_every_other_spelling_not_only_the_next(backend: Backend) {
     let path = TempPath::new("overlap_chain");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     Outer::new_with(&store).unwrap();
 
@@ -133,10 +144,13 @@ fn one_claim_refuses_every_other_spelling_not_only_the_next() {
     Outer::new_with(&store).expect("a refusal must not disturb the claim it refused for");
 }
 
-#[test]
-fn the_chain_refuses_in_either_order() {
+#[backends(all)]
+fn the_chain_refuses_in_either_order(backend: Backend) {
     let path = TempPath::new("overlap_chain_reversed");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     Left::new_with(&store).unwrap();
 
@@ -146,10 +160,13 @@ fn the_chain_refuses_in_either_order() {
     Left::new_with(&store).expect("a refusal must not disturb the claim it refused for");
 }
 
-#[test]
-fn a_prefix_is_refused_by_a_field_already_under_it() {
+#[backends(all)]
+fn a_prefix_is_refused_by_a_field_already_under_it(backend: Backend) {
     let path = TempPath::new("root_is_a_leaf_reversed");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     Branch::new_with(&store).unwrap();
     let refused = Root::new_with(&store).unwrap_err();
@@ -164,10 +181,13 @@ fn a_prefix_is_refused_by_a_field_already_under_it() {
     );
 }
 
-#[test]
-fn a_claim_outlives_the_handle_that_made_it() {
+#[backends(all)]
+fn a_claim_outlives_the_handle_that_made_it(backend: Backend) {
     let path = TempPath::new("overlap_dropped");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     drop(Outer::new_with(&store).unwrap());
 
@@ -177,10 +197,13 @@ fn a_claim_outlives_the_handle_that_made_it() {
     );
 }
 
-#[test]
-fn an_overlap_between_different_types_is_reported_as_an_overlap() {
+#[backends(all)]
+fn an_overlap_between_different_types_is_reported_as_an_overlap(backend: Backend) {
     let path = TempPath::new("prefix_overlap_typed");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     let _outer = TypedOuter::new_with(&store).unwrap();
     let refused = TypedPanels::new_with(&store).unwrap_err();
@@ -204,10 +227,13 @@ pub struct Branch {
     pub x: u32,
 }
 
-#[test]
-fn a_prefix_may_not_land_on_another_structs_field() {
+#[backends(all)]
+fn a_prefix_may_not_land_on_another_structs_field(backend: Backend) {
     let path = TempPath::new("root_is_a_leaf");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     let _root = Root::new_with(&store).unwrap();
     let refused = Branch::new_with(&store).unwrap_err();
@@ -222,10 +248,13 @@ fn a_prefix_may_not_land_on_another_structs_field() {
     );
 }
 
-#[test]
-fn a_map_will_not_open_over_keys_deeper_than_its_entries() {
+#[backends(all)]
+fn a_map_will_not_open_over_keys_deeper_than_its_entries(backend: Backend) {
     let path = TempPath::new("map_swallows_below");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     store.set(["widths", "left", "px"], &800u32).unwrap();
     store.set(["widths", "left", "pct"], &50u32).unwrap();

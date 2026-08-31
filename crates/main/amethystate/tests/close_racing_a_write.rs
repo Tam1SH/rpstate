@@ -1,5 +1,6 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -8,11 +9,14 @@ const ROUNDS: u32 = 24;
 const WRITERS: u32 = 4;
 const EACH: u32 = 50;
 
-#[test]
-fn a_write_that_was_accepted_survives_a_close_racing_it() {
+#[backends(all)]
+fn a_write_that_was_accepted_survives_a_close_racing_it(backend: Backend) {
     for round in 0..ROUNDS {
         let path = TempPath::new("close_race");
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
 
         let go = Arc::new(AtomicBool::new(false));
 
@@ -60,7 +64,10 @@ fn a_write_that_was_accepted_survives_a_close_racing_it() {
         closer.join().expect("the closer panicked").unwrap();
         drop(store);
 
-        let reopened = StoreBuilder::new(path.path()).build().unwrap();
+        let reopened = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         for (key, value) in &accepted {
             assert_eq!(
                 reopened.get::<u32>(["race", key.as_str()]).unwrap(),

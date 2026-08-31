@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveScope, amethystate};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
@@ -13,15 +14,20 @@ pub struct ConnectionState {
     pub host: String,
 }
 
-fn open(tag: &str) -> Result<(ConnectionState, TempPath), Box<dyn Error + Send + Sync>> {
+fn open(
+    backend: Backend,
+    tag: &str,
+) -> Result<(ConnectionState, TempPath), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new(tag);
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     Ok((ConnectionState::new_with(&store)?, path))
 }
 
-#[test]
-fn a_subscription_lasts_as_long_as_its_handle() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (state, _path) = open("book_subs_raii")?;
+#[backends(all)]
+fn a_subscription_lasts_as_long_as_its_handle(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (state, _path) = open(backend, "book_subs_raii")?;
     let heard = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&heard);
 
@@ -50,9 +56,9 @@ fn a_subscription_lasts_as_long_as_its_handle() -> Result<(), Box<dyn Error + Se
     Ok(())
 }
 
-#[test]
-fn a_scope_holds_several_at_once() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (state, _path) = open("book_subs_scope")?;
+#[backends(all)]
+fn a_scope_holds_several_at_once(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (state, _path) = open(backend, "book_subs_scope")?;
 
     //@show keeping several subscriptions in one place
     let mut scope = ReactiveScope::new();
@@ -72,9 +78,9 @@ fn a_scope_holds_several_at_once() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn ignoring_your_own_writes() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (state, _path) = open("book_subs_external")?;
+#[backends(all)]
+fn ignoring_your_own_writes(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (state, _path) = open(backend, "book_subs_external")?;
     let heard = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&heard);
 
@@ -98,9 +104,11 @@ fn ignoring_your_own_writes() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn a_clone_is_the_same_actor_and_a_fork_is_not() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (state, _path) = open("book_subs_identity")?;
+#[backends(all)]
+fn a_clone_is_the_same_actor_and_a_fork_is_not(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (state, _path) = open(backend, "book_subs_identity")?;
 
     let heard = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&heard);
@@ -127,9 +135,9 @@ fn a_clone_is_the_same_actor_and_a_fork_is_not() -> Result<(), Box<dyn Error + S
     Ok(())
 }
 
-#[test]
-fn who_made_the_change() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (state, _path) = open("book_subs_source")?;
+#[backends(all)]
+fn who_made_the_change(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (state, _path) = open(backend, "book_subs_source")?;
     let heard = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&heard);
 

@@ -1,8 +1,9 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
+use amethystate_test_macros::backends;
 
 mod keyed_v1 {
     use super::*;
@@ -30,13 +31,16 @@ fn migrate_keyed_v1_to_v2(
     })
 }
 
-#[test]
+#[backends(all)]
 #[ignore = "known: migration cleanup addresses the Rust name, not the stored one - see TODO.md"]
-fn renaming_a_field_that_carries_a_key_moves_its_stored_value() {
+fn renaming_a_field_that_carries_a_key_moves_its_stored_value(backend: Backend) {
     let path = TempPath::new("keyed_rename");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let v1 = keyed_v1::Keyed::new_with(&store).unwrap();
         v1.left_panel_visible().set(false).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
@@ -95,13 +99,16 @@ fn migrate_dropped_v1_to_v2(
     Ok(AmeData::<Dropped> { kept: old.kept })
 }
 
-#[test]
+#[backends(all)]
 #[ignore = "known: migration cleanup addresses the Rust name, not the stored one - see TODO.md"]
-fn dropping_a_field_that_carries_a_key_removes_its_stored_value() {
+fn dropping_a_field_that_carries_a_key_removes_its_stored_value(backend: Backend) {
     let path = TempPath::new("keyed_drop");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let v1 = dropped_v1::Dropped::new_with(&store).unwrap();
         v1.legacy_token().set("secret".to_string()).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
@@ -147,18 +154,22 @@ fn migrate_plain_v1_to_v2(
     Ok(AmeData::<Plain> { kept: old.kept })
 }
 
-#[test]
-fn dropping_a_plain_field_removes_its_stored_value() {
+#[backends(all)]
+fn dropping_a_plain_field_removes_its_stored_value(backend: Backend) {
     let path = TempPath::new("plain_drop");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let v1 = plain_v1::Plain::new_with(&store).unwrap();
         v1.legacy_token().set("secret".to_string()).unwrap();
         store.flush_prefix(StorePath::root()).unwrap();
     }
 
     let (store, _report) = StoreBuilder::new(path.path())
+        .backend(backend)
         .migrations(|m| {
             m.collect_codegen();
         })

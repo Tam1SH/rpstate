@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeType, ReactiveMap};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::Arc;
@@ -48,8 +49,10 @@ pub struct SystemSettings {
 }
 //@show-end
 
-#[test]
-fn opening_a_store_and_reading_a_field() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(Redb)]
+fn opening_a_store_and_reading_a_field(
+    _backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_quick_start");
     let settings = path.path();
 
@@ -67,10 +70,12 @@ fn opening_a_store_and_reading_a_field() -> Result<(), Box<dyn Error + Send + Sy
     Ok(())
 }
 
-#[test]
-fn writing_a_field_and_hearing_about_it() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn writing_a_field_and_hearing_about_it(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_quick_start_write");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = NetworkState::new_with(&store)?;
 
     let heard = Arc::new(AtomicU16::new(0));
@@ -95,10 +100,12 @@ fn writing_a_field_and_hearing_about_it() -> Result<(), Box<dyn Error + Send + S
     Ok(())
 }
 
-#[test]
-fn a_persistent_struct_is_plain_fields() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_persistent_struct_is_plain_fields(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_quick_start_kept");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
     //@show writing a persistent struct
     let mut state = KeptSettings::load_with(&store)?;
@@ -118,10 +125,12 @@ fn a_persistent_struct_is_plain_fields() -> Result<(), Box<dyn Error + Send + Sy
     Ok(())
 }
 
-#[test]
-fn a_map_takes_entries_it_was_not_declared_with() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_map_takes_entries_it_was_not_declared_with(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_quick_start_map");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = SystemSettings::new_with(&store)?;
 
     //@show working with a map

@@ -1,7 +1,8 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate, migrate_field};
 use amethystate_core::test_utils::unique_path;
 use amethystate_macros::amethystate;
+use amethystate_test_macros::backends;
 
 mod v1 {
     use super::*;
@@ -63,12 +64,12 @@ fn migrate_system_config_v1_to_v2(
     })
 }
 
-#[test]
-fn test_nested_and_ephemeral_integration() {
-    let path = unique_path("amethystate_ephemeral_test.redb");
+#[backends(all)]
+fn test_nested_and_ephemeral_integration(backend: Backend) {
+    let path = unique_path("amethystate_ephemeral_test");
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
         let sys = v1::SystemConfig::new_with(&store).unwrap();
         let ui = v1::Dashboard::new_with(&store).unwrap();
@@ -83,7 +84,10 @@ fn test_nested_and_ephemeral_integration() {
     }
 
     {
-        let (store, _) = StoreBuilder::new(&path).build_with_migration().unwrap();
+        let (store, _) = StoreBuilder::new(&path)
+            .backend(backend)
+            .build_with_migration()
+            .unwrap();
 
         let sys = SystemConfig::new_with(&store).expect("Failed to load v2 system");
         let ui = Dashboard::new_with(&store).expect("Failed to load dashboard");

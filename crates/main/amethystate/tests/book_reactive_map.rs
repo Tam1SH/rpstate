@@ -1,18 +1,22 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn open(tag: &str) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
+fn open(
+    backend: Backend,
+    tag: &str,
+) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new(tag);
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     Ok((store, path))
 }
 
-#[test]
-fn reading_a_map() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_map_read")?;
+#[backends(all)]
+fn reading_a_map(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_map_read")?;
     let widths = store.kv().map::<String, u64>("columns")?;
     widths.insert("cpu".to_string(), &120)?;
     widths.insert("mem".to_string(), &80)?;
@@ -43,9 +47,9 @@ fn reading_a_map() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn looking_without_taking() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_map_view")?;
+#[backends(all)]
+fn looking_without_taking(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_map_view")?;
     let widths = store.kv().map::<String, u64>("columns")?;
     widths.insert("cpu".to_string(), &120)?;
     widths.insert("mem".to_string(), &80)?;
@@ -66,9 +70,9 @@ fn looking_without_taking() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn walking_a_map_and_writing_to_it() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_map_walk_write")?;
+#[backends(all)]
+fn walking_a_map_and_writing_to_it(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_map_walk_write")?;
     let widths = store.kv().map::<String, u64>("columns")?;
     widths.insert("cpu".to_string(), &120)?;
     widths.insert("mem".to_string(), &80)?;
@@ -88,9 +92,9 @@ fn walking_a_map_and_writing_to_it() -> Result<(), Box<dyn Error + Send + Sync>>
     Ok(())
 }
 
-#[test]
-fn writing_to_a_map() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_map_write")?;
+#[backends(all)]
+fn writing_to_a_map(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_map_write")?;
     let widths = store.kv().map::<String, u64>("columns")?;
 
     //@show adding, changing and removing an entry
@@ -111,9 +115,9 @@ fn writing_to_a_map() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn the_order_is_the_stores() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_map_order")?;
+#[backends(all)]
+fn the_order_is_the_stores(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_map_order")?;
     let counts = store.kv().map::<String, u64>("counts")?;
 
     //@show the order entries come back in
@@ -129,9 +133,9 @@ fn the_order_is_the_stores() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[test]
-fn hearing_about_a_change() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (store, _path) = open("book_map_subs")?;
+#[backends(all)]
+fn hearing_about_a_change(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (store, _path) = open(backend, "book_map_subs")?;
     let widths = store.kv().map::<String, u64>("columns")?;
 
     let anything = Arc::new(AtomicUsize::new(0));

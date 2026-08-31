@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
 #[amethystate(prefix = "probe")]
@@ -34,10 +35,10 @@ where
     (seen, sub)
 }
 
-#[test]
-fn clear_reports_once_to_every_handle() {
+#[backends(all)]
+fn clear_reports_once_to_every_handle(backend: Backend) {
     let path = unique_path("clear_one_event");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let a = Cfg::new_with(&store).unwrap();
     let b = Cfg::new_with(&store).unwrap();
@@ -51,10 +52,10 @@ fn clear_reports_once_to_every_handle() {
     assert_eq!(*seen_b.lock().unwrap(), vec!["clear"]);
 }
 
-#[test]
-fn clear_empties_every_handle() {
+#[backends(all)]
+fn clear_empties_every_handle(backend: Backend) {
     let path = unique_path("clear_empties");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let a = Cfg::new_with(&store).unwrap();
     let b = Cfg::new_with(&store).unwrap();
@@ -67,28 +68,28 @@ fn clear_empties_every_handle() {
     assert_eq!(b.items().get("a"), None);
 }
 
-#[test]
-fn clear_survives_a_store_rebuild() {
+#[backends(all)]
+fn clear_survives_a_store_rebuild(backend: Backend) {
     let path = unique_path("clear_persists");
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         cfg.items().clear().unwrap();
         store.save_now().unwrap();
     }
 
     {
-        let store = StoreBuilder::new(&path).build().unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         assert_eq!(cfg.items().len(), 0);
     }
 }
 
-#[test]
-fn clear_carries_the_provenance_of_the_handle_that_issued_it() {
+#[backends(all)]
+fn clear_carries_the_provenance_of_the_handle_that_issued_it(backend: Backend) {
     let path = unique_path("clear_source");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     let items = cfg.items();

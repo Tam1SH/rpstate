@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
 #[amethystate(prefix = "old")]
@@ -13,10 +14,10 @@ pub struct Cfg {
 /// emptied it the next write reported no old value - and the map turned that
 /// into the type's default. Comparing old against new in a subscriber worked on
 /// the text backends and quietly did not on redb and sqlite.
-#[test]
-fn an_update_reports_the_value_that_was_there_before() {
+#[backends(all)]
+fn an_update_reports_the_value_that_was_there_before(backend: Backend) {
     let path = unique_path("old_value");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     cfg.items().insert("k".into(), &5).unwrap();
@@ -46,10 +47,10 @@ fn an_update_reports_the_value_that_was_there_before() {
     );
 }
 
-#[test]
-fn an_unflushed_write_is_the_old_value_for_the_next_one() {
+#[backends(all)]
+fn an_unflushed_write_is_the_old_value_for_the_next_one(backend: Backend) {
     let path = unique_path("old_value_buffered");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     cfg.items().insert("k".into(), &1).unwrap();
@@ -73,10 +74,10 @@ fn an_unflushed_write_is_the_old_value_for_the_next_one() {
     );
 }
 
-#[test]
-fn a_removal_reports_the_flushed_value() {
+#[backends(all)]
+fn a_removal_reports_the_flushed_value(backend: Backend) {
     let path = unique_path("old_value_remove");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     cfg.items().insert("k".into(), &42).unwrap();

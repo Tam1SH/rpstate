@@ -7,8 +7,9 @@
 //! ought to; this measures it rather than reasoning about it.
 
 use amethystate::amethystate;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -26,13 +27,19 @@ pub struct Slow {
 
 /// A subscriber on one store must not hear the other store's writes, however
 /// alike the paths under them look.
-#[test]
-fn subscriptions_from_two_stores_are_independent() {
+#[backends(all)]
+fn subscriptions_from_two_stores_are_independent(backend: Backend) {
     let fast_path = TempPath::new("two_stores_indep_fast");
     let slow_path = TempPath::new("two_stores_indep_slow");
 
-    let fast_store = StoreBuilder::new(fast_path.path()).build().unwrap();
-    let slow_store = StoreBuilder::new(slow_path.path()).build().unwrap();
+    let fast_store = StoreBuilder::new(fast_path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+    let slow_store = StoreBuilder::new(slow_path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
 
     let fast = Fast::new_with(&fast_store).unwrap();
     let slow = Slow::new_with(&slow_store).unwrap();

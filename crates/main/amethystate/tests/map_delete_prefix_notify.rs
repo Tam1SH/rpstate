@@ -1,13 +1,17 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Control: `ReactiveMap::clear` emits a prefix delete the map recognises.
-#[test]
-fn clearing_a_map_notifies_its_subscribers() {
+#[backends(all)]
+fn clearing_a_map_notifies_its_subscribers(backend: Backend) {
     let path = TempPath::new("map_clear_notify");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = store.kv().map::<String, u32>("columns").unwrap();
     map.insert("cpu".into(), &1).unwrap();
 
@@ -24,10 +28,13 @@ fn clearing_a_map_notifies_its_subscribers() {
 /// Deleting the map's own prefix through the store removes every entry, but
 /// the event carries the path without the trailing separator, which the map's
 /// subscription compares against the dotted form - so nothing is notified.
-#[test]
-fn deleting_a_maps_prefix_notifies_its_subscribers() {
+#[backends(all)]
+fn deleting_a_maps_prefix_notifies_its_subscribers(backend: Backend) {
     let path = TempPath::new("map_delete_prefix_notify");
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let map = store.kv().map::<String, u32>("columns").unwrap();
     map.insert("cpu".into(), &1).unwrap();
 

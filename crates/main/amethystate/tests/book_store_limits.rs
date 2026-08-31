@@ -1,11 +1,14 @@
 use amethystate::store::StorageError;
-use amethystate::store::builder::{StoreBuilder, default_backend};
+use amethystate::store::builder::{Backend, StoreBuilder, default_backend};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::error::Error;
 
-#[test]
-fn a_path_deeper_than_the_cap_is_refused() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(Redb)]
+fn a_path_deeper_than_the_cap_is_refused(
+    _backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_limits_depth");
     let settings = path.path();
 
@@ -29,9 +32,10 @@ fn a_path_deeper_than_the_cap_is_refused() -> Result<(), Box<dyn Error + Send + 
     Ok(())
 }
 
-#[test]
-fn a_store_can_promise_to_stay_readable_elsewhere()
--> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(Redb)]
+fn a_store_can_promise_to_stay_readable_elsewhere(
+    _backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_limits_portable");
     let settings = path.path();
 

@@ -1,10 +1,11 @@
-use amethystate::store::StorageError;
-use amethystate::store::builder::StoreBuilder;
-use amethystate::store::owners::Claimed;
 use amethystate::amethystate;
+use amethystate::store::StorageError;
+use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate::store::owners::Claimed;
 use amethystate_core::facts::all;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 use std::error::Error;
 
 //@show two structs that want the same place
@@ -27,10 +28,12 @@ pub struct Editor {
     pub font_size: u32,
 }
 
-#[test]
-fn the_second_claim_on_one_place_is_refused() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn the_second_claim_on_one_place_is_refused(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_claims");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
     //@show what the refusal looks like
     let _ui = Ui::new_with(&store)?;
@@ -51,10 +54,12 @@ fn the_second_claim_on_one_place_is_refused() -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-#[test]
-fn places_that_do_not_meet_are_left_alone() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn places_that_do_not_meet_are_left_alone(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_claims_apart");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
     //@show two structs that do not meet
     let _ui = Ui::new_with(&store)?;
@@ -64,10 +69,12 @@ fn places_that_do_not_meet_are_left_alone() -> Result<(), Box<dyn Error + Send +
     Ok(())
 }
 
-#[test]
-fn a_claim_outlives_the_handle_that_made_it() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn a_claim_outlives_the_handle_that_made_it(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_claims_dropped");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
     drop(Ui::new_with(&store)?);
 
@@ -79,10 +86,12 @@ fn a_claim_outlives_the_handle_that_made_it() -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-#[test]
-fn the_store_says_who_claimed_a_place() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[backends(all)]
+fn the_store_says_who_claimed_a_place(
+    backend: Backend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("book_claims_who");
-    let store = StoreBuilder::new(path.path()).build()?;
+    let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
     let _ui = Ui::new_with(&store)?;
 

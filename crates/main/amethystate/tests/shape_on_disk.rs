@@ -10,11 +10,12 @@
 use amethystate::migration::fields::Role;
 #[cfg(feature = "redb")]
 use amethystate::observability::InspectorBackend;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 #[cfg(feature = "redb")]
 use amethystate::store::meta::{SchemaSnapshot, StoredFieldEntry};
 use amethystate::{ReactiveMap, amethystate};
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "ondisk", version = 1)]
 pub struct Recorded {
@@ -52,17 +53,21 @@ pub struct NetPart {
 ///
 /// This is the half that runs on every engine. Reading the recorded shape apart
 /// needs the inspector, and that is redb-only below.
-#[test]
-fn the_recorded_shape_survives_this_engines_codec() {
+#[backends(all)]
+fn the_recorded_shape_survives_this_engines_codec(backend: Backend) {
     let path = TempPath::new("shape_codec");
 
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let _state = Recorded::new_with(&store).unwrap();
         store.save_now().unwrap();
     }
 
     StoreBuilder::new(path.path())
+        .backend(backend)
         .build()
         .expect("the shape this engine wrote must read back through the same codec");
 }
@@ -70,9 +75,12 @@ fn the_recorded_shape_survives_this_engines_codec() {
 /// Written by one store, read by another that only has the file - which is the
 /// claim being tested.
 #[cfg(feature = "redb")]
-fn snapshot_of(path: &TempPath) -> SchemaSnapshot {
+fn snapshot_of(backend: Backend, path: &TempPath) -> SchemaSnapshot {
     {
-        let store = StoreBuilder::new(path.path()).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let _state = Recorded::new_with(&store).unwrap();
         store.save_now().unwrap();
     }
@@ -102,10 +110,10 @@ fn field<'a>(fields: &'a [StoredFieldEntry], name: &str) -> &'a StoredFieldEntry
 }
 
 #[cfg(feature = "redb")]
-#[test]
-fn the_snapshot_records_what_each_path_is() {
+#[backends(Redb)]
+fn the_snapshot_records_what_each_path_is(backend: Backend) {
     let path = TempPath::new("shape_on_disk");
-    let snapshot = snapshot_of(&path);
+    let snapshot = snapshot_of(backend, &path);
 
     let port = &field(&snapshot.fields, "port").shape;
     assert_eq!(port.role, Role::Field);
@@ -126,10 +134,10 @@ fn the_snapshot_records_what_each_path_is() {
 /// `listen_addr` - and anything planning a migration off the snapshot was
 /// planning against a path nothing held.
 #[cfg(feature = "redb")]
-#[test]
-fn the_snapshot_names_the_path_rather_than_the_field() {
+#[backends(Redb)]
+fn the_snapshot_names_the_path_rather_than_the_field(backend: Backend) {
     let path = TempPath::new("shape_on_disk_key");
-    let snapshot = snapshot_of(&path);
+    let snapshot = snapshot_of(backend, &path);
 
     assert_eq!(
         field(&snapshot.fields, "listen_addr").type_name,
@@ -141,7 +149,10 @@ fn the_snapshot_names_the_path_rather_than_the_field() {
         "the snapshot names the Rust field, which nothing on disk is called"
     );
 
-    let store = StoreBuilder::new(path.path()).build().unwrap();
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
     let state = Recorded::new_with(&store).unwrap();
     assert_eq!(
         state.bind().get(),
@@ -151,10 +162,10 @@ fn the_snapshot_names_the_path_rather_than_the_field() {
 }
 
 #[cfg(feature = "redb")]
-#[test]
-fn a_level_records_what_lives_under_it() {
+#[backends(Redb)]
+fn a_level_records_what_lives_under_it(backend: Backend) {
     let path = TempPath::new("shape_on_disk_nested");
-    let snapshot = snapshot_of(&path);
+    let snapshot = snapshot_of(backend, &path);
 
     let net = &field(&snapshot.fields, "net").shape;
     assert_eq!(net.role, Role::Node);
@@ -170,10 +181,10 @@ fn a_level_records_what_lives_under_it() {
 /// A leaf writes no `children` key, because most paths are leaves and a
 /// document a person reads should not carry an empty list on every one.
 #[cfg(feature = "redb")]
-#[test]
-fn a_leaf_does_not_write_an_empty_list_of_children() {
+#[backends(Redb)]
+fn a_leaf_does_not_write_an_empty_list_of_children(backend: Backend) {
     let path = TempPath::new("shape_on_disk_leaf");
-    let snapshot = snapshot_of(&path);
+    let snapshot = snapshot_of(backend, &path);
 
     let rendered = serde_json::to_string(&field(&snapshot.fields, "port")).unwrap();
     assert_eq!(

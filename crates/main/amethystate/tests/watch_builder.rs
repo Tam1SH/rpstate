@@ -1,6 +1,7 @@
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
 #[amethystate(prefix = "w")]
@@ -12,16 +13,16 @@ pub struct Cfg {
     pub items: ReactiveMap<String, u64>,
 }
 
-fn cfg() -> (impl amethystate::store::StoreBackend, Cfg) {
+fn cfg(backend: Backend) -> (impl amethystate::store::StoreBackend, Cfg) {
     let path = unique_path("watch_builder");
-    let store = StoreBuilder::new(&path).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
     (store, cfg)
 }
 
-#[test]
-fn immediate_register_behaves_like_subscribe() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn immediate_register_behaves_like_subscribe(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let cap = seen.clone();
 
@@ -35,9 +36,9 @@ fn immediate_register_behaves_like_subscribe() {
     assert_eq!(*seen.lock().unwrap(), vec![1, 2]);
 }
 
-#[test]
-fn external_and_with_source_compose() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn external_and_with_source_compose(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let field = cfg.counter();
     let other = field.fork();
 
@@ -61,9 +62,9 @@ fn external_and_with_source_compose() {
     );
 }
 
-#[test]
-fn a_single_key_can_be_watched() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn a_single_key_can_be_watched(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let seen = Arc::new(Mutex::new(0usize));
     let cap = seen.clone();
 
@@ -81,9 +82,9 @@ fn a_single_key_can_be_watched() {
     assert_eq!(*seen.lock().unwrap(), 1);
 }
 
-#[test]
-fn external_on_a_map_filters_updates_only() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn external_on_a_map_filters_updates_only(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let cap = seen.clone();
 
@@ -105,9 +106,9 @@ fn external_on_a_map_filters_updates_only() {
     assert_eq!(*seen.lock().unwrap(), vec!["insert", "remove"]);
 }
 
-#[test]
-fn external_on_a_field_filters_everything_of_its_own() {
-    let (_s, cfg) = cfg();
+#[backends(all)]
+fn external_on_a_field_filters_everything_of_its_own(backend: Backend) {
+    let (_s, cfg) = cfg(backend);
     let seen = Arc::new(Mutex::new(0usize));
     let cap = seen.clone();
 
@@ -128,9 +129,9 @@ mod stream {
     use futures::StreamExt;
     use futures::executor::block_on;
 
-    #[test]
-    fn yields_each_change_in_order() {
-        let (_s, cfg) = cfg();
+    #[backends(all)]
+    fn yields_each_change_in_order(backend: Backend) {
+        let (_s, cfg) = cfg(backend);
         let mut changes = cfg.counter().subscription_with().stream();
 
         for n in 1..=3 {
@@ -141,9 +142,9 @@ mod stream {
         assert_eq!(got, vec![1, 2, 3]);
     }
 
-    #[test]
-    fn a_write_from_another_thread_arrives() {
-        let (_s, cfg) = cfg();
+    #[backends(all)]
+    fn a_write_from_another_thread_arrives(backend: Backend) {
+        let (_s, cfg) = cfg(backend);
         let mut changes = cfg.counter().subscription_with().stream();
 
         let writer = cfg.counter();
@@ -158,9 +159,9 @@ mod stream {
         assert_eq!(got, Some(99));
     }
 
-    #[test]
-    fn external_still_filters() {
-        let (_s, cfg) = cfg();
+    #[backends(all)]
+    fn external_still_filters(backend: Backend) {
+        let (_s, cfg) = cfg(backend);
         let field = cfg.counter();
         let other = field.fork();
 
@@ -176,9 +177,9 @@ mod stream {
     /// before it queued. That the drop also released the subscription is not
     /// shown here and cannot be from outside: a dropped stream is not
     /// observable, and nothing exposes how many subscribers a signal has.
-    #[test]
-    fn a_stream_starts_empty_and_does_not_inherit_a_dropped_one() {
-        let (_s, cfg) = cfg();
+    #[backends(all)]
+    fn a_stream_starts_empty_and_does_not_inherit_a_dropped_one(backend: Backend) {
+        let (_s, cfg) = cfg(backend);
         let counter = cfg.counter();
 
         let changes = counter.subscription_with().stream();
@@ -195,9 +196,9 @@ mod stream {
         );
     }
 
-    #[test]
-    fn map_changes_stream_too() {
-        let (_s, cfg) = cfg();
+    #[backends(all)]
+    fn map_changes_stream_too(backend: Backend) {
+        let (_s, cfg) = cfg(backend);
         let mut changes = cfg.items().subscription_with().stream();
 
         cfg.items().insert("a".into(), &1).unwrap();

@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::StorageError;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{StoreBuilder, default_backend};
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use amethystate::store::config::{FileWritePolicy, WriteAttempts};
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
@@ -62,7 +62,10 @@ fn a_path_that_cannot_be_written_is_reported() {
         "the report must name the file it could not use, as a fact: {report:?}"
     );
 
-    insta::assert_snapshot!(per_engine("open_refused_by_a_directory"), shape(&report));
+    insta::assert_snapshot!(
+        per_engine(default_backend(), "open_refused_by_a_directory"),
+        shape(&report)
+    );
 }
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]

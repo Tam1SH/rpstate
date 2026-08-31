@@ -12,7 +12,7 @@
 
 use amethystate::Field;
 use amethystate::store::StoreBackend;
-use amethystate::store::builder::StoreBuilder;
+use amethystate::store::builder::{StoreBuilder, default_backend};
 use amethystate::store::reactive_map_with_path_only;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
@@ -60,7 +60,10 @@ fn bytes_that_are_not_the_type() {
         .unwrap();
     let err = store.decode::<u16>(&raw).unwrap_err();
 
-    insta::assert_snapshot!(per_engine("decode_wrong_type"), shape(&err));
+    insta::assert_snapshot!(
+        per_engine(default_backend(), "decode_wrong_type"),
+        shape(&err)
+    );
 }
 
 /// Reading a stored value as the wrong type, through the surface a caller
@@ -77,7 +80,7 @@ fn a_stored_value_read_as_the_wrong_type() {
 
     let err = store.get::<u32>(["cfg", "name"]).unwrap_err();
 
-    insta::assert_snapshot!(per_engine("get_wrong_type"), shape(&err));
+    insta::assert_snapshot!(per_engine(default_backend(), "get_wrong_type"), shape(&err));
 }
 
 /// A map entry that will not read. The report has to name the map and the
@@ -96,7 +99,10 @@ fn a_map_entry_that_will_not_read() {
     )
     .unwrap_err();
 
-    insta::assert_snapshot!(per_engine("map_entry_wrong_type"), shape(&err));
+    insta::assert_snapshot!(
+        per_engine(default_backend(), "map_entry_wrong_type"),
+        shape(&err)
+    );
 }
 
 /// A map default whose key cannot be a level.
