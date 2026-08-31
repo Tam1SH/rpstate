@@ -36,6 +36,7 @@ pub struct Noticed {
     enum_variant: Cell<bool>,
     inside_a_some: Cell<bool>,
     collapsed_option: Cell<bool>,
+    past_i64: Cell<bool>,
     limit: usize,
 }
 
@@ -50,6 +51,7 @@ impl Noticed {
             enum_variant: Cell::new(false),
             inside_a_some: Cell::new(false),
             collapsed_option: Cell::new(false),
+            past_i64: Cell::new(false),
             limit,
         }
     }
@@ -124,6 +126,14 @@ impl Noticed {
     /// list holding a `None` is two levels apart and comes back whole.
     pub fn saw_a_collapsing_option(&self) -> bool {
         self.collapsed_option.get()
+    }
+
+    /// Whether an integer went past that does not fit in an `i64`.
+    ///
+    /// The only size TOML has, so a store on any other engine that promised to
+    /// stay readable on toml has to answer for it too.
+    pub fn saw_an_integer_past_i64(&self) -> bool {
+        self.past_i64.get()
     }
 
     /// Called on the way into every method that is not `serialize_some`, so
@@ -217,17 +227,44 @@ impl<'a, S: Serializer> Serializer for Counting<'a, S> {
         serialize_i16(v: i16);
         serialize_i32(v: i32);
         serialize_i64(v: i64);
-        serialize_i128(v: i128);
         serialize_u8(v: u8);
         serialize_u16(v: u16);
         serialize_u32(v: u32);
-        serialize_u64(v: u64);
-        serialize_u128(v: u128);
         serialize_char(v: char);
         serialize_str(v: &str);
         serialize_bytes(v: &[u8]);
         serialize_unit();
         serialize_unit_struct(name: &'static str);
+    }
+
+    /// Integers that may not fit where they are going.
+    ///
+    /// TOML has one integer type and it is `i64`, so a `u64` past its top - or
+    /// an `i128` past either end - is a value it cannot write. The three
+    /// smaller unsigned types and `i64` itself always fit and go through the
+    /// forwarding above.
+    fn serialize_u64(self, v: u64) -> Result<S::Ok, S::Error> {
+        self.depth.left_the_some();
+        if v > i64::MAX as u64 {
+            self.depth.past_i64.set(true);
+        }
+        self.inner.serialize_u64(v)
+    }
+
+    fn serialize_u128(self, v: u128) -> Result<S::Ok, S::Error> {
+        self.depth.left_the_some();
+        if v > i64::MAX as u128 {
+            self.depth.past_i64.set(true);
+        }
+        self.inner.serialize_u128(v)
+    }
+
+    fn serialize_i128(self, v: i128) -> Result<S::Ok, S::Error> {
+        self.depth.left_the_some();
+        if v > i64::MAX as i128 || v < i64::MIN as i128 {
+            self.depth.past_i64.set(true);
+        }
+        self.inner.serialize_i128(v)
     }
 
     /// The one place the nesting shows, and only for the pass that is

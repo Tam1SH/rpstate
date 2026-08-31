@@ -29,6 +29,7 @@ pub use counting::{Counted, Counting, Noticed};
 
 use crate::store::builder::Backend;
 use crate::store::config::WriteLimits;
+use crate::store::facts::Key;
 use crate::store::{CodecFormat, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::Report;
@@ -52,6 +53,9 @@ pub struct Screening {
 
     /// The same for `Some(None)`, which only ron tells apart from `None`.
     pub nested_options: bool,
+
+    /// The same for an integer past `i64`, which toml has no room for.
+    pub wide_integers: bool,
 }
 
 impl Screening {
@@ -63,6 +67,7 @@ impl Screening {
             non_finite_floats: limits.holds_non_finite_floats(engine),
             enums: limits.holds_enums(engine),
             nested_options: limits.keeps_a_nested_option(engine),
+            wide_integers: limits.holds_an_integer_past_i64(engine),
         }
     }
 
@@ -89,6 +94,7 @@ impl Screening {
                     non_finite_floats: true,
                     enums: true,
                     nested_options: true,
+                    wide_integers: true,
                 };
             }
         };
@@ -103,7 +109,7 @@ impl Screening {
             && levels > cap
         {
             return Err(Report::new(StorageError::Depth)
-                .attach(format!("path: {path}"))
+                .attach(Key(path.clone()))
                 .attach(format!("levels: {levels}, and the limit is {cap}"))
                 .attach("set by: limits(|l| l.key_depth(..))")
                 .attach(format!(
@@ -123,7 +129,7 @@ impl Screening {
     /// value at a deep path is exactly as unreadable as a deep value at a
     /// shallow one. The flat engines keep the path as one key - `&str` on redb,
     /// `TEXT` on sqlite - and pay for it here anyway, which costs a handful of
-    /// levels out of 512 and 254 and saves a second rule.
+    /// levels out of 512 and 127 and saves a second rule.
     pub fn for_value(&self, path: &StorePath) -> Noticed {
         Noticed::new(self.ceiling.saturating_sub(path.segments().count()))
     }
@@ -140,7 +146,7 @@ impl Screening {
         let left = self.ceiling.saturating_sub(levels);
 
         Report::new(StorageError::Codec)
-            .attach(format!("path: {path}"))
+            .attach(Key(path.clone()))
             .attach(format!(
                 "the path spends {levels} levels and the value goes past the {left} that are left"
             ))
@@ -164,7 +170,7 @@ impl Screening {
         if !self.non_finite_floats && seen.saw_a_non_finite_float() {
             return Some(
                 Report::new(StorageError::Codec)
-                    .attach(format!("path: {path}"))
+                    .attach(Key(path.clone()))
                     .attach("a NaN or an infinity, which this store cannot read back")
                     .attach(
                         "JSON has no spelling for either, so the codec writes `null` and \
@@ -174,10 +180,22 @@ impl Screening {
             );
         }
 
+        if !self.wide_integers && seen.saw_an_integer_past_i64() {
+            return Some(
+                Report::new(StorageError::Codec)
+                    .attach(Key(path.clone()))
+                    .attach("an integer that does not fit in an `i64`")
+                    .attach(
+                        "TOML has one integer type and it is signed and 64 bits wide, so a \
+                         `u64` past its top has nowhere to go",
+                    ),
+            );
+        }
+
         if !self.nested_options && seen.saw_a_collapsing_option() {
             return Some(
                 Report::new(StorageError::Codec)
-                    .attach(format!("path: {path}"))
+                    .attach(Key(path.clone()))
                     .attach("a `Some` holding nothing, which reads back as nothing at all")
                     .attach(
                         "the outer `Some` has nothing of its own to write, so `Some(None)` and \
@@ -191,12 +209,13 @@ impl Screening {
         if !self.enums && seen.saw_an_enum() {
             return Some(
                 Report::new(StorageError::Codec)
-                    .attach(format!("path: {path}"))
+                    .attach(Key(path.clone()))
                     .attach("an enum, which this store cannot read back")
                     .attach(
                         "ron writes one as `On(3)` and parses it back into a `ron::value::Value`, \
                          which has no variant to put it in - the name is dropped there and the \
-                         next read is handed a sequence. See https://github.com/ron-rs/ron/issues/140",
+                         next read is handed a sequence. `Value` not supporting enums is \
+                         listed in https://github.com/ron-rs/ron/issues/122",
                     ),
             );
         }

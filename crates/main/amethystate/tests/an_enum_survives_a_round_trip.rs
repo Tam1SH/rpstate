@@ -88,7 +88,7 @@ fn the_refusal_says_which_shape_and_why() {
 
     let rendered = format!("{refused:?}");
     assert!(rendered.contains("an enum"), "{rendered}");
-    assert!(rendered.contains("ron-rs/ron/issues/140"), "{rendered}");
+    assert!(rendered.contains("ron-rs/ron/issues/122"), "{rendered}");
 }
 
 #[cfg(all(feature = "redb", feature = "ron"))]
