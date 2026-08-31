@@ -155,6 +155,19 @@ the half of the trade worth less.
 is 15.1.0 and its maintenance status was not checked. That check belongs before
 the dependency moves out of `[dev-dependencies]`.
 
+## The invariant the projection depends on
+
+`map_apply_remote_change`, off the store subscription, is the only writer to the
+cache. That one path covers writes made here and edits made to the file from
+outside alike, which is what keeps the projection and the store agreeing.
+
+A second writer and the two diverge, and `remove`'s gate turns silent: absent in
+the cache answers `Ok(None)` and deletes nothing, on a key that is really there.
+
+Scope, since it decides the memory question: millions of rows and blobs are not
+this library's business - reach for the database directly there. Within the size
+it does target, holding the map resident is the right trade.
+
 ## What this does not settle
 
 - **Contention is unmeasured.** Everything is single-threaded, and 20.3 ns for

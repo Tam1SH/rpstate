@@ -189,6 +189,46 @@ which is the extension bug recorded further down, where the builder named a file
 for one engine and opened it with another for exactly that reason. Nothing here
 takes a figure that only the engine can judge, so nothing here has to wait.
 
+## What a non-finite float does today
+
+The first row of the portability table, measured end to end.
+`tests/non_finite_float.rs` writes `f64::NAN` through a field on every engine.
+
+Three of five carry it intact. TOML and RON have `nan` and `inf` in their
+grammars, and msgpack under redb has no trouble either. The two that cannot
+spell it are json and sqlite - sqlite because it encodes with `sonic_rs`, which
+answers the way `serde_json` does. So the split follows the **codec**, and the
+codec is not visible in the engine's name: reading the list as "the text ones"
+is what hid this, since two of the three text engines are fine and one of the
+two binary ones is not.
+
+`set` returns `Ok`. The value reaches the file as `null`. The store event
+carries `null`, the field's subscription cannot decode it, and it logs and
+**leaves the signal alone** - so the handle goes on reporting the value it held
+before. A field last set to `5.0` says `5.0` about a store holding `null`.
+Meanwhile a typed `Store::get` of the same path answers `Err(Codec(..))`,
+because that path propagates the codec failure. The same bytes read two ways
+give two different answers, and neither says what happened at the write.
+
+A stale value is worse here than a substituted default would be: a default is a
+value nobody wrote, while a stale one is indistinguishable from a write that
+worked.
+
+This is the value-level half of `portable_across` that is not built. When it
+is, a non-finite `f32` or `f64` is refused at the write whenever the named
+engines include one whose codec writes `null` for it - failing where the caller
+is standing, rather than surfacing as a confident handle three steps later.
+`landing/src/content/docs/Limitations/` says nothing about any of this and
+should.
+
+The upstream half is not waiting on anything: `serde-rs/json#202` has been open
+since January 2017, and JSON having no non-finite floats is a property of the
+format rather than of the crate.
+
+Separately, and not about floats: any decode failure leaves a handle reporting
+the past, and `StoreExt::decode` returning an error while a subscription
+silently keeps the old value is a split worth settling on its own.
+
 ## How the depth is measured without building anything
 
 Not by inspecting the value - by the time it reaches the engine the type is

@@ -9,38 +9,6 @@ the target, and that means thousands of keys, written in bursts, read in scans.
 Costs dismissed as trivial at ten keys are not trivial at ten thousand, and the
 entries below are sized for the larger case.
 
-## Done: the book says what an error is
-
-`landing/src/content/docs/Concepts/errors.md`, out of `tests/book_errors.rs`,
-including three real refusals printed by the run that fills the page. What it
-had to say, and why the page was worth the space:
-
-An error here is a `Report`: a chain of contexts, each carrying attachments that
-name the thing that failed. A map refusing to open over one bad entry reports
-
-```
-the store could not carry out the write
-├╴prefix: ports
-╰─▶ the value could not be encoded or decoded
-    ├╴prefix: ports
-    ├╴entry: http
-    ╰╴key type: u16
-```
-
-so the `Display` alone - "the store could not carry out the write" - is the
-least of what is there, and a caller that prints it throws away the part that
-says which entry.
-
-Two things the writing turned up, both fixed with it. `StorageError::Depth`,
-because a path past the cap announced itself as `a name that cannot be a level`
-while the facts under it said the names were fine. And `WriteError` now derives
-`PartialEq`, which `StorageError` always had, so a caller can compare either
-context rather than reaching for `matches!` on one of them.
-
-`error_stack` is re-exported, with `Report` and `facts` under
-`amethystate::errors`, so reading an attachment costs no dependency of the
-caller's own.
-
 ## toml reads a table by splitting its rendering on the first `=`
 
 `TomlDoc::with_bytes_de` renders a node it cannot treat as a value and takes the
@@ -258,72 +226,13 @@ consuming all 10 000, because the scan materialises every key and value before
 the iterator is handed over. Decoding is lazy; the scan is not, and the scan is
 the whole cost. The doc on `entries` should stop implying otherwise.
 
-## A non-finite float is silently destroyed on the text backends
+## A non-finite float reaches the file as `null`, and the handle never says so
 
-JSON has no `NaN` or infinity, so `serde_json` writes them as `null`, and
-reading that back into an `f64` fails. Measured end to end, writing `f64::NAN`
-into a field:
-
-| | `field.get()` afterwards | typed read from the store |
-| --- | --- | --- |
-| redb | `NaN` | `Ok(Some(NaN))` |
-| json | **`0`** | **`Err(Codec(..))`** |
-
-On the text backends the write appears to succeed. The store event carries
-`null`, the subscription decodes it, decoding fails, and `decode` falls back to
-`T::default()` with a warning - so the in-memory value silently becomes `0`
-while the file holds `null`. A later `Store::get` on the same path returns an
-error instead, because that path propagates the codec failure rather than
-substituting a default. The same bad bytes therefore behave two different ways
-depending on which read reaches them.
-
-Nothing about this is documented, and nothing rejects the write.
-
-**Re-measured, and the account above is wrong twice.**
-`tests/non_finite_float.rs` writes `f64::NAN` through a field on every engine.
-
-It is not the text engines' problem, and it is not one engine's either. TOML
-and RON have `nan` and `inf` in their grammars and carry the value intact, as
-msgpack does. JSON cannot spell it - and **two** engines store JSON, because
-sqlite encodes its values with `sonic_rs`, which answers the same way
-`serde_json` does. So three of five are fine, and the one that is not named for
-a text format is among the two that are not.
-
-Which makes it a property of the format rather than of the file. Reading the
-engine list as "the text ones" was what hid it: the failure follows the codec,
-and the codec is not visible in the engine's name.
-
-And nothing substitutes a default. `StoreExt::decode` stopped doing that this
-release, and the field's subscription never did: handed bytes it cannot decode,
-it logs and **leaves the signal alone**. So the handle keeps reporting the value
-it held before - a field last set to `5.0` goes on saying `5.0` about a store
-that now holds `null`. The zero in the original table was the value that
-happened to be there already, and reading it as a default sent this entry after
-the wrong mechanism.
-
-Which makes it worse than recorded, not better: a substituted default is at
-least a value nobody wrote, while a stale one is indistinguishable from a
-successful write.
-
-`set` still returns `Ok`, and a typed read of the same path still fails, so the
-disagreement between the two reads stands. The test pins all of it and goes
-green today; its failure message becomes the finding on the day any answer
-moves.
-
-**Deprioritised.** The upstream half has been open since January 2017
-(`serde-rs/json#202`) and is a property of the format rather than the crate:
-JSON has no non-finite floats, and `serde_json` follows `JSON.stringify` in
-writing `null`. Nothing here is waiting on that. The part worth doing when this
-comes back up is the stale value, which is not about floats at all - any decode
-failure leaves a handle confidently reporting the past.
-
-At minimum, say so: a field holding a float that can go non-finite is not
-portable across backends. Better, refuse the write on a codec that cannot
-represent the value, so it fails where it happens instead of turning into a
-default three steps later.
-
-Related: `decode` falling back to `Default` while `get` returns an error is a
-split worth settling on its own. One of them is wrong.
+Measured, and the account moved to `RFC-limits.md` - it is the first row of that
+document's portability table and the worked example of the value-level check
+`portable_across` does not yet make. The next pass is there: refuse the write
+when the named engines include a codec that cannot spell the value, and write
+the Limitations page.
 
 ## Toml answers "holds nothing" and "is not there" with the same document
 
@@ -439,10 +348,16 @@ pointer, makes indentation load-bearing, and cannot be reused.
 noticing somebody else's write.
 
 **What stays flat, and why it is not the same reason.** `backend` because 85
-call sites say so. `migrations` and `provide` because they are not settings at
-all - they are *inputs*: the steps to run, and the values those steps (and, once
-the read policy lands, the checks) are handed. Filing an input under settings
-confuses two natures.
+call sites say so. `migrations`, `provide` and `context` because they are not
+settings at all - they are *inputs*: the steps to run, the values those steps
+are handed, and the values the declared checks are handed. Filing an input under
+settings confuses two natures.
+
+`provide` and `context` are two words because they are read from two places. A
+step runs once, inside `build`, on the thread that called it, so `provide` takes
+a value that is neither `Send` nor `Sync` and that is deliberate. A check runs
+whenever a value arrives, the file watcher's thread included, so `context` asks
+for both and the store keeps what it was given for as long as it is open.
 
 **One judgement call left open.** `parallel_reads` would be alone in `tuning`,
 and a group of one is usually a smell. What justifies it is that a second knob
@@ -476,6 +391,11 @@ A value that decodes perfectly and is nonsense - a window at -32000, a font size
 of zero, the name of a theme that does not exist - goes into the signal and out
 to every subscriber. A write interceptor cannot help: the value is already on
 the disk.
+
+**The declared check is built**, at construction and at the subscription, for a
+field and for a struct - *Built: what the check receives, and what it does*
+below has the shape it took and *Left on this* has what it did not close. The
+reasoning between here and there is what settled it and is left as written.
 
 **A check on the way in cannot have the shape of one on the way out.** An
 interceptor is `Fn(Change<T>) -> Option<Change<T>>` and `None` means "refuse
@@ -731,7 +651,7 @@ where the rest belong too.
 | prefix written, a declared key deleted | `Missing`, refuses | **no** - reads as absent, seeds silently |
 | prefix written, field new in this build | `Seeded`, silent | **no** - indistinguishable from the row above |
 | value is the wrong type | `Undecodable`, refuses | `tamper_shapes` reports; does not refuse |
-| value out of range | `Refused`, takes the default, in the report | **no** |
+| value out of range | `Refused`, takes the default, in the report | `field_check`, `struct_check` |
 | a leaf became a branch | refused | `a_leaf_that_became_a_branch_is_reported` |
 | nested struct's inner field broken | the parent sees it settled | **no** |
 
@@ -759,44 +679,95 @@ has to be documented rather than discovered.
 | an edit adds an unparseable map key | appears in `unreadable_keys()` | **no** |
 | a broken edit is not overwritten by us | left alone | `a_broken_external_edit_is_not_silently_overwritten` |
 
-### What the check receives
+### Built: what the check receives, and what it does
 
-**A field's check is a predicate**, `Fn(&T) -> bool`, and rejection takes the
-declared default - which sits in the same attribute, so what happens on refusal
-is visible without looking anywhere else. Allowing a repairing form as well
-(`|n| n.clamp(8, 72)`) through an `Into<Verdict<T>>` return fails on coherence
-the moment `T` is `bool`, which is an ordinary field type, so one honest shape
-beats two spellings of one idea. Clamping on the way *in* is also the wrong
-end: that is what a write interceptor is for.
-
-**A struct's check corrects rather than refuses.** Refusing the whole thing
-would throw away every good field over one bad relationship, so its shape is
-`Fn(&mut Schema, &Provided) -> Policy`. And the reason it needs a schema view
-rather than `_Data`: `_Data` cannot say *which* path, cannot say what happened
-to it - read, undecodable, absent-and-seeded - and collapses a map into a
-`HashMap` where a dropped entry has nowhere to be mentioned.
-
-That view is generated per struct and reachable by name, `s.font_size()`,
-`s.net().host()`, with the shape of each accessor decided by the `Role` the
-macro already reads off the type - so a role stops being only a record on disk
-and starts deciding an API. It is built during the load, handed to the check,
-and then **kept by the instance**, so `ui.schema()` afterwards is the same
-object rather than a second type.
+**A check answers with a reason, not a `bool`.** `fn(&T, &CheckContext) ->
+Result<(), Invalid>` on a field, `fn(&Self, &CheckContext) -> Result<(),
+Invalid>` on a struct. The reason is the point: it is what `try_get` reports and
+what a refused open carries, and a `bool` has nowhere to put it. What a `bool`
+would have saved - naming the field - the caller already knows, since the
+factory holds the path.
 
 **A check is a bare `fn` and captures nothing**, so it can only reach intrinsic
-invariants - `min < max`. The interesting ones are extrinsic: does that monitor
-still exist, is that theme installed. That is the Readest failure exactly, and
-it cannot be answered without the application's world. The door for it is built
-and in use: `StoreBuilder::provide` with `MigrationContext::require`, invented
-because a migration step is a bare `fn` with the same need.
+invariants on its own - `min < max`. The interesting ones are extrinsic: does
+that monitor still exist, is that theme installed. That is the Readest failure
+exactly, and it cannot be answered without the application's world.
+`StoreBuilder::context` is that door, and it is a second word beside `provide`
+rather than the same one: a migration step runs once, inside `build`, on the
+thread that called it, so `provide` can take an `Rc` and does; a check runs
+whenever a value arrives, the watcher's thread included, so `context` asks for
+`Send + Sync` and the store keeps it. `require` refuses the value when nothing
+was given - a check that cannot reach its world cannot say the value is good -
+and travels the same channel the verdict does.
 
-**Order:** every value first, then children, then parents - a parent's check
-should see nested structs already settled.
+**Which doors it stands at:**
 
-**And the corrected value does not go back to the disk.** Writing it back
-silently rewrites somebody's edit, and
+| a value arrives | a field's check | a struct's check |
+| --- | --- | --- |
+| construction | runs | runs |
+| the subscription, `is_external_edit` | runs | does not |
+| `load_with`, under `mode = "persistent"` | runs | cannot be declared |
+| this process's own write | does not | does not |
+| a migration step | does not | does not |
+
+The migration door needs nothing of its own: a step produces the value and gets
+raw bytes rather than a `T`, and everything it leaves behind is read again by
+construction, in the same process, before any handle exists.
+
+The struct's check does not stand at the subscription. Its fields are built
+before `Self` exists, so a live one would need the struct to hold a weak
+reference to itself in every field's subscription, and would recompute a
+cross-field invariant on every inbound change.
+
+**A refusal is the situation `on_unreadable` already describes**, and there is
+no seventh knob. `Refuse` fails construction with the reason and the path;
+`UseDefault` takes the declared default, leaves the stored value on disk and
+sets the field's `unreadable` marker, so `try_get` answers `Err` until something
+passes. Live, a refused external edit keeps the last value and wakes nobody,
+which is what an undecodable one already does. The failure is a `Refused` fact
+on a `StorageError::Read` report rather than a new variant - the facts are
+types.
+
+**A struct's verdict is projected onto its fields**, because `Field::unreadable`
+is the only channel there is and a relationship has no field of its own.
+`Invalid::at` names the fields it is about and only those report it; naming none
+means all of them. Under `UseDefault` the values are **kept** rather than reset:
+there is a declared default for a value and none for a relationship, and what
+the fields hold is still what the file says.
+
+**Order:** every value first, then children, then parents. A nested struct runs
+its own checks inside its constructor, so a parent's check sees children already
+settled. `tests/field_check.rs` and `tests/struct_check.rs` hold all of this.
+
+### Left on this: the repairing form, and the load that cannot report
+
+**A struct's check refuses; it does not correct.** The repairing shape is
+`Fn(&mut Schema, &Provided) -> Policy`, and what it needs is the reason it is
+not built: a generated typed projection per struct, reachable by name -
+`s.font_size()`, `s.net().host()` - with the shape of each accessor decided by
+the `Role` the macro already reads off the type, built during the load, handed
+to the check and then **kept by the instance** so `ui.schema()` afterwards is
+the same object rather than a second type. That is a feature the size of this
+one. `_Data` is not a substitute: it cannot say *which* path, cannot say what
+happened to it - read, undecodable, absent-and-seeded - and collapses a map into
+a `HashMap` where a dropped entry has nowhere to be mentioned.
+
+When it is built, the corrected value does not go back to the disk. Writing it
+back silently rewrites somebody's edit, and
 `a_broken_external_edit_is_not_silently_overwritten` pins the opposite. Hold the
 corrected value in memory and let the next ordinary write settle the file.
+
+**And the one place the design does not close.** Under `mode = "persistent"`
+there is no `Field`, so there is no `try_get`: a refused value under
+`UseDefault` takes the declared default and the log is the only place it is
+said. `Refuse` - the default - fails the load instead, and is the answer to
+reach for when a loaded struct has to be trustworthy. Closing it properly means
+`load_with` returning the values *and* what was wrong with them, which is a
+second return type on every persistent struct.
+
+A map's entries are still out: they are data rather than declared paths, so
+`check` on a map field is a compile error until the drop-and-report policy in
+the row above is built.
 
 Two neighbours from the sector research belong with this and are not the same
 thing: quarantining a file that will not parse at all, under a name that says so
@@ -1111,32 +1082,6 @@ operation is not built.
 This does not fix a GUI binding rendering twice. That is one write and one
 notification coming back to its own author, which is what `Watch::external`
 is for.
-
-## Done: the map reads the projection it builds
-
-`reactive_map_with_path_only` scans the prefix at construction and decodes every
-entry into `ReactiveMapCore::cache`, and every read now answers from there -
-`get`, `len`, `is_empty`, `entries`, `keys`. The scan and the memory were being
-paid for either way while `len()` spent 386 ms rescanning 10 000 keys with the
-answer beside it, and the sync and async halves of the API disagreed about where
-the truth lived.
-
-The projection is `ArcSwap<rpds::RedBlackTreeMapSync>`, measured in
-`RFC-map-locking.md`: a read holds nothing, so `entries` lends rather than
-collecting and a reader that touches the map again mid-walk is ordinary.
-`DashMap` would have served the read load and brought back the trap that shape
-exists to remove - hold a reference into the map, touch the same shard,
-deadlock.
-
-**The one invariant to keep.** `map_apply_remote_change` off the store
-subscription is the only writer to the cache, which is what covers writes and
-external file edits alike. A second writer and the two diverge, and then
-`remove`'s gate - absent in the cache means `Ok(None)` and no delete - becomes a
-silent no-op on a key that is really there.
-
-Scope, since it decides the memory question: millions of rows and blobs are not
-this library's business - reach for the database directly there. Within the size
-it does target, holding the map resident is the right trade.
 
 ## Two type hashes, both weak, and the weaker one feeds the gate
 
@@ -1912,30 +1857,6 @@ Either `build` should collect too, or it should refuse to open when a generated
 step exists for a prefix it is about to touch. Silently doing half the work is
 the one option that should go.
 
-## Done as far as a library can go: the global store flushes when told
-
-`shutdown()` writes what the global store holds and returns the result;
-`Store::close` does the same for an ordinary one. An application on
-`init_global` calls it before returning from `main`.
-
-Why it cannot be automatic, since it looks like it should be. Every backend
-commits its buffer from `Drop`, and that is what makes "closing cleanly loses
-nothing" true. `GLOBAL_STORE` is a `OnceLock<Store>`, and Rust does not drop
-statics at exit, so the `Drop` never runs and every write younger than the
-debounce interval would be lost on a clean return. Nothing in the process tells
-a library that `main` is returning: statics are not dropped, there is no stable
-`atexit` in std, and `ctor`-style destructors run at a time nobody controls and
-cannot run Rust destructors safely.
-
-This also qualifies the debouncer fix: the pending write reaches disk on drop,
-where a drop happens.
-
-The debouncer thread cannot stand in for the call, which is worth writing down
-because it looks like it could. It leaves on `RecvTimeoutError::Disconnected` -
-the sender being dropped, which is the store being dropped, which is exactly
-the event that never happens for a static. The signal is derived from the thing
-whose absence is the problem.
-
 ## `#[migrate]` can only be found through the linker
 
 `inventory` is link-time collection, and it is the only way a `#[migrate]` step
@@ -2347,17 +2268,6 @@ theirs. The way out is written up under the schema hash below: make the trait
 optional, with the shape falling back to the type's written name when no impl
 exists.
 
-## Done: the dead map ops are gone
-
-`AmeBackendSync` stays: it exists so `map_ops` and `field_ops` are written once
-and instantiated twice - once for the sync world, once for the async one whose
-`AmeBackendAsync` twin `TauriBackend` implements. One implementor on the sync
-side is what a symmetric pair looks like from one side.
-
-Deleted: `map_get`, `map_contains_key`, `map_entries`, `map_len` (sync) and
-`map_contains_key_async`, `map_len_async` (async). `map_get_async` and
-`map_entries_async` are live - `async_impl/map.rs` calls both.
-
 ## Smaller, and cheap
 
 - ~~`ReadOnlyReactiveMap` and `WritableReactiveMap` alias `Field`, not
@@ -2583,107 +2493,21 @@ it no longer materialises the map, but the API still does not *say* window -
 nothing expresses "rows 200 to 250" and `range` on the tree is not reachable
 from outside.
 
-## Done: one subtree predicate, and it lives on the path
+## The async twin of a map clear tells a subscriber something else
 
-`pending_prefix` was a third hand-written copy of "is this key under that
-prefix" - `format!("{}.", prefix)` plus `starts_with`, agreeing with
-`subtree_bound` and `is_under` by coincidence and unreachable by the fixes those
-two got. The predicate cannot be *kept* agreeing when it is written three times.
+`map_ops_async`'s `clear` iterates entries and deletes them one by one where the
+sync one calls `delete_prefix`, because **`AmeBackendAsync` has no
+`delete_prefix` and no `scan_keys`** and `AmeBackendSync` has both. So an async
+`clear()` delivers N `Delete` events where a sync one delivers one
+`DeletePrefix`, and a subscriber cannot tell "the map was cleared" from "every
+entry happened to be removed". The two traits are meant to be twins.
 
-It is `StorePath::subtree()` now, in `core::path`: `Subtree::contains`,
-`::range`, `::child_bound`. The store does not compute it, and the four
-functions in `store/backend/utils.rs` are gone. `Pending` is keyed by
-`StorePath` rather than `Arc<str>`, so a write no longer does `Arc::from` and
-the predicate no longer parses a key back out of its own text.
+## One decode written twice
 
-The `&str` parameter is the cause of all of it, not a detail of it:
-
-- Rootness has to be recovered from an empty string, so the code depends on
-  `StorePath::root().as_str()` being empty - true, and written down nowhere.
-- The bound has to be rebuilt, because a `&str` cannot be asked for one.
-- `set_raw_pending` does `Arc::from(key)` on **every write**: an allocation and
-  a copy of a string the caller already holds inside a `StorePath`, whose
-  `Joined::Owned` is an `Arc<str>` of exactly those bytes. The `Arc` in
-  `Pending`'s key is not sharing anything - it is a second copy of what was
-  discarded at the parameter.
-
-`StorePath` already has `Hash`, `Eq` and `Ord`, so `Pending` can be
-`HashMap<StorePath, PendingOp>` and all three go at once: no re-derived
-predicate, no rebuilt bound, no allocation per write, and `is_root` asked of the
-thing that knows.
-
-## Done: the facts are types, and what is still a string
-
-`amethystate_core::facts` holds them; `crate::store::facts` is a re-export so
-the main crate reads the same. `StoreFile`, `MetaFile`, `Key`, `Prefix`,
-`RawKey`, `Table`, `Entry`, `MetaNode`, `Migrating`, `ValueBytes`, `Read`,
-`Buffered`, attached through the `Facts` trait (`attach_key`, `attach_prefix`,
-…), read back with `facts::all::<T, _>(&report)`.
-
-**It lives in core, not in the storage layer.** `map_ops` and `field_ops` are in
-`amethystate-core` and carried the same duplication; a trait in the main crate
-could not reach them.
-
-**`Report::request_ref` is `#[cfg(nightly)]`.** On stable the way in is
-`report.frames().filter_map(Frame::downcast_ref::<T>)`, which is what `all` is.
-
-The duplicate the strings were hiding: `value bytes` was attached twice on one
-codec failure - `traits::decode` and the engine's `decode_erased` both did it,
-under different wordings. Nothing could have noticed while both were `String`.
-The outer one is gone.
-
-Still strings, and deliberately: `as:` / `into:` / `from:` carry
-`std::any::type_name` and name opposite directions; `affects:` names a subject
-rather than a fact; `range:`, `backup:`, `watching:`, `directory:`,
-`application:`, `executable:` are one site each; `WriteError::intercepted`
-attaches the interceptor's own sentence, which is the content, not a value that
-wants a label.
-
-### The drift, as it was
-
-Kept because it is the argument for the types, not a list of work. The store's
-own path had four labels (`file:`, `store:`, `meta file:`, plus two one-offs);
-the key had six (`key:`, `node:`, `meta node:`, `stored key:`, `path:`,
-`field:`); a scan's progress had six wordings for one counter. A report crossing
-two layers carried **the same path twice under two names**, which reads as two
-different files.
-
-The structural fault under all of it: every attachment was a `String`, so
-`downcast_ref::<String>()` could not tell a key from a table name from a byte
-count, and two frames saying `key:` were indistinguishable from one key attached
-twice. Duplicates were not merely possible - they were unobservable. That is
-what the types fixed, and the `value bytes` duplicate above is the proof.
-
-### Also closed on the way
-
-- `sqlite/inspector.rs` hardcoded `"table: schema_snapshot"` in four literals
-  with nothing tying them to the SQL; now one `const SNAPSHOTS`.
-- `sqlite/mod.rs` built `range` eagerly on the success path and cloned it four
-  times; now lazy in the closure.
-- `redb/mod.rs` flattened a nested `Report` with `format!("{failed:#}")`; it is
-  attached as a report and keeps its frames.
-- `text/store.rs` hand-wrote `utils::stored_path` twice.
-- `check_debouncer` was three byte-identical bodies; one
-  `utils::check_debouncer(&health, &debouncer)`.
-- `context.rs::scan_map` built a `StorePath` per entry to strip a prefix off it;
-  it uses `name_under_key`, as `decode_entry` already did.
-
-### Left
-
-- `primitives_factory::decode_entry` and `context.rs::scan_map` are still the
-  same function twice. They differ in what decodes - `Store` against
-  `MigrationBackendAdapter` - so the extraction wants a closure, and the two
-  halves are ~12 lines each.
-- `map_ops_async`'s clear iterates entries and deletes them one by one where the
-  sync one calls `delete_prefix`, and the cause is that **`AmeBackendAsync` has
-  no `delete_prefix` and no `scan_keys`** - `AmeBackendSync` has both. So an
-  async `clear()` delivers N `Delete` events where a sync one delivers one
-  `DeletePrefix`, and a subscriber cannot tell "the map was cleared" from "every
-  entry happened to be removed". The two traits are meant to be twins.
-- `text/store.rs`'s `flush_prefix` attaches the prefix to `save_now`, which
-  rewrites the whole document. Kept: it names what the caller asked for, and the
-  engine's whole-document flush is the `durable()` entry's subject, not this
-  one's.
+`primitives_factory::decode_entry` and `context.rs::scan_map` are the same
+function twice. They differ in what decodes - `Store` against
+`MigrationBackendAdapter` - so the extraction wants a closure, and the two
+halves are ~12 lines each.
 
 ## Measured: the scan's allocation is not what a scan costs
 
@@ -3171,12 +2995,6 @@ The round-trip verification flag shrinks accordingly. Once the gate covers those
 three, what is left for it is asymmetries nobody has enumerated. Keep it as an
 option, off by default, and build it last - it was justified when it was the
 only thing addressing the class, and it no longer is.
-
-## Decided: the codec's ceiling is a fact, key depth is a setting, portability is a policy
-
-Three separate things wear the name "the depth limit": a ceiling the codec
-imposes and nobody configures, a key depth the store configures, and portability
-across engines, of which depth is one row. `RFC-limits.md` has the decision.
 
 ## Decided: the layer to unify is the node, not the parser
 
@@ -4327,18 +4145,6 @@ two levels whose second name held the dots itself - and are now one joined key,
 `meta.app.panel`. That also ends a quieter oddity: an `as_root` struct's
 namespace is the empty string, so its marker was written as a child with no
 name, which is exactly what a scan reports as a name no path can hold.
-
-## Done: a change off the disk says so
-
-`store::types::EXTERNAL_EDIT` is `Uuid::from_u128(0x616d_6574_6879_7374_6174_655f_6469_736b)`
-- `amethystate_disk` in ASCII, so it reads as itself in a log and its version
-and variant bits are not a v4's, which is what keeps it from looking like a real
-instance. `StoreEvent::is_external_edit()` asks.
-
-Set at the three events `diff_documents` raises; nothing else raises an event
-the store did not cause. `source: None` now means only what it always should
-have: an internal write nobody attributed. Nothing was comparing against
-`is_none()`, so no consumer changed.
 
 ## The text engines take a path apart and put it back on every call
 
