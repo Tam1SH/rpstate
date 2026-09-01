@@ -3302,3 +3302,48 @@ crate invented belongs to whichever engine actually runs. Four tests in
 
 The application worked around it by rebuilding the path with `etcetera` and the
 right extension, ten lines duplicating this crate's logic. Those can go.
+
+## A `close` whose flush failed answers `Ok` the second time
+
+Every backend opens `close` the same way:
+
+```rust
+if !self.debouncer.stop_accepting() {
+    return Ok(());
+}
+```
+
+`stop_accepting` is `!self.stopped.swap(true, ..)` - a one-way latch carrying
+one bit. The first `close` takes it, and if the flush that follows fails, the
+error is returned and the latch stays set. A second `close` finds it already
+set and returns `Ok(())` without flushing anything: success reported for data
+that is not on the disk.
+
+That is what makes a retry impossible after the failure a caller was told
+about, and it is why `Store/opening.md` and `Store`'s doc comment used to offer
+"offer to retry, save elsewhere, or not exit yet" - none of which a caller can
+do. Those sentences are corrected; the behaviour is not.
+
+The one bit is the whole problem. Three backends layer three meanings on it -
+closed, closing, mid-flush - and there is no state for "closing was attempted
+and did not finish". Four phases would carry it: open, draining, detached,
+closed-and-drained, with a failed drain landing somewhere a retry can act on.
+See `RFC-copying-a-store.md`, which needs the same distinction and deliberately
+avoids depending on it.
+
+## `files_layout()` describes a sqlite store that is not being written to
+
+`StoreBackend::files_layout` is documented for "a backup tool, an uninstaller, a
+test", so that a caller reaching a store's files does not rebuild their names
+from a rule the engine owns. For sqlite it answers `Single { data }` - one file.
+
+sqlite opens with `PRAGMA journal_mode = WAL`. Committed data sits in the
+`-wal` sidecar until a checkpoint moves it into the named file, so the layout is
+true of a closed store - dropping the connection checkpoints - and false of a
+live one. A backup tool following the doc copies a running store, gets a
+database missing its most recent commits, and is told nothing.
+
+Two ways out. Name the sidecars in `StoreLayout::Single`, which makes the shape
+carry a detail only one engine has; or say on `files_layout` that it describes a store
+nobody is writing to, which is the condition a backup wants anyway and costs
+one sentence. The second unless a caller turns up that needs the first.
