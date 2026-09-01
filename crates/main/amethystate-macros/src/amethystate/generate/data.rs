@@ -2,8 +2,9 @@ use super::RpMode;
 use crate::amethystate::generate::{parse_default, path_literal};
 use amethystate_macros_core::{MacroArgs, StoreFieldEntry};
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::Ident;
+use syn::spanned::Spanned;
 
 pub(crate) fn persistent_fields(entries: &[StoreFieldEntry]) -> Vec<&StoreFieldEntry> {
     entries.iter().filter(|e| !e.volatile).collect()
@@ -43,7 +44,7 @@ pub(crate) fn data_impl(
         if e.nested {
             quote! { pub #fname: <#ty as #crate_name::AmeState>::Data }
         } else if let Some((k, v)) = e.get_map_types() {
-            quote! { pub #fname: ::std::collections::HashMap<#k, #v> }
+            quote! { pub #fname: #crate_name::indexmap::IndexMap<#k, #v> }
         } else {
             quote! { pub #fname: #ty }
         }
@@ -414,6 +415,48 @@ pub(crate) fn data_impl(
         }
     };
 
+    let loaded_struct_check = match macro_args.check.as_ref() {
+        None => quote! {},
+        Some(check) => {
+            let rule = match struct_policy.as_deref() {
+                Some("UseDefault") => quote!(#crate_name::store::OnUnreadable::UseDefault),
+                _ => quote!(#crate_name::store::OnUnreadable::Refuse),
+            };
+
+            quote_spanned! {check.span()=>
+                if let ::core::result::Result::Err(__ame_invalid) = #check(&__ame_result, store.context()) {
+                    #crate_name::store::refused_struct_or_kept(prefix, __ame_invalid, #rule)?;
+                }
+            }
+        }
+    };
+
+    let snapshot_fields = p_fields.iter().map(|e| {
+        let fname = e.ident.as_ref().unwrap();
+
+        if e.nested {
+            quote! { #fname: self.#fname.__ame_to_data() }
+        } else if e.get_map_types().is_some() {
+            quote! { #fname: self.#fname.entries().collect() }
+        } else {
+            quote! { #fname: self.#fname.get() }
+        }
+    });
+
+    let snapshot = match rp_mode {
+        RpMode::Persistent => quote! {},
+        RpMode::Reactive | RpMode::Both => quote! {
+            impl #name {
+                #[doc(hidden)]
+                pub fn __ame_to_data(&self) -> #data_struct_name {
+                    #data_struct_name {
+                        #(#snapshot_fields,)*
+                    }
+                }
+            }
+        },
+    };
+
     let gen_load_save_helpers = !(is_root && matches!(rp_mode, RpMode::Reactive));
 
     let load_save_helpers = if gen_load_save_helpers {
@@ -423,9 +466,11 @@ pub(crate) fn data_impl(
                 store: &#crate_name::Store,
                 prefix: &#crate_name::store::StorePath,
             ) -> #crate_name::StorageResult<Self> {
-                Ok(Self {
+                let __ame_result = Self {
                     #(#store_load_fields,)*
-                })
+                };
+                #loaded_struct_check
+                Ok(__ame_result)
             }
 
             #[doc(hidden)]
@@ -453,6 +498,8 @@ pub(crate) fn data_impl(
         }
 
         #persistent_wrapper_tokens
+
+        #snapshot
 
         impl #data_struct_name {
             #load_save_helpers

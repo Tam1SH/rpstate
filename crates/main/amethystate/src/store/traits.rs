@@ -198,7 +198,7 @@ pub trait StoreBackend: Send + Sync + 'static {
     ///
     /// `None` for a backend implemented outside this crate, which need not
     /// answer.
-    fn files(&self) -> Option<StoreLayout> {
+    fn files_layout(&self) -> Option<StoreLayout> {
         None
     }
 

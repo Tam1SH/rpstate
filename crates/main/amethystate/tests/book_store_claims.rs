@@ -22,11 +22,13 @@ pub struct Panels {
 }
 //@show-end
 
-#[amethystate(prefix = "editor", version = 1)]
-pub struct Editor {
-    #[amestate(default = 14u32)]
-    pub font_size: u32,
+//@show a struct that sits right beside one and still opens
+#[amethystate(prefix = "ui.panels.right", version = 1)]
+pub struct RightPanel {
+    #[amestate(key = "visible", default = true)]
+    pub visible: bool,
 }
+//@show-end
 
 #[backends(all)]
 fn the_second_claim_on_one_place_is_refused(
@@ -61,10 +63,8 @@ fn places_that_do_not_meet_are_left_alone(
     let path = TempPath::new("book_claims_apart");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
-    //@show two structs that do not meet
     let _ui = Ui::new_with(&store)?;
-    let _editor = Editor::new_with(&store)?;
-    //@show-end
+    let _right = RightPanel::new_with(&store)?;
 
     Ok(())
 }

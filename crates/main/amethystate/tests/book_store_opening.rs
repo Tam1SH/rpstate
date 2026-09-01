@@ -98,7 +98,7 @@ fn a_location_is_worked_out_rather_than_spelled() -> Result<(), Box<dyn Error + 
     store.kv().set("port", &8080u16)?;
     assert_eq!(store.kv().get::<u16>("port")?, Some(8080));
 
-    let left = StoreBackend::files(&store);
+    let left = StoreBackend::files_layout(&store);
     drop(store);
 
     match left {

@@ -1,7 +1,7 @@
 use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::store::facts::{Refused, all};
-use amethystate::store::{CheckContext, Invalid};
+use amethystate::store::facts::{self, Key, Refused, all};
+use amethystate::store::{CheckContext, Invalid, StorageError};
 use amethystate_core::test_utils::TempPath;
 use std::error::Error;
 
@@ -76,6 +76,62 @@ fn a_value_the_check_refuses_does_not_open_a_strict_struct()
         said.first().map(|r| r.0.as_str()),
         Some("a font size below 6 renders nothing")
     );
+
+    Ok(())
+}
+
+#[test]
+fn a_refused_open_hands_over_the_path_and_the_reason()
+-> Result<(), Box<dyn Error + Send + Sync>> {
+    let path = TempPath::new("field_check_matched");
+    let store = StoreBuilder::new(path.path()).build()?;
+
+    store.set(["checked_strict", "font_size"], &3u8)?;
+
+    //@show telling one refused open from another
+    let refused = StrictUi::new_with(&store).unwrap_err();
+
+    let failed_at = facts::all::<Key, _>(&refused).next();
+    let said = facts::all::<Refused, _>(&refused).next();
+
+    match (refused.current_context(), failed_at, said) {
+        (StorageError::Read, Some(Key(at)), Some(Refused(why))) => {
+            eprintln!("{at} will not do: {why}")
+        }
+        _ => return Err(refused.into()),
+    }
+    //@show-end
+
+    Ok(())
+}
+
+#[test]
+fn try_get_hands_over_the_same_facts_the_open_would_have()
+-> Result<(), Box<dyn Error + Send + Sync>> {
+    let path = TempPath::new("field_check_try_get_matched");
+    let store = StoreBuilder::new(path.path()).context(themes()).build()?;
+
+    store.set(["checked_lenient", "font_size"], &3u8)?;
+
+    let ui = LenientUi::new_with(&store)?;
+
+    //@show asking a field what the store disagrees with
+    let held = match ui.font_size().try_get() {
+        Ok(size) => size,
+        Err(unread) => {
+            let said = facts::all::<Refused, _>(&unread).next();
+
+            match said {
+                Some(Refused(why)) => eprintln!("running on the default: {why}"),
+                None => eprintln!("the stored bytes will not decode"),
+            }
+
+            ui.font_size().get()
+        }
+    };
+    //@show-end
+
+    assert_eq!(held, 14);
 
     Ok(())
 }

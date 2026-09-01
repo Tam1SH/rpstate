@@ -779,7 +779,7 @@ impl StoreBackend for SqliteStore {
         self.inner.set_owned_erased(path, value, source)
     }
 
-    fn files(&self) -> Option<StoreLayout> {
+    fn files_layout(&self) -> Option<StoreLayout> {
         Some(StoreLayout::Single {
             data: self.inner.path.clone(),
         })

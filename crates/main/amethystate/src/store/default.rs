@@ -35,9 +35,13 @@ use std::sync::Arc;
 /// Dropping the last handle writes what is still buffered, but it is the one
 /// write whose failure it cannot report: `Drop` has no caller to return an
 /// error to, and by then there is rarely anyone left to tell. An application
-/// that would rather find out while it can still act - offer to retry, save
-/// somewhere else, or not exit yet - calls [`Store::close`] on the way out and
-/// reads the result.
+/// that would rather find out calls [`Store::close`] on the way out and reads
+/// the result.
+///
+/// Finding out is all it buys. A close that failed has closed the store
+/// anyway, a second one answers `Ok` without flushing again, and the writes
+/// are gone - a retry belongs to [`Store::save_now`], while the store is still
+/// open.
 #[derive(Clone)]
 pub struct Store {
     backend: Arc<dyn StoreBackend>,
@@ -296,8 +300,8 @@ impl StoreBackend for Store {
     fn parallel_reads(&self) -> bool {
         self.backend.parallel_reads()
     }
-    fn files(&self) -> Option<crate::store::traits::StoreLayout> {
-        self.backend.files()
+    fn files_layout(&self) -> Option<crate::store::traits::StoreLayout> {
+        self.backend.files_layout()
     }
     fn save_now(&self) -> StorageResult<()> {
         self.backend.save_now()

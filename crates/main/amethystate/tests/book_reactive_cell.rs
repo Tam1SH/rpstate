@@ -76,12 +76,16 @@ fn an_entry_cell_is_empty_until_its_key_exists(
     let state = Ui::new_with(&store)?;
 
     //@show a cell onto a map entry
+    state.widths().insert("cpu".to_string(), &120)?;
+
     let cpu = state.widths().entry_cell("cpu".to_string());
     let absent = state.widths().entry_cell("gpu".to_string());
 
+    assert_eq!(cpu.get(), Some(120));
+    assert_eq!(absent.get(), None);
+
     state.widths().remove("cpu")?;
 
-    assert_eq!(absent.get(), None);
     assert_eq!(cpu.get(), None);
     assert!(cpu.set(80).is_err());
     //@show-end

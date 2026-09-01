@@ -1,13 +1,16 @@
-use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate::{AmeData, amethystate};
 use amethystate::store::facts::{Refused, all};
 use amethystate::store::{CheckContext, Invalid};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 //@show a check on the struct, for what one field cannot see
-fn the_window_can_be_drawn(window: &LenientWindow, _cx: &CheckContext) -> Result<(), Invalid> {
-    if window.min().get() <= window.max().get() {
+fn the_window_can_be_drawn(
+    window: &AmeData<LenientWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
         Ok(())
     } else {
         Err(Invalid::new("the smallest window is wider than the largest")
@@ -32,8 +35,11 @@ pub struct LenientWindow {
 }
 //@show-end
 
-fn the_strict_window_can_be_drawn(window: &StrictWindow, _cx: &CheckContext) -> Result<(), Invalid> {
-    if window.min().get() <= window.max().get() {
+fn the_strict_window_can_be_drawn(
+    window: &AmeData<StrictWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
         Ok(())
     } else {
         Err(Invalid::new("the smallest window is wider than the largest"))
@@ -49,8 +55,8 @@ pub struct StrictWindow {
     pub max: u32,
 }
 
-fn the_ratio_holds(inner: &Inner, _cx: &CheckContext) -> Result<(), Invalid> {
-    if inner.width().get() >= inner.height().get() {
+fn the_ratio_holds(inner: &AmeData<Inner>, _cx: &CheckContext) -> Result<(), Invalid> {
+    if inner.width >= inner.height {
         Ok(())
     } else {
         Err(Invalid::new("a panel taller than it is wide"))
@@ -173,4 +179,139 @@ fn a_nested_struct_is_settled_before_the_one_holding_it_is_built(backend: Backen
     assert_eq!(holder.panel().height().get(), 2000);
     assert!(holder.panel().height().try_get().is_err());
     assert!(holder.panel().width().try_get().is_err());
+}
+
+//@show the same rule, on a struct that is loaded rather than watched
+#[amethystate(prefix = "kept_window", mode = "persistent", check = the_kept_window_can_be_drawn)]
+pub struct KeptWindow {
+    #[amestate(default = 400u32)]
+    pub min: u32,
+
+    #[amestate(default = 1600u32)]
+    pub max: u32,
+}
+
+fn the_kept_window_can_be_drawn(
+    window: &AmeData<KeptWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
+        Ok(())
+    } else {
+        Err(Invalid::new("the smallest window is wider than the largest"))
+    }
+}
+//@show-end
+
+#[backends(all)]
+fn a_loaded_struct_whose_invariant_fails_does_not_load(backend: Backend) {
+    let path = TempPath::new("struct_check_kept_strict");
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+
+    store.set(["kept_window", "min"], &2000u32).unwrap();
+
+    let refused = match KeptWindow::load_with(&store) {
+        Ok(_) => panic!("a window whose min is past its max loaded"),
+        Err(refused) => refused,
+    };
+
+    let said: Vec<&Refused> = all::<Refused, _>(&refused).collect();
+    assert_eq!(
+        said.first().map(|r| r.0.as_str()),
+        Some("the smallest window is wider than the largest")
+    );
+}
+
+#[backends(all)]
+fn a_loaded_struct_whose_invariant_holds_loads_what_was_stored(backend: Backend) {
+    let path = TempPath::new("struct_check_kept_ok");
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+
+    store.set(["kept_window", "min"], &500u32).unwrap();
+
+    let kept = KeptWindow::load_with(&store).unwrap();
+
+    assert_eq!(kept.min, 500);
+    assert_eq!(kept.max, 1600);
+}
+
+#[amethystate(
+    prefix = "kept_lenient",
+    mode = "persistent",
+    on_unreadable = UseDefault,
+    check = the_lenient_kept_window_can_be_drawn
+)]
+pub struct LenientKeptWindow {
+    #[amestate(default = 400u32)]
+    pub min: u32,
+
+    #[amestate(default = 1600u32)]
+    pub max: u32,
+}
+
+fn the_lenient_kept_window_can_be_drawn(
+    window: &AmeData<LenientKeptWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
+        Ok(())
+    } else {
+        Err(Invalid::new("the smallest window is wider than the largest"))
+    }
+}
+
+#[backends(all)]
+fn a_lenient_loaded_struct_keeps_what_was_stored(backend: Backend) {
+    let path = TempPath::new("struct_check_kept_lenient");
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+
+    store.set(["kept_lenient", "min"], &2000u32).unwrap();
+
+    let kept = LenientKeptWindow::load_with(&store).unwrap();
+
+    assert_eq!(kept.min, 2000);
+    assert_eq!(kept.max, 1600);
+}
+
+#[amethystate(prefix = "either_window", mode = "both", check = the_either_window_can_be_drawn)]
+pub struct EitherWindow {
+    #[amestate(default = 400u32)]
+    pub min: u32,
+
+    #[amestate(default = 1600u32)]
+    pub max: u32,
+}
+
+fn the_either_window_can_be_drawn(
+    window: &AmeData<EitherWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
+        Ok(())
+    } else {
+        Err(Invalid::new("the smallest window is wider than the largest"))
+    }
+}
+
+#[backends(all)]
+fn one_check_serves_both_constructors(backend: Backend) {
+    let path = TempPath::new("struct_check_either");
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+
+    store.set(["either_window", "min"], &2000u32).unwrap();
+
+    assert!(EitherWindow::new_with(&store).is_err());
+    assert!(EitherWindow::load_with(&store).is_err());
 }

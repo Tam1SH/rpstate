@@ -75,8 +75,8 @@ impl StoreBackend for RonStore {
         self.0.scan_prefix(prefix)
     }
 
-    fn files(&self) -> Option<crate::store::traits::StoreLayout> {
-        self.0.files()
+    fn files_layout(&self) -> Option<crate::store::traits::StoreLayout> {
+        self.0.files_layout()
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {

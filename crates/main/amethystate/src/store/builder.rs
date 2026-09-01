@@ -728,12 +728,14 @@ impl StoreBuilder {
         self
     }
 
-    /// Opens the store, running the migrations declared by hand and no others.
+    /// Opens the store, running the steps handed to
+    /// [`StoreBuilder::migrations`] and no others.
     ///
-    /// `#[migrate]` steps are collected by
-    /// [`StoreBuilder::build_with_migration`], which is the only path that
-    /// finds them; a store opened here never sees them and says nothing about
-    /// it.
+    /// The distinction is what registered a step, not who wrote it: a
+    /// `#[migrate]` step is written by hand too, and is found by the linker
+    /// rather than passed in. [`StoreBuilder::build_with_migration`] is the
+    /// only path that collects those; a store opened here never sees them and
+    /// says nothing about it.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;

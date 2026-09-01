@@ -347,7 +347,7 @@ fn the_metadata_file_is_never_half_written_either() {
         .build()
         .unwrap();
 
-    let Some(StoreLayout::Sidecars { meta, .. }) = StoreBackend::files(&store) else {
+    let Some(StoreLayout::Sidecars { meta, .. }) = StoreBackend::files_layout(&store) else {
         panic!("a text store keeps its bookkeeping in a file of its own");
     };
 

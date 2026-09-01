@@ -43,7 +43,9 @@ fn a_subscription_lasts_as_long_as_its_handle(
 
     state.port().set(1234)?;
     assert_eq!(*heard.lock().unwrap(), [9090]);
+    //@show-end
 
+    //@show a subscription nobody held on to
     let ignored = Arc::clone(&heard);
     let _ = state.port().subscribe(move |port| {
         ignored.lock().unwrap().push(*port);

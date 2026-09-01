@@ -2,7 +2,7 @@ use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
 use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Watch, Watchable};
-use crate::store::facts::Facts;
+use crate::store::facts::{Facts, Key, Refused};
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Commit, Durable, StoreBackend, StoreSubscription};
 use amethystate_core::Signal;
@@ -50,7 +50,22 @@ pub(crate) struct FieldInner<TValue> {
 /// left behind by a migration, or written by a codec that accepted something
 /// it cannot read back. Cleared by the next change that does decode, so a field
 /// says so exactly as long as it is true.
-pub(crate) type Unreadable = Arc<std::sync::Mutex<Option<Arc<str>>>>;
+pub(crate) type Unreadable = Arc<std::sync::Mutex<Option<Unread>>>;
+
+/// Which of the two ways a field's stored value went unread.
+///
+/// [`Field::try_get`] hands the reason on as a fact, and the two want
+/// different ones: a check's verdict is about a value that decoded perfectly,
+/// so it travels as [`Refused`], and bytes that would not decode carry the
+/// codec's own sentence.
+#[derive(Debug, Clone)]
+pub(crate) enum Unread {
+    /// A declared check turned the value down, in the check's own words.
+    Refused(Arc<str>),
+
+    /// The bytes would not read as the field's type.
+    Undecodable(Arc<str>),
+}
 
 pub struct Field<TValue> {
     pub(crate) inner: Arc<FieldInner<TValue>>,
@@ -91,7 +106,7 @@ impl<TValue> Field<TValue> {
     #[doc(hidden)]
     pub fn __ame_refused(&self, why: &str) {
         if let Ok(mut held) = self.inner.unreadable.lock() {
-            *held = Some(Arc::from(why));
+            *held = Some(Unread::Refused(Arc::from(why)));
         }
     }
 }
@@ -206,11 +221,14 @@ where
     /// `Ok` again as soon as a change decodes, so it holds for exactly as long
     /// as it is true. Nothing here fails at the moment of asking: what failed
     /// happened earlier, and this reports it.
+    ///
+    /// The report says which of the three it is without being read as a
+    /// sentence. All of them carry [`Key`]; a check's verdict adds
+    /// [`Refused`], and a store that has let go of its file answers
+    /// [`WriteError::Closed`](crate::errors::WriteError::Closed).
     pub fn try_get(&self) -> ReactiveFieldResult<TValue> {
         if self.store_has_closed() {
-            return Err(Report::new(FieldError::Storage)
-                .attach(format!("path: {}", self.inner.path))
-                .attach("the store was closed, so this value is the last one it reported"));
+            return Err(Report::new(FieldError::Closed).attach(Key(self.inner.path.clone())));
         }
 
         let unreadable = self
@@ -222,9 +240,12 @@ where
 
         match unreadable {
             None => Ok(self.get()),
-            Some(reason) => Err(Report::new(FieldError::Storage)
-                .attach(format!("path: {}", self.inner.path))
-                .attach(format!("the stored value could not be read: {reason}"))),
+            Some(Unread::Refused(why)) => Err(Report::new(FieldError::Storage)
+                .attach(Key(self.inner.path.clone()))
+                .attach(Refused(why.to_string()))),
+            Some(Unread::Undecodable(why)) => Err(Report::new(FieldError::Storage)
+                .attach(Key(self.inner.path.clone()))
+                .attach(format!("the stored value could not be read: {why}"))),
         }
     }
 
@@ -351,7 +372,11 @@ where
     /// default when the cell is the only handle that survives: build a struct,
     /// pass one of its fields to a widget, drop the struct, and a view would go
     /// empty. This one owns what it views, so it stays readable and writable
-    /// for as long as it is held - and keeps the store open for that long too.
+    /// for as long as it is held.
+    ///
+    /// The field it takes is the one it keeps. Nothing is taken from a struct
+    /// by doing this: a generated accessor hands out an `Arc::clone` of the
+    /// field, so the cell becomes one more owner of it.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -382,9 +407,9 @@ where
     /// mode erased. Writes go through [`Field::set`], keeping this field's
     /// provenance.
     ///
-    /// The cell is a view: it holds the field weakly, so it never keeps the
-    /// store file open, and it reads `None` once the field is dropped. Where
-    /// the cell is the only handle that survives, use [`Field::into_cell`].
+    /// The cell is a view: it holds the field weakly and reads `None` once the
+    /// field is dropped. Where the cell is the only handle that survives, use
+    /// [`Field::into_cell`].
     pub fn cell(&self) -> ReactiveCell<TValue> {
         let cache = amethystate_core::Signal::new(Some(self.get()));
 

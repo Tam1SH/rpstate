@@ -247,8 +247,9 @@ impl WriteLimits {
     /// Keep the contents readable on these engines, whichever one is running.
     ///
     /// This lowers the depth ceiling to the shallowest engine named, and
-    /// settles depth alone: a value a format could not *represent* still
-    /// writes.
+    /// settles four more properties the same way - non-finite floats, enums,
+    /// a nested `Option` and an integer past `i64` - each held only if the
+    /// running engine and every engine named holds it.
     ///
     /// The claim names its engines, so it stays what the application asked for
     /// when this crate gains another one, and so it can be as narrow as the

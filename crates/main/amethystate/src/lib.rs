@@ -16,6 +16,7 @@ pub type AmeData<T> = <T as AmeState>::Data;
 pub type MigrationResult<T> = StorageResult<T>;
 
 pub use error_stack;
+pub use indexmap;
 pub use inventory;
 pub use serde;
 pub use uuid;

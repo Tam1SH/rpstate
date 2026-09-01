@@ -7,10 +7,10 @@ use crate::store::facts::{Entry, Facts, Migrating, Prefix, RawKey};
 use crate::store::{CodecFormat, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::{Report, ResultExt};
+use indexmap::IndexMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::{Any, type_name};
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::str::FromStr;
 
@@ -350,7 +350,13 @@ impl<'a> MigrationContext<'a> {
     /// migration deletes - and a migration runs once, against data that has no
     /// other copy. An entry that cannot be read is an error, and the
     /// transaction it is in rolls back.
-    pub fn scan_map<K, V>(&self, key: &str) -> StorageResult<HashMap<K, V>>
+    ///
+    /// Filled in the order the scan hands the keys back, which is the order a
+    /// `ReactiveMap` walks in and lexicographic on the stored name rather than
+    /// on `K` - `10, 100, 9` for numeric keys. A step that goes through the
+    /// entries sees what the map itself would show. Writing them back is
+    /// per-entry, so what the step does to this order reaches nothing.
+    pub fn scan_map<K, V>(&self, key: &str) -> StorageResult<IndexMap<K, V>>
     where
         K: FromStr + Eq + Hash,
         V: DeserializeOwned,
@@ -364,7 +370,7 @@ impl<'a> MigrationContext<'a> {
             .scan_prefix(&full_prefix)
             .attach_migrating(&self.prefix)
             .attach_prefix(&full_prefix)?;
-        let mut map = HashMap::new();
+        let mut map = IndexMap::new();
 
         for (path, bytes) in raw {
             let below = amethystate_core::path::level_under(path.as_str(), &full_prefix)

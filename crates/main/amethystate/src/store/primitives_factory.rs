@@ -1,4 +1,5 @@
 use crate::observability::register_field;
+use crate::reactive::field::Unread;
 use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::StoreSubscription;
@@ -8,6 +9,7 @@ use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::{IntoStorePath, Level, StorePath};
 use amethystate_core::{FieldCore, MapChange, ReactiveMapCore, Signal};
 use error_stack::{Report, ResultExt};
+use indexmap::IndexMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -213,7 +215,7 @@ where
     claim(store, &path, instance_id)?;
     register_field::<TValue>(&path, instance_id);
 
-    let mut refused: Option<Arc<str>> = None;
+    let mut refused: Option<Unread> = None;
 
     let current = match store.get::<TValue>(&path) {
         Ok(Some(stored)) => match check.map(|check| check(&stored, store.context())) {
@@ -228,7 +230,7 @@ where
                     reason = %invalid,
                     "a declared check refused the stored value, so the field starts on its default"
                 );
-                refused = Some(Arc::from(invalid.reason()));
+                refused = Some(Unread::Refused(Arc::from(invalid.reason())));
                 default.clone()
             }
         },
@@ -238,7 +240,7 @@ where
         }
         Err(why) if policy.covers(&why) => {
             tracing::error!(path = %path, error = %why, "decode failed while building");
-            refused = Some(Arc::from(why.to_string().as_str()));
+            refused = Some(Unread::Undecodable(Arc::from(why.to_string().as_str())));
             default.clone()
         }
         Err(why) => return Err(why),
@@ -268,7 +270,7 @@ where
                             "a declared check refused an edit from outside, so the field kept what it had"
                         );
                         if let Ok(mut held) = unreadable_sub.lock() {
-                            *held = Some(Arc::from(invalid.reason()));
+                            *held = Some(Unread::Refused(Arc::from(invalid.reason())));
                         }
                         return;
                     }
@@ -281,7 +283,7 @@ where
                 Err(e) => {
                     tracing::error!(path = %path_log, error = %e, "decode failed");
                     if let Ok(mut held) = unreadable_sub.lock() {
-                        *held = Some(Arc::from(e.to_string().as_str()));
+                        *held = Some(Unread::Undecodable(Arc::from(e.to_string().as_str())));
                     }
                 }
             },
@@ -356,7 +358,7 @@ where
 ///
 /// A key that cannot be read back is an error rather than an absence. The path
 /// itself is not an entry.
-pub fn load_map<K, V>(store: &Store, path: &StorePath) -> StorageResult<HashMap<K, V>>
+pub fn load_map<K, V>(store: &Store, path: &StorePath) -> StorageResult<IndexMap<K, V>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
@@ -380,7 +382,7 @@ where
             return Ok(decoded.into_iter().collect());
         }
 
-        let mut entries = HashMap::with_capacity(scanned.len());
+        let mut entries = IndexMap::with_capacity(scanned.len());
         for (stored, bytes) in &scanned {
             if let Some((key, value)) = decode_entry(store, path, stored.as_str(), bytes)? {
                 entries.insert(key, value);
@@ -389,7 +391,7 @@ where
         return Ok(entries);
     }
 
-    let mut entries = HashMap::new();
+    let mut entries = IndexMap::new();
     store.visit_prefix(path, &mut |key, bytes| {
         if let Some((k, v)) = decode_entry(store, path, key, bytes)? {
             entries.insert(k, v);

@@ -19,7 +19,7 @@ use common::{per_engine, shape};
 fn sidecars(
     store: &amethystate::Store,
 ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
-    match StoreBackend::files(store) {
+    match StoreBackend::files_layout(store) {
         Some(StoreLayout::Sidecars {
             data,
             meta,

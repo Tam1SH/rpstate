@@ -53,17 +53,6 @@ pub fn amethystate_impl(
         return e.to_compile_error().into();
     }
 
-    if let Some(check) = &macro_args.check
-        && macro_args.mode.as_deref() == Some("persistent")
-    {
-        return syn::Error::new(
-            check.span(),
-            "a struct's check is handed the struct, and `mode = \"persistent\"` builds none - what `load_with` returns is the stored data. Declare the check on the fields, which are read either way, or take the mode off",
-        )
-        .to_compile_error()
-        .into();
-    }
-
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let struct_vis = &input.vis;

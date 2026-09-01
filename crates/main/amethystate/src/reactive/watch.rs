@@ -75,9 +75,9 @@ impl<W: Watchable> Watch<W> {
     }
 
     /// Installs the callback with everything configured so far, and yields
-    /// the handle that keeps it alive.
+    /// the guard that keeps it alive.
     ///
-    /// Dropping the returned handle unsubscribes.
+    /// Dropping the returned guard unsubscribes.
     ///
     /// ```
     /// # use amethystate::StoreBuilder;
@@ -102,7 +102,7 @@ impl<W: Watchable> Watch<W> {
     ///
     /// drop(sub);
     /// port.set(9092).unwrap();
-    /// assert_eq!(seen.lock().unwrap().len(), 2, "the handle is what kept it alive");
+    /// assert_eq!(seen.lock().unwrap().len(), 2, "the guard is what kept it alive");
     /// ```
     #[track_caller]
     pub fn register<F>(self, callback: F) -> SignalSubscription
@@ -119,7 +119,7 @@ impl<W: Watchable> Watch<W> {
     /// is usually what you want; take the id yourself when a write of your own
     /// calls for its own handling.
     ///
-    /// Dropping the returned handle unsubscribes.
+    /// Dropping the returned guard unsubscribes.
     ///
     /// The example below uses [`Field::fork`](crate::Field::fork) rather than
     /// [`Clone`] to stand in for a second component: a clone shares the

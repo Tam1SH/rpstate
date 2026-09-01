@@ -171,6 +171,31 @@ pub fn refused_under(prefix: &StorePath, invalid: &Invalid) -> Report<StorageErr
         .attach(Refused(invalid.reason().to_string()))
 }
 
+/// The same, for a struct's own check on the path that loads plain data.
+///
+/// [`OnUnreadable::Refuse`](crate::store::OnUnreadable::Refuse) fails the load.
+/// [`OnUnreadable::UseDefault`](crate::store::OnUnreadable::UseDefault) keeps
+/// what was stored - a relationship has no declared default to fall back to -
+/// and the log is the only place the verdict is said.
+pub fn refused_struct_or_kept(
+    prefix: &StorePath,
+    invalid: Invalid,
+    policy: crate::store::OnUnreadable,
+) -> StorageResult<()> {
+    match policy {
+        crate::store::OnUnreadable::Refuse => Err(refused_under(prefix, &invalid)),
+        crate::store::OnUnreadable::UseDefault => {
+            tracing::error!(
+                target: "amethystate",
+                prefix = %prefix,
+                reason = %invalid,
+                "a declared check refused the loaded struct, so it was loaded as stored"
+            );
+            Ok(())
+        }
+    }
+}
+
 /// What a refused value does on the path that loads a plain struct, where
 /// there is no field to hold the complaint.
 ///

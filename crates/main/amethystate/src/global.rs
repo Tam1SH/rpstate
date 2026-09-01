@@ -44,7 +44,7 @@ pub trait IntoGlobalStore: Sized {
     /// Opens the process-wide store, once, and hands back the guard that
     /// closes it.
     ///
-    /// Runs the migrations declared by hand and no others.
+    /// Runs the steps handed to the builder and no others.
     /// [`IntoGlobalStore::init_global_with_migration`] is the one that also picks
     /// up every `#[migrate]` step in the binary, and says what the pass did -
     /// the same split as

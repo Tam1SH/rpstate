@@ -645,7 +645,7 @@ impl StoreBackend for RedbStore {
         self.inner.parallel_reads
     }
 
-    fn files(&self) -> Option<StoreLayout> {
+    fn files_layout(&self) -> Option<StoreLayout> {
         Some(StoreLayout::Single {
             data: self.inner.path.to_path_buf(),
         })

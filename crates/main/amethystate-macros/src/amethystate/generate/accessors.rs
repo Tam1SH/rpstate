@@ -199,7 +199,7 @@ fn struct_check(
     };
 
     quote_spanned! {check.span()=>
-        if let ::core::result::Result::Err(__ame_invalid) = #check(&result, store.context()) {
+        if let ::core::result::Result::Err(__ame_invalid) = #check(&result.__ame_to_data(), store.context()) {
             match #rule {
                 #crate_name::store::OnUnreadable::Refuse => {
                     return ::core::result::Result::Err(

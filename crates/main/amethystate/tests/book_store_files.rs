@@ -11,7 +11,7 @@ fn a_store_says_which_files_it_opened() -> Result<(), Box<dyn Error + Send + Syn
     let store = StoreBuilder::new(path.path()).build()?;
 
     //@show asking a store where its files are
-    match StoreBackend::files(&store) {
+    match StoreBackend::files_layout(&store) {
         Some(StoreLayout::Single { data }) => {
             println!("everything is in {}", data.display());
         }
@@ -33,7 +33,7 @@ fn a_store_says_which_files_it_opened() -> Result<(), Box<dyn Error + Send + Syn
     //@show-end
 
     assert!(
-        StoreBackend::files(&store).is_some(),
+        StoreBackend::files_layout(&store).is_some(),
         "every engine in this crate names its files"
     );
 
@@ -52,7 +52,7 @@ fn a_text_store_keeps_its_bookkeeping_beside_the_data()
     store.kv().set("port", &8080u16)?;
     store.save_now()?;
 
-    let Some(StoreLayout::Sidecars { data, meta, .. }) = StoreBackend::files(&store) else {
+    let Some(StoreLayout::Sidecars { data, meta, .. }) = StoreBackend::files_layout(&store) else {
         panic!("a text store keeps two files");
     };
 

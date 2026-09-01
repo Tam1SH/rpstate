@@ -31,7 +31,7 @@ impl MigrationBuilder {
     ///
     /// [`StoreBuilder::build_with_migration`](crate::StoreBuilder::build_with_migration)
     /// calls this; a store opened with plain
-    /// [`build`](crate::StoreBuilder::build) runs only the steps added by hand.
+    /// [`build`](crate::StoreBuilder::build) runs only the steps handed to it.
     ///
     /// This is the linker's answer to the question:
     /// [`inventory`](https://docs.rs/inventory) collects at link time, and a

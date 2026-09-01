@@ -883,7 +883,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         self.inner.debouncer.is_stopped()
     }
 
-    fn files(&self) -> Option<StoreLayout> {
+    fn files_layout(&self) -> Option<StoreLayout> {
         let data = &self.inner.files.data;
         let meta = &self.inner.files.meta;
 

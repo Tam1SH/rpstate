@@ -19,6 +19,10 @@ where
     /// The cell owns the map, so it stays readable and writable for as long as
     /// it is held. [`ReactiveMap::entry_cell`] is the view onto a map something
     /// else keeps.
+    ///
+    /// The map it takes is the one it keeps. Nothing is taken from a struct by
+    /// doing this: a generated accessor hands out an `Arc::clone` of the map,
+    /// so the cell becomes one more owner of it.
     pub fn into_entry_cell(self, key: K) -> ReactiveCell<V> {
         let cell = self.entry_cell(key);
         cell.owning(Arc::new(self))
@@ -26,11 +30,10 @@ where
 
     /// A live cell over one map entry.
     ///
-    /// The cell is a view and keeps only a weak reference to the map, so a
-    /// forgotten cell lets the store file close: once the map is dropped every
-    /// write fails and [`get`](ReactiveCell::get) reads `None`. Where the cell
-    /// is the only handle that survives, use
-    /// [`ReactiveMap::into_entry_cell`].
+    /// The cell is a view and keeps only a weak reference to the map, so once
+    /// the map is dropped every write fails and
+    /// [`get`](ReactiveCell::get) reads `None`. Where the cell is the only
+    /// handle that survives, use [`ReactiveMap::into_entry_cell`].
     ///
     /// An absent key reads `None`, and writing to one fails - creating the
     /// entry is [`ReactiveMap::insert`]'s job.

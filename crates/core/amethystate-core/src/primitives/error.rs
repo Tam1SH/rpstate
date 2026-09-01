@@ -27,6 +27,10 @@ pub enum WriteError {
     /// The primitive a cell views has been dropped.
     SourceGone,
 
+    /// The store let go of its file, so what the primitive holds is the last
+    /// thing it heard rather than what is on disk.
+    Closed,
+
     /// A `Kv` write aimed at a path a declared struct owns.
     ///
     /// `declared` is the path the schema declared, which is either `path`
@@ -43,6 +47,9 @@ impl fmt::Display for WriteError {
             WriteError::Path => f.write_str("a name that cannot be a level"),
             WriteError::SourceGone => f.write_str(
                 "the value this cell views is gone: the field or map it came from was dropped (`into_cell` gives a cell that keeps it alive)",
+            ),
+            WriteError::Closed => f.write_str(
+                "the store was closed, so this value is the last one it reported",
             ),
             WriteError::SchemaOwned { path, declared } if path == declared => {
                 write!(f, "`{path}` is declared by a schema")

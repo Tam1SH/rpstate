@@ -17,7 +17,7 @@ struct Sidecars {
 }
 
 fn sidecars(store: &amethystate::Store) -> Sidecars {
-    match StoreBackend::files(store) {
+    match StoreBackend::files_layout(store) {
         Some(StoreLayout::Sidecars {
             data,
             meta,
