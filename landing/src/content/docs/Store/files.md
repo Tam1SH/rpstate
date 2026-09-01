@@ -10,7 +10,7 @@ says it instead:
 
 <!-- shown: asking a store where its files are -->
 ```rust
-match StoreBackend::files(&store) {
+match StoreBackend::files_layout(&store) {
     Some(StoreLayout::Single { data }) => {
         println!("everything is in {}", data.display());
     }

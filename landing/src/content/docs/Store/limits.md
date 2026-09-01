@@ -106,8 +106,20 @@ one actually running, and lowers the ceiling to the lowest of them. A store on
 redb that names RON reads 64 levels rather than 512, so a value too deep for the
 file it will be exported to is refused now instead of after the export.
 
-It settles depth and nothing else. A value RON could not *represent* still
-writes today; that check is not built.
+Depth is not where it ends. The engines named settle four more properties, each
+by one rule: the running engine and every engine named must all hold it, or the
+write is refused.
+
+| property | who loses it |
+| --- | --- |
+| `NaN` and the infinities | JSON and SQLite, which have no spelling for them and read back `null` |
+| enum variants | RON, whose value tree has none - [ron#122](https://github.com/ron-rs/ron/issues/122) |
+| `Some(None)` | every engine but RON: a nested `Option` collapses to `None` |
+| integers past `i64` | TOML, which has no room for them |
+
+The running engine counts alongside the named ones for the same reason its
+ceiling does: a value its own codec cannot read back is lost whatever anyone
+configured. So a store on JSON refuses a `NaN` with nothing named at all.
 
 Naming the engines rather than saying *all* is deliberate. "All" is a moving
 target - it changes under a store when an engine is added - and the honest

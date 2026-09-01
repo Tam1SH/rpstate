@@ -88,7 +88,7 @@ ctx.split::<String, String, u16>(
 
 | Method | Description |
 |--------|-------------|
-| `ctx.scan_map::<K, V>(key)` | Scan all entries under `prefix.key.*` and return them as a `HashMap<K, V>`. |
+| `ctx.scan_map::<K, V>(key)` | Scan all entries under `prefix.key.*` and return them as an `IndexMap<K, V>`, in the order the map itself walks. |
 
 Useful when migrating a `ReactiveMap` field without going through `AmeData`:
 

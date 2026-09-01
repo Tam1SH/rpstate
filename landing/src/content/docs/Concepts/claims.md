@@ -76,12 +76,20 @@ struct already declares a `b` field under `root`.
 
 Places that do not meet are left alone, however close they sit:
 
-<!-- shown: two structs that do not meet -->
+<!-- shown: a struct that sits right beside one and still opens -->
 ```rust
-let _ui = Ui::new_with(&store)?;
-let _editor = Editor::new_with(&store)?;
+#[amethystate(prefix = "ui.panels.right", version = 1)]
+pub struct RightPanel {
+    #[amestate(key = "visible", default = true)]
+    pub visible: bool,
+}
 ```
 <!-- /shown -->
+
+That is as close as two can get: `Ui` holds `ui.panels.left.visible` and
+`RightPanel` holds `ui.panels.right.visible`. They part on the last level they
+share, neither path starts the other, and both open in the same store. `Panels`,
+which aimed at `ui.panels`, was refused because its place started `Ui`'s.
 
 ## The claim outlives the handle
 

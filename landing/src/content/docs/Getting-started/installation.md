@@ -17,13 +17,13 @@ choosing a different one.
 Five engines can hold the store, and exactly one of them opens the file at run
 time. Which one is a compile-time choice, made by Cargo features.
 
-| feature | engine | file | what it is for |
-| --- | --- | --- | --- |
-| `redb` | redb | `.redb` | the default: a fast embedded database |
-| `sqlite` | SQLite | `.db` | when something else has to read the same file |
-| `json` | JSON | `.json` | a file a person can open and edit |
-| `toml` | TOML | `.toml` | the same, in the format config files usually take |
-| `ron` | RON | `.ron` | the same, in a format that spells Rust types out |
+| feature | engine | file |
+| --- | --- | --- |
+| `redb` | redb | `.redb` |
+| `sqlite` | SQLite | `.db` |
+| `json` | JSON | `.json` |
+| `toml` | TOML | `.toml` |
+| `ron` | RON | `.ron` |
 
 **The text engines write two files**: the data, and a `.meta` sidecar. The
 sidecar carries what the store needs in order to read the data back - which
@@ -37,7 +37,7 @@ The format sets what the store can express.
 [Limitations](/amethystate/limitations/absent-or-null/) measures what each
 engine does with the same values.
 
-### Turning the default off
+### When it should not be redb
 
 Engine features are additive, and when more than one is compiled in the store
 opens with the first of **redb, SQLite, JSON, TOML, RON**. So adding `json`
@@ -54,10 +54,14 @@ engine explicitly when the store is built and that order stops mattering.
 
 ### SQLite
 
-SQLite is compiled in from source, so building it needs a C toolchain. That
-keeps the SQLite version this library's choice: a system SQLite would be
-whatever the user's distribution ships, and a feature adopted later can raise
-the floor by years without SQLite recording that it did.
+SQLite is built from source, so you need a C toolchain. In exchange the minimum
+SQLite version is this library's choice rather than whatever the user's
+distribution ships.
+
+That is not cosmetic. Start using some SQLite feature — `STRICT` tables, say —
+and the minimum jumps to 3.37. Nothing in the file records that it did, so an
+older SQLite reports a corrupt schema rather than a version it cannot read,
+about a file that is perfectly intact.
 
 ```toml
 amethystate = { version = "0.20", default-features = false, features = ["sqlite"] }

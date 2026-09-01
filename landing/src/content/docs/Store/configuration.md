@@ -37,7 +37,8 @@ watcher is event-driven, on inotify, `ReadDirectoryChangesW` or FSEvents
 depending on the platform - and this is the quiet period after the last event,
 so an editor saving in several bursts costs one re-read instead of several.
 
-It applies to the text engines, which are the ones a person might edit by hand.
+`watch_every` is for the text engines only, the ones a person might edit by
+hand. `debounce` applies to every engine.
 
 ## A flush that keeps failing
 

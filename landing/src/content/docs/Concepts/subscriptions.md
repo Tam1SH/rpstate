@@ -9,7 +9,7 @@ Every reactive primitive is watched the same way, so what is here is true of a
 [cell](/amethystate/primitives/reactive-cell/) and a
 [map](/amethystate/primitives/reactive-map/) alike.
 
-## The handle is the subscription
+## A subscription ends with its guard
 
 <!-- shown: subscribing, and letting the subscription go -->
 ```rust
@@ -24,7 +24,19 @@ drop(sub);
 
 state.port().set(1234)?;
 assert_eq!(*heard.lock().unwrap(), [9090]);
+```
+<!-- /shown -->
 
+`subscribe` returns a guard and the callback lives exactly as long as it does.
+There is no separate `unsubscribe`: dropping the guard is what unregisters.
+
+## Keeping the guard is the caller's job
+
+Which is where the trap is. A guard assigned to `_` is dropped at the end of
+that same statement, and the callback never fires at all:
+
+<!-- shown: a subscription nobody held on to -->
+```rust
 let ignored = Arc::clone(&heard);
 let _ = state.port().subscribe(move |port| {
     ignored.lock().unwrap().push(*port);
@@ -35,13 +47,9 @@ assert_eq!(*heard.lock().unwrap(), [9090]);
 ```
 <!-- /shown -->
 
-`subscribe` returns a handle and the callback lives exactly as long as it does.
-Dropping the handle unregisters; a handle assigned to `_` is dropped at the end
-of the statement and never fires at all, which is why every example here binds
-it to a name.
-
-Keeping one is the caller's job - store it beside whatever the callback writes
-into, so the two die together.
+`heard` still holds `[9090]`, from the first subscription. So every example here
+binds the guard to a name, and the place to keep it is beside whatever the
+callback writes into, so the two die together.
 
 ### Several at once
 
@@ -62,10 +70,10 @@ scope.clear();
 ```
 <!-- /shown -->
 
-`ReactiveScope` is one owner for many handles. `clear` drops them all; dropping
+`ReactiveScope` is one owner for many guards. `clear` drops them all; dropping
 the scope does the same.
 
-## Configuring one
+## When plain `subscribe` is not enough
 
 `subscribe` covers the common case. Anything past it goes through
 `subscription_with()`, whose links compose in any order:
@@ -74,7 +82,7 @@ the scope does the same.
 | --- | --- |
 | `.external()` | skip changes this handle made |
 | `.key(k)` | on a map, narrow to one entry |
-| `.register(f)` | finish, returning the handle |
+| `.register(f)` | finish, returning the guard |
 | `.register_with_source(f)` | the same, with who made the change |
 | `.stream()` | finish as a `Stream` rather than a callback |
 
@@ -160,7 +168,7 @@ assert_ne!(port.instance_id(), other.instance_id());
 hears the other's writes through `external`. `fork` takes a new id, so the two
 are separate actors and each hears the other.
 
-### Asking directly
+### The author arrives with the value
 
 <!-- shown: asking who made the change -->
 ```rust

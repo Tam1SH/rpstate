@@ -73,12 +73,16 @@ it committed, so a refused write never shows up in `get`.
 
 <!-- shown: a cell onto a map entry -->
 ```rust
+state.widths().insert("cpu".to_string(), &120)?;
+
 let cpu = state.widths().entry_cell("cpu".to_string());
 let absent = state.widths().entry_cell("gpu".to_string());
 
+assert_eq!(cpu.get(), Some(120));
+assert_eq!(absent.get(), None);
+
 state.widths().remove("cpu")?;
 
-assert_eq!(absent.get(), None);
 assert_eq!(cpu.get(), None);
 assert!(cpu.set(80).is_err());
 ```
@@ -90,12 +94,21 @@ putting the key back is the map's business.
 
 ## What a cell keeps alive
 
-`cell()` and `entry_cell()` make a **view**. The cell holds its source weakly,
-so it never keeps the store file open on its own, and it reads `None` once the
-last real handle to that source goes.
+These are `Rc` and `Weak`, and not by analogy: what a cell keeps is an
+`Arc::downgrade` of the field.
 
-`into_cell()` and `into_entry_cell()` consume the field or the map and make a
-cell that **owns** it. Reach for those wherever the cell is the handle that
+`cell()` and `entry_cell()` make a **view** - the `Weak`. The cell holds its
+source weakly and reads `None` once the last real handle to that source goes.
+Like a `Weak`, the cell itself is fine; what fails is the upgrade inside it,
+which is where the `None` comes from and the `WriteError::SourceGone` on a
+write.
+
+`into_cell()` and `into_entry_cell()` make a cell that **owns** its source -
+the `Rc`. The handle you hand them is the one they keep, and they keep it
+strongly. Nothing is taken from the struct - a handle cannot be taken out of
+one at all: `state.sidebar_width()` and `state.widths()` both hand out an
+`Arc::clone` of the same thing, so the cell becomes one more owner, exactly
+like another `Rc::clone`. Reach for those wherever the cell is the handle that
 survives - stored in a component, put in a `HashMap`, handed to another thread.
 
 <!-- shown: a view, and a cell that owns what feeds it -->
@@ -109,4 +122,4 @@ drop(state);
 
 Both of those came from the same field, and the owning one is what keeps it
 alive - so the view above still answers after the struct is dropped, and goes
-empty only once the owning cell goes too.
+empty only once the owning cell goes too. It is the same count an `Rc` keeps.

@@ -173,7 +173,7 @@ widths.insert("mem".to_string(), &80)?;
 <!-- /shown -->
 
 `subscribe_any` fires for every change to any key; `subscribe_key` narrows to
-one. Both return a handle, and dropping it ends the subscription.
+one. Both return a guard, and dropping it ends the subscription.
 
 `subscription_with()` is the same with the links: `.key(..)` to narrow,
 `.external()` to skip your own writes, `.stream()` to take the changes into a

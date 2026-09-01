@@ -169,6 +169,52 @@ answered the same way: `Refuse` fails construction naming the path and the
 reason, `UseDefault` takes the declared default, leaves the stored value on disk
 and answers `try_get` with `Err` until a change passes.
 
+A construction that fails hands over the path and the reason as facts, so a
+caller can tell one refusal from another without reading the sentence:
+
+<!-- shown: telling one refused open from another -->
+```rust
+let refused = StrictUi::new_with(&store).unwrap_err();
+
+let failed_at = facts::all::<Key, _>(&refused).next();
+let said = facts::all::<Refused, _>(&refused).next();
+
+match (refused.current_context(), failed_at, said) {
+    (StorageError::Read, Some(Key(at)), Some(Refused(why))) => {
+        eprintln!("{at} will not do: {why}")
+    }
+    _ => return Err(refused.into()),
+}
+```
+<!-- /shown -->
+
+Under `UseDefault` nothing fails, and the same two facts arrive through the
+field instead:
+
+<!-- shown: asking a field what the store disagrees with -->
+```rust
+let held = match ui.font_size().try_get() {
+    Ok(size) => size,
+    Err(unread) => {
+        let said = facts::all::<Refused, _>(&unread).next();
+
+        match said {
+            Some(Refused(why)) => eprintln!("running on the default: {why}"),
+            None => eprintln!("the stored bytes will not decode"),
+        }
+
+        ui.font_size().get()
+    }
+};
+```
+<!-- /shown -->
+
+`Refused` is there only when a declared check turned the value down; bytes that
+would not decode carry `Key` and the codec's own sentence. A field whose store
+has closed answers `WriteError::Closed`, which is a different thing from either
+and says the value is the last one it heard. What else a report can be asked
+for: [Errors](/amethystate/concepts/errors/).
+
 ### A rule about the struct, not the value
 
 A field's check sees one value. It cannot see its siblings - fields are built
@@ -178,8 +224,11 @@ built.
 
 <!-- shown: a check on the struct, for what one field cannot see -->
 ```rust
-fn the_window_can_be_drawn(window: &LenientWindow, _cx: &CheckContext) -> Result<(), Invalid> {
-    if window.min().get() <= window.max().get() {
+fn the_window_can_be_drawn(
+    window: &AmeData<LenientWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
         Ok(())
     } else {
         Err(Invalid::new("the smallest window is wider than the largest")
@@ -205,6 +254,12 @@ pub struct LenientWindow {
 ```
 <!-- /shown -->
 
+What arrives is `AmeData<LenientWindow>` - the plain-data twin of the struct,
+the same one a migration step is handed - so the check reads `window.min` and
+not `window.min().get()`. That is deliberate: a rule about a relationship is
+about values, and a struct's mode decides what the struct itself is made of
+while the data twin is the same either way.
+
 `at` names the fields the verdict is about, and only those report it: asking an
 unrelated `title` still answers what it holds. A verdict that names none is
 about all of them.
@@ -224,7 +279,7 @@ check sees children that have already had their own.
 | --- | --- | --- |
 | the struct is built | runs | runs |
 | an edit from outside the process | runs; a refusal keeps the last good value and wakes nobody | does not run |
-| `load_with`, under `mode = "persistent"` | runs | cannot be declared |
+| `load_with` | runs | runs |
 | a write this process made itself | does not run | does not run |
 | a migration step | does not run | does not run |
 
@@ -238,14 +293,53 @@ before it happens - a check cannot refuse what is already stored.
 
 **Under `mode = "persistent"` there is no `Field`, so there is no `try_get`.**
 A refused value under `UseDefault` takes the declared default and says so in the
-log, and that is the only place it is said. `Refuse` - the default - fails the
-load instead, which is the answer to reach for when a loaded struct has to be
+log, and that is the only place it is said. A refused *struct* under
+`UseDefault` keeps what was stored, for the same reason it does anywhere else,
+and also only says so in the log. `Refuse` - the default - fails the load
+instead, which is the answer to reach for when a loaded struct has to be
 trustworthy.
 
-A struct's check is refused at compile time under `mode = "persistent"`, since
-there is no struct to hand it. So are checks on `volatile` fields, which nothing
-arrives at; on `nested` fields, which want the check on the nested struct
-itself; and on maps, whose entries are data rather than declared paths.
+<!-- shown: the same rule, on a struct that is loaded rather than watched -->
+```rust
+#[amethystate(prefix = "kept_window", mode = "persistent", check = the_kept_window_can_be_drawn)]
+pub struct KeptWindow {
+    #[amestate(default = 400u32)]
+    pub min: u32,
+
+    #[amestate(default = 1600u32)]
+    pub max: u32,
+}
+
+fn the_kept_window_can_be_drawn(
+    window: &AmeData<KeptWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min <= window.max {
+        Ok(())
+    } else {
+        Err(Invalid::new("the smallest window is wider than the largest"))
+    }
+}
+```
+<!-- /shown -->
+
+Three fields will not take a check at all, and the macro says so while it
+compiles:
+
+- **A `volatile` field.** Nothing arrives at it from the store, so a check
+  would never be asked anything. A rule about a value this process writes and
+  never stores is an
+  [interceptor](/amethystate/concepts/subscriptions/)'s job.
+- **A `nested` field.** A field's check judges one value that arrived from the
+  store at one path. A nested struct is not a value but a subtree of paths:
+  nothing arrives at it, so there is nothing to call a check with. The rule you
+  wanted goes on the nested struct itself, where
+  `#[amethystate(check = ..)]` is handed all of its fields at once, once it is
+  built.
+- **A map.** A check is declared once against one value, and a map's entries
+  are data - they come and go while the program runs, and there is no declared
+  path to hang a rule on. What a map does with an entry it cannot read is
+  [Kv](/amethystate/primitives/kv/)'s subject, not this one.
 
 ## #[derive(AmeType)]
 

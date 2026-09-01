@@ -116,7 +116,7 @@ For a TypeScript frontend:
 use your_crate_with_amethystate_types as _;
 
 amethystate_codegen::amethystate_codegen_main!(
-    ts_out = "../src/bindings/amethystate.ts",
+    ts_out = "../src/bindings/amethystate.ts"
 );
 ```
 

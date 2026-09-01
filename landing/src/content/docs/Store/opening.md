@@ -159,7 +159,7 @@ Which engines exist and what each writes:
 
 ## Which migrations run
 
-`build` runs the migrations declared by hand on the builder.
+`build` runs the steps handed to the builder and no others.
 `build_with_migration` also collects every `#[migrate]` step in the binary, and
 returns what the pass did alongside the store.
 
@@ -222,11 +222,17 @@ last thing it was told.
 
 **The global store closes the same way.** Dropping the guard closes it, and a
 failure there goes to `tracing::error!` under the `amethystate` target - nowhere
-a caller can act on it. `amethystate::shutdown()` is the one that hands the
-failure back, so an application that would rather find out while it can still do
-something - offer to retry, save elsewhere, not exit yet - calls it before the
-guard goes out of scope. A static is never dropped, so without one of the two
-the last debounce interval is lost on a clean return.
+a caller can act on it. `amethystate::shutdown()` hands the failure back
+instead, and it is called before the guard goes out of scope. A static is never
+dropped, so without one of the two the last debounce interval is lost on a clean
+return.
+
+What that buys is exactly one thing: you find out, and can tell the person. The
+writes cannot be rescued at that point - the store is closed, and everything
+but a `get` from memory answers `Closed`. Calling `close` again will not help
+either: it sees that closing has already begun and answers `Ok` without
+flushing anything. The place for a second attempt is `save_now`, while the
+store is still open.
 
 For waiting on the disk for one write rather than all of them:
 [Durability](/amethystate/concepts/durability/).

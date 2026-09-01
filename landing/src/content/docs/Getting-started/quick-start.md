@@ -131,7 +131,7 @@ data written by an older build is brought forward. A field renamed or retyped
 *without* a bump is reported as drift and startup continues.
 
 Open the store with `build_with_migration` whenever `#[migrate]` is in the binary:
-`build` runs only the migrations declared by hand.
+`build` runs only the steps handed to it.
 
 [Migrations](/amethystate/migrations/overview/).
 

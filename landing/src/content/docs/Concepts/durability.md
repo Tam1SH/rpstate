@@ -57,9 +57,10 @@ A smaller value narrows the window and flushes more often. A larger one widens i
 
 **A notification does not mean the value is stored.** Subscribers are called during `set()`, before the flush. A subscriber can observe a value that a later crash erases. If your callback does something irreversible outside the process — sends a request, writes another file — do not treat the event as proof the value survived.
 
-## Forcing a flush
+## Waiting for the disk
 
-`save_now()` writes everything and returns once storage has committed.
+`save_now()` pushes the whole buffer out and returns once the store has
+committed it.
 
 <!-- shown: forcing everything out -->
 ```rust
