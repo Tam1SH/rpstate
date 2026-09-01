@@ -25,19 +25,29 @@ function hsl(h, s, l) {
 }
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
-function spaceOut(pts, minDist) {
+/**
+ * Thins points to a minimum spacing. `radiusAt` may vary the spacing across the
+ * field, which is how the grain can change gradually: decimating a lattice by whole
+ * steps instead puts a hard seam wherever the step changes, and the seam takes the
+ * shape of whatever decided it.
+ */
+function spaceOut(pts, minDist, radiusAt = null) {
   const cell = Math.max(1, minDist), grid = new Map(), keep = [];
   const key = (i, j) => i + ',' + j;
   for (const p of pts) {
+    const rp = radiusAt ? radiusAt(p) : minDist;
     const gi = Math.floor(p[0]/cell), gj = Math.floor(p[1]/cell);
+    const span = Math.max(1, Math.ceil(rp / cell));
     let ok = true;
-    for (let i = gi-1; i <= gi+1 && ok; i++)
-      for (let j = gj-1; j <= gj+1 && ok; j++)
-        for (const q of grid.get(key(i,j)) || [])
-          if (Math.hypot(p[0]-q[0], p[1]-q[1]) < minDist) { ok = false; break; }
+    // The radius is kept beside the point, never on it: these arrays are flattened
+    // into the triangulation, and a third number there shifts every index.
+    for (let i = gi-span; i <= gi+span && ok; i++)
+      for (let j = gj-span; j <= gj+span && ok; j++)
+        for (const [q, rq] of grid.get(key(i,j)) || [])
+          if (Math.hypot(p[0]-q[0], p[1]-q[1]) < Math.max(rp, rq)) { ok = false; break; }
     if (!ok) continue;
     const k = key(gi, gj);
-    (grid.get(k) || grid.set(k, []).get(k)).push(p);
+    (grid.get(k) || grid.set(k, []).get(k)).push([p, rp]);
     keep.push(p);
   }
   return keep;
@@ -64,7 +74,48 @@ function polyDist(px, py, poly) {
   return inside ? -best : best;
 }
 
-function silhouette(w, h, r, spread, room, apron = 0) {
+/**
+ * The plateau contour: the box offset outwards by `pad`, with the corners turned
+ * through an arc of radius `pad * round`. Straight runs stay straight and the
+ * corners come round, so the shape reads as a rounded shelf rather than a square,
+ * and it still contains the box by construction. Jitter only ever pushes outwards,
+ * which keeps that guarantee.
+ */
+function plateauContour(w, h, pad, round, r, jitter, bulge = 0.9) {
+  const cx = w / 2, cy = h / 2;
+  const boxW = cx + pad, boxH = cy + pad;
+  // The ellipse of the box's own aspect that circumscribes it: at the corners
+  // (w/2)^2/a^2 + (h/2)^2/b^2 = 1, so the box is inscribed exactly.
+  const a = cx * Math.SQRT2 + pad, b = cy * Math.SQRT2 + pad;
+
+  const t = clamp(round, 0, 1);
+  const n = clamp(Math.round((boxW + boxH) / Math.max(13, pad * 0.55)), 12, 110);
+  const harmonics = [[1, r() * 6.283, 1.0], [2, r() * 6.283, 0.62], [3, r() * 6.283, 0.34]];
+  const weight = harmonics.reduce((s, [, , k]) => s + k, 0);
+
+  const P = [];
+  for (let i = 0; i < n; i++) {
+    const th = ((i + rand(r, -0.32, 0.32)) / n) * Math.PI * 2;
+    const c = Math.cos(th), s = Math.sin(th);
+
+    // Both shapes contain the box, so any blend of their radii contains it too.
+    const rect = Math.min(boxW / Math.max(Math.abs(c), 1e-6),
+                          boxH / Math.max(Math.abs(s), 1e-6));
+    const ell = 1 / Math.sqrt((c / a) ** 2 + (s / b) ** 2);
+    const base = rect * (1 - t) + ell * t;
+
+    let sum = 0;
+    for (const [k, phase, amp] of harmonics) sum += amp * Math.sin(k * th + phase);
+    const wave = 0.5 + 0.5 * sum / weight;
+
+    const rad = base * (1 + bulge * 0.18 * wave)
+              + (jitter > 0 ? rand(r, 0, pad * jitter * 2) : 0);
+    P.push([cx + c * rad, cy + s * rad]);
+  }
+  return P;
+}
+
+function silhouette(w, h, r, spread, room, apron = 0, shapeRound = 0) {
   const L = 2 * (w + h);
   const base = Math.max(16, Math.min(w, h) * 0.055);
   const amp = base + Math.min(w, h) * spread * 0.95;
@@ -104,14 +155,32 @@ function silhouette(w, h, r, spread, room, apron = 0) {
     off += apron;
     P.push([p[0] + nr[0] * off, p[1] + nr[1] * off]);
   }
-  return P;
+
+  if (shapeRound <= 0) return P;
+
+  // Extruding a perimeter can only ever give a boxy outline. Pulling each radius
+  // towards the ellipse that circumscribes the block turns the whole body round
+  // while keeping the irregularity as a wobble on top of it. Both radii already
+  // clear the block, so blending them still clears it.
+  const cx = w / 2, cy = h / 2;
+  const t = clamp(shapeRound, 0, 1);
+  const A = cx * Math.SQRT2 + base + apron, B = cy * Math.SQRT2 + base + apron;
+  return P.map(([x, y]) => {
+    const vx = x - cx, vy = y - cy;
+    const len = Math.hypot(vx, vy) || 1;
+    const c = vx / len, s = vy / len;
+    const ell = 1 / Math.sqrt((c / A) ** 2 + (s / B) ** 2);
+    const rad = len * (1 - t) + ell * t;
+    return [cx + c * rad, cy + s * rad];
+  });
 }
 
 /** Geometry of one outcrop over a group of rectangles. Costly; runs once per layout. */
 export function prepareShard(rects, opts = {}) {
   const { seed = 1, spread = 0.14, pageWidth = null, margin = 8,
-          density: dens0 = null, plateauPad = 56, flatSpread = 0.05,
-          apron = 0, rampFactor = 1.0 } = opts;
+          density: dens0 = null, tessel: tess0 = null,
+          plateauPad = 56, flatSpread = 0.05, plateauRound = 1, plateauBulge = 0.9,
+          apron = 0, rampFactor = 1.0, shapeRound = 0.8, plateauGrain = 2.4 } = opts;
 
   const gx0 = Math.min(...rects.map(r => r[0]));
   const gy0 = Math.min(...rects.map(r => r[1]));
@@ -120,11 +189,22 @@ export function prepareShard(rects, opts = {}) {
   const gw = gx1 - gx0, gh = gy1 - gy0;
   const r = rng(seed);
   const density = dens0 ?? Math.max(72, Math.min(gw, gh) / 3.2);
+  const step = tess0 || density;
 
   const room = pageWidth == null ? null
     : [Math.max(6, gx0 - margin), Math.max(6, pageWidth - gx1 - margin)];
 
-  let poly = silhouette(gw, gh, r, spread, room, apron);
+  // The body is grown from the plateau's extent, not from the bare text box: the
+  // plateau is the box plus plateauPad, and the outcrop has to be that plus its own
+  // rise and apron. Built from the box alone, a wide plateau reaches past the body
+  // it is meant to sit on and the skirt disappears.
+  // The plateau reaches plateauPad beyond the box and then bulges on top of that,
+  // so the body has to be grown by at least as much again before its own rise and
+  // apron are added. Built from the bare box, a wide plateau overruns it and the
+  // skirt vanishes.
+  const under = plateauPad * (1 + plateauBulge * 0.18) + 0.12 * Math.min(gw, gh);
+  let poly = silhouette(gw + 2 * under, gh + 2 * under, r, spread, room, apron, shapeRound)
+    .map(([px, py]) => [px - under, py - under]);
   const x0 = Math.min(...poly.map(p => p[0])) - 6;
   const y0 = Math.min(...poly.map(p => p[1])) - 6;
   const W  = Math.max(...poly.map(p => p[0])) + 6 - x0;
@@ -132,31 +212,49 @@ export function prepareShard(rects, opts = {}) {
   poly = poly.map(([x, y]) => [x - x0, y - y0]);
   const local = rects.map(([x, y, w, h]) => [x - gx0 - x0, y - gy0 - y0, w, h]);
 
-  const flatPolys = local.map(([x, y, w, h]) => {
-    const px = x - plateauPad, py = y - plateauPad;
-    return silhouette(w + 2*plateauPad, h + 2*plateauPad, r, flatSpread, null)
-             .map(([vx, vy]) => [vx + px, vy + py]);
-  });
+  const flatPolys = local.map(([x, y, w, h]) =>
+    plateauContour(w, h, plateauPad, plateauRound, r, flatSpread, plateauBulge)
+      .map(([vx, vy]) => [vx + x, vy + y]));
 
   const pts = [];
-  for (let y = 0; y < H; y += density)
-    for (let x = 0; x < W; x += density) {
-      const px = x + rand(r, -density * 0.26, density * 0.26);
-      const py = y + rand(r, -density * 0.26, density * 0.26);
-      if (polyDist(px, py, poly) < -density * 0.35) pts.push([px, py]);
+  const nearRect = (px, py) => {
+    let best = Infinity;
+    for (const [rx, ry, rw, rh] of local) {
+      const dx = Math.max(rx - px, px - (rx + rw), 0);
+      const dy = Math.max(ry - py, py - (ry + rh), 0);
+      best = Math.min(best, Math.hypot(dx, dy));
+    }
+    return best;
+  };
+
+  // Cut stone carries one broad table and keeps the small faceting for the slopes.
+  // The grain is a field, not a switch: points are laid at the fine step everywhere
+  // and thinned by a spacing that grows towards the text, so the density changes
+  // gradually instead of leaving a rectangular seam where a step size changed.
+  const reach = Math.max(plateauPad * 2.4, step * 3);
+  const grainAt = ([x, y]) =>
+    step * 0.30 * (1 + (plateauGrain - 1) * (1 - smooth(clamp(nearRect(x, y) / reach, 0, 1))));
+  for (let y = 0; y < H; y += step)
+    for (let x = 0; x < W; x += step) {
+      const px = x + rand(r, -step * 0.26, step * 0.26);
+      const py = y + rand(r, -step * 0.26, step * 0.26);
+      if (polyDist(px, py, poly) < -step * 0.35) pts.push([px, py]);
     }
   for (const P2 of [poly, ...flatPolys])
     for (let i = 0; i < P2.length; i++) {
       const a = P2[i], b = P2[(i + 1) % P2.length];
-      const k = Math.max(2, Math.floor(Math.hypot(b[0]-a[0], b[1]-a[1]) / (density*0.55)) + 1);
+      const k = Math.max(2, Math.floor(Math.hypot(b[0]-a[0], b[1]-a[1]) / (step*0.55)) + 1);
       for (let j = 0; j < k; j++)
         pts.push([a[0] + (b[0]-a[0]) * j/k, a[1] + (b[1]-a[1]) * j/k]);
     }
-  const filtered = spaceOut(pts, density * 0.30);
-  pts.length = 0; pts.push(...filtered);
+  // Assigned rather than spread: a fine tessellation runs to hundreds of thousands
+  // of points, and push(...arr) overflows the stack long before that.
+  const filtered = spaceOut(pts, step * 0.30 * Math.max(1, plateauGrain), grainAt);
+  pts.length = filtered.length;
+  for (let i = 0; i < filtered.length; i++) pts[i] = filtered[i];
 
   const ramp = Math.max(density * 1.1, Math.min(W - gw, H - gh) * 0.75) * rampFactor;
-  const flatIdx = [], wts = [], edgeT = [], ripple = [], tiltOff = [];
+  const flatIdx = [], wts = [], edgeT = [], ripple = [], tiltOff = [], flatU = [];
   const origin = [], dn = [];
   let dMaxOut = 1e-6;
   for (let i = 0; i < pts.length; i++) {
@@ -175,6 +273,11 @@ export function prepareShard(rects, opts = {}) {
         if (d < bd) { bd = d; bx = qx; by = qy; }
       }
       origin[i] = [bx, by]; dn[i] = bd;
+      // How far across the plateau this vertex sits: 0 on the text box, 1 at the
+      // plateau's rim. It is what lets the top be a dome with a table on it
+      // instead of one flat lid.
+      const toRim = -ds[inside];
+      flatU[i] = bd + toRim > 1e-6 ? clamp(bd / (bd + toRim), 0, 1) : 0;
       if (bd > dMaxOut) dMaxOut = bd;
       continue;
     }
@@ -210,10 +313,42 @@ export function prepareShard(rects, opts = {}) {
                 jit: rand(r, -7, 7), jitS: rand(r, -1, 1), jitH: rand(r, -1, 1) });
   }
 
-  return { pts, tris, flatIdx, wts, edgeT, ripple, tiltOff, origin, dn,
+  return { pts, tris, flatIdx, wts, edgeT, ripple, tiltOff, flatU, origin, dn,
            nRects: local.length,
            W, H, x: gx0 + x0, y: gy0 + y0,
-           poly: poly.map(([px, py]) => [px + gx0 + x0, py + gy0 + y0]) };
+           poly: poly.map(([px, py]) => [px + gx0 + x0, py + gy0 + y0]),
+           plateaus: flatPolys.map(fp => fp.map(([px, py]) => [px + gx0 + x0, py + gy0 + y0])) };
+}
+
+/**
+ * Vertex heights of a fully grown shard, plus the deepest plateau elevation.
+ * `depth` is one number or one per rectangle.
+ */
+export function shardHeights(g, opts = {}) {
+  const { depth = 150, flatTilt = 0, plateauDome = 0.55 } = opts;
+  const dArr = Array.isArray(depth) ? Array.from({length: g.nRects}, (_, i) => depth[i] ?? depth[0])
+                                    : Array.from({length: g.nRects}, () => depth);
+  const dMax = Math.max(...dArr, 1e-6);
+  const Z = new Float64Array(g.pts.length);
+  for (let i = 0; i < g.pts.length; i++) {
+    if (g.flatIdx[i] >= 0) {
+      // A spherical cap over the plateau: flat where the text lies, falling away
+      // towards the rim, so the top reads as a rounded stone and not as a lid.
+      const u = g.flatU[i] ?? 0;
+      const cap = 1 - plateauDome * (1 - Math.sqrt(Math.max(0, 1 - u * u)));
+      // The table stays flat; the tilt that gives faces their steps of lightness
+      // only comes in on the slopes, where the small faceting belongs.
+      Z[i] = dArr[g.flatIdx[i]] * cap + g.tiltOff[i] * flatTilt * smooth(u);
+      continue;
+    }
+    const w = g.wts[i];
+    let wsum = 0, dsum = 0;
+    for (let k = 0; k < w.length; k++) { wsum += w[k]; dsum += w[k] * dArr[k]; }
+    const target = wsum > 1e-6 ? dsum / wsum : dMax;
+    const t = clamp(wsum, 0, 1) * g.edgeT[i];
+    Z[i] = target * t - dMax * 0.18 * (1 - t) + g.ripple[i] * t * (1 - t) * 2;
+  }
+  return { Z, dMax };
 }
 
 /** Shades prepared geometry into SVG. Cheap enough to call every frame. */
@@ -222,10 +357,7 @@ export function renderShard(g, opts = {}) {
           flatHueJitter = 5, flatSatJitter = 5, flatLigJitter = 0,
           grow = 1, stagger = 0.5 } = opts;
 
-  const dArr = Array.isArray(depth) ? Array.from({length: g.nRects}, (_, i) => depth[i] ?? depth[0])
-                                    : Array.from({length: g.nRects}, () => depth);
-  const dMax = Math.max(...dArr, 1e-6);
-
+  const { Z: Zfull, dMax } = shardHeights(g, { depth, flatTilt });
   const P = g.pts;
   const XY = grow >= 1 ? P : P.map((p, i) => {
     const s0 = g.dn[i] * stagger;
@@ -241,16 +373,8 @@ export function renderShard(g, opts = {}) {
   }
 
   const Z = new Float64Array(P.length);
-  for (let i = 0; i < P.length; i++) {
-    if (g.flatIdx[i] >= 0) { Z[i] = dArr[g.flatIdx[i]] + g.tiltOff[i] * flatTilt; continue; }
-    const w = g.wts[i];
-    let wsum = 0, dsum = 0;
-    for (let k = 0; k < w.length; k++) { wsum += w[k]; dsum += w[k] * dArr[k]; }
-    const target = wsum > 1e-6 ? dsum / wsum : dMax;
-    const t = clamp(wsum, 0, 1) * g.edgeT[i];
-    const z = target * t - dMax * 0.18 * (1 - t) + g.ripple[i] * t * (1 - t) * 2;
-    Z[i] = z * growF[i];
-  }
+  for (let i = 0; i < P.length; i++)
+    Z[i] = g.flatIdx[i] >= 0 ? Zfull[i] : Zfull[i] * growF[i];
 
   const out = [`<svg xmlns="${NS}" viewBox="0 0 ${g.W.toFixed(0)} ${g.H.toFixed(0)}" `
              + `width="${g.W.toFixed(0)}" height="${g.H.toFixed(0)}" aria-hidden="true" focusable="false">`];
@@ -328,21 +452,38 @@ function fbm(x, y, seed, oct = 4, scale = 900) {
 }
 
 /** Matrix rock the outcrops grow out of. `sockets` are outcrop contours in page coordinates. */
-export function buildMatrix(W, H, sockets, opts = {}) {
+export function prepareMatrix(W, H, sockets, opts = {}) {
   const { seed = 3, step = 300, lo = 4.5, hi = 19, hue = 264, relief = 52,
-          sink = 92, sizeVar = 0.62 } = opts;
+          swell = 45, dome = 70, sizeVar = 0.62,
+          stoneShare = 0.35, stoneSize = 26, stoneRise = 0.9,
+          clusterSize = 90, clusterCount = 5, clusterSpread = 2.4,
+          // How much of the rock itself is crystalline, beyond the chips: 0 leaves
+          // it stone, 1 turns the whole field to crystal.
+          crystalField = 0,
+          // Where stones must not be seeded. Defaults to the outcrops themselves;
+          // pass the plateaux to keep the ground clear only under the thick body
+          // and still have stones lying along the skirt.
+          keepOut = sockets } = opts;
   const r = rng(seed);
   const pts = [];
 
-  for (let gy = -1; gy < H/step + 2; gy++)
-    for (let gx = -1; gx < W/step + 2; gx++) {
-      const bx = gx*step, by = gy*step;
-      const d = fbm(bx, by, seed + 500, 3, 1400);
-      const n = d > 0.62 ? 3 : d > 0.38 ? 2 : 1;
-      for (let k = 0; k < n; k++)
-        pts.push([bx + rand(r, -step*0.5, step*0.5) * (1 + sizeVar*(1-d)),
-                  by + rand(r, -step*0.5, step*0.5) * (1 + sizeVar*(1-d))]);
-    }
+  // Candidates are laid finer than the grain wants and thinned by a spacing that
+  // follows the density field. Dropping one to three points into each cell of a
+  // lattice instead leaves the lattice visible and pairs of points close enough to
+  // triangulate into slivers.
+  const dense = step * 0.42;
+  for (let y = -step; y < H + step; y += dense)
+    for (let x = -step; x < W + step; x += dense)
+      pts.push([x + rand(r, -dense * 0.55, dense * 0.55),
+                y + rand(r, -dense * 0.55, dense * 0.55)]);
+
+  const grainAt = ([x, y]) => {
+    const d = fbm(x, y, seed + 500, 3, 1400);
+    return step * 0.34 * (1 - sizeVar * 0.5 + sizeVar * (1 - d));
+  };
+  const thinned = spaceOut(pts, step * 0.34 * (1 + sizeVar * 0.5), grainAt);
+  pts.length = thinned.length;
+  for (let i = 0; i < thinned.length; i++) pts[i] = thinned[i];
 
   for (const poly of sockets) {
     const cx = poly.reduce((a,p) => a+p[0], 0)/poly.length;
@@ -358,17 +499,78 @@ export function buildMatrix(W, H, sockets, opts = {}) {
       }
   }
 
-  const kept = spaceOut(pts, step * 0.34);
-  pts.length = 0; pts.push(...kept);
+  // Same field as the first pass: a uniform radius here would flatten the grain
+  // back out and undo it.
+  const kept = spaceOut(pts, step * 0.34 * (1 + sizeVar * 0.5), grainAt);
+  pts.length = kept.length;
+  for (let i = 0; i < kept.length; i++) pts[i] = kept[i];
 
-  const Z = pts.map(([x, y]) => {
+  // Stones are grown out of the matrix itself rather than laid on top of it: their
+  // ring and apex join this same triangulation, so there is one continuous surface.
+  // They are seeded after spaceOut, which would otherwise cull a ring finer than
+  // the rock's own grain.
+  const stoneOf = new Array(pts.length).fill(-1);
+  const stoneApex = new Array(pts.length).fill(0);
+  const stones = [];
+  if (stoneShare > 0 && stoneSize > 0) {
+    const seedStone = (cx, cy) => {
+      if (cx < 0 || cy < 0 || cx > W || cy > H) return;
+      // Not under the thick body: a stone seeded there sits inside it and reads
+      // as a blot rather than as something lying in the ground.
+      if (keepOut.some(poly => polyDist(cx, cy, poly) < stoneSize * 0.9)) return;
+      // Nor on top of one already placed: overlapping rings fuse into chains.
+      for (const st of stones)
+        if (Math.hypot(cx - st.cx, cy - st.cy) < (stoneSize + st.rad) * 0.85) return;
+
+      const rad = stoneSize * rand(r, 0.6, 1.35);
+      const n = 4 + Math.floor(r() * 4);
+      const phase = r() * Math.PI * 2;
+      const id = stones.length;
+      stones.push({ cx, cy, rad });
+      for (let i = 0; i < n; i++) {
+        const a = phase + (i / n) * Math.PI * 2;
+        const rr = rad * rand(r, 0.72, 1.18);
+        pts.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
+        stoneOf.push(id); stoneApex.push(0);
+      }
+      pts.push([cx + rand(r, -rad * 0.18, rad * 0.18),
+                cy + rand(r, -rad * 0.18, rad * 0.18)]);
+      stoneOf.push(id); stoneApex.push(rad * stoneRise * rand(r, 0.7, 1.4));
+    };
+
+    // Crystal grows in pockets, not evenly over a field. Cluster centres are seeded
+    // first and the stones are placed around them, so there is bare rock between
+    // the nests instead of one uniform scatter.
+    const cell = stoneSize * 3.2 * clusterSpread;
+    for (let gy = 0; gy < H / cell + 1; gy++)
+      for (let gx = 0; gx < W / cell + 1; gx++) {
+        if (r() > stoneShare) continue;
+        const cx = (gx + rand(r, 0.15, 0.85)) * cell;
+        const cy = (gy + rand(r, 0.15, 0.85)) * cell;
+        const count = 1 + Math.floor(r() * Math.max(1, clusterCount));
+        for (let k = 0; k < count; k++) {
+          const a = r() * Math.PI * 2;
+          const d = clusterSize * Math.sqrt(r());
+          seedStone(cx + Math.cos(a) * d, cy + Math.sin(a) * d);
+        }
+      }
+  }
+
+  const socket = new Float64Array(pts.length);
+  const Z = pts.map(([x, y], i) => {
     let z = relief * (fbm(x, y, seed, 5, 1100) - 0.5)
           + relief * 0.45 * (fbm(x, y, seed + 91, 3, 320) - 0.5);
-    for (const poly of sockets) {
-      const d = polyDist(x, y, poly);
-      z -= sink * smooth(clamp(1 - Math.max(d, 0)/260, 0, 1));
-    }
-    return z;
+    // A spherical cap over the page: the ground reads as a body bulging towards
+    // the viewer rather than as a hollow seen into.
+    const dx = (x - W/2) / (W/2 || 1), dy = (y - H/2) / (H/2 || 1);
+    z += dome * Math.sqrt(Math.max(0, 1 - Math.min(1, dx*dx + dy*dy)));
+    // The heave around the outcrop is kept as a weight as well as baked in, so a
+    // renderer that can move it per frame has the shape to move.
+    let w = 0;
+    for (const poly of sockets)
+      w = Math.max(w, smooth(clamp(1 - Math.max(polyDist(x, y, poly), 0) / 260, 0, 1)));
+    socket[i] = w;
+    return z + swell * w + stoneApex[i];
   });
 
   const zmin = Math.min(...Z), zmax = Math.max(...Z);
@@ -388,19 +590,41 @@ export function buildMatrix(W, H, sockets, opts = {}) {
     lam = lam*q + clamp(LIGHT[2], 0, 1)*(1 - q);
     const cz = (A[2]+B[2]+C[2])/3;
     const sh = clamp(0.38*((cz-zmin)/(zmax-zmin+1e-9)) + 0.62*Math.pow(lam,1.9), 0, 1);
-    tri.push({ a, b, c, cz, sh });
+    // A side face of a chip has two vertices on its ring and the third out in the
+    // rock, so requiring all three leaves those faces shaded as rock: near vertical,
+    // taking no light, reading as a black hole in the stone they belong to. Two is
+    // enough — but only when the third vertex is still near that chip, or the rule
+    // swallows every long triangle that happens to touch two rings.
+    const sa = stoneOf[a], sb = stoneOf[b], sc = stoneOf[c];
+    let stone = false;
+    for (const [p, q, far] of [[sa, sb, c], [sa, sc, b], [sb, sc, a]]) {
+      if (p < 0 || p !== q) continue;
+      const st = stones[p];
+      if (Math.hypot(pts[far][0] - st.cx, pts[far][1] - st.cy) <= st.rad * 1.8) stone = true;
+    }
+    if (!stone && crystalField > 0)
+      stone = ((i * 2654435761) >>> 0) / 4294967296 < crystalField;
+    tri.push({ a, b, c, cz, sh, stone, jit: rand(r, -6, 6) });
   }
   tri.sort((p, q) => p.cz - q.cz);
+  return { pts, Z, socket, swell, apex: stoneApex, tris: tri, stones,
+           zmin, zmax, W, H, lo, hi, hue };
+}
+
+/** Serialises a prepared matrix into SVG. Used by the CPU renderer. */
+export function buildMatrix(W, H, sockets, opts = {}) {
+  const m = prepareMatrix(W, H, sockets, opts);
+  const { pts, tris, lo, hi, hue } = m;
   const out = [`<svg xmlns="${NS}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true" focusable="false">`,
                `<rect width="${W}" height="${H}" fill="${hsl(266,34,lo)}"/>`];
-  for (const t of tri) {
+  for (const t of tris) {
     const p = [t.a,t.b,t.c].map(k => `${pts[k][0].toFixed(0)},${pts[k][1].toFixed(0)}`).join(' ');
-    const col = hsl(hue + 10*t.sh + rand(r,-6,6), 32 + 16*(1-t.sh),
+    const col = hsl(hue + 10*t.sh + t.jit, 32 + 16*(1-t.sh),
                     lo + (hi-lo)*Math.pow(t.sh,1.5));
     out.push(`<polygon points="${p}" fill="${col}" stroke="${col}" stroke-width="0.7"/>`);
   }
   out.push('</svg>');
-  return { svg: out.join(''), faces: tri.length };
+  return { svg: out.join(''), faces: tris.length };
 }
 
 /**
@@ -410,13 +634,14 @@ export function buildMatrix(W, H, sockets, opts = {}) {
  * the measured box.
  */
 export function mountCrystals({ container, groups, matrix = true, spread = 0.14,
-                                seed = 500, pad = 0, plateauPad = 56,
+                                seed = 500, pad = 0, plateauPad = 56, plateauRound = 1,
+                                shapeRound = 0.8, plateauGrain = 2.4,
                                 hue = 266, floor = 7,
                                 flatHueJitter = 5, flatSatJitter = 5,
                                 flatLigJitter = 0, flatTilt = 0, sweep = 0,
                                 apron = 0, rampFactor = 1.0, depth = 150,
                                 animateIn = 0, easing = 'inOut', stagger = 0.5,
-                                onDone } = {}) {
+                                onDone, onGrow } = {}) {
   if (!container) return () => {};
   const layer = document.createElement('div');
   layer.setAttribute('aria-hidden', 'true');
@@ -425,10 +650,12 @@ export function mountCrystals({ container, groups, matrix = true, spread = 0.14,
   if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
   container.prepend(layer);
 
-  const cfg = { spread, plateauPad, hue, floor, flatHueJitter, flatSatJitter,
+  const cfg = { spread, plateauPad, plateauRound, shapeRound, plateauGrain,
+                hue, floor, flatHueJitter, flatSatJitter,
                 flatLigJitter, flatTilt, sweep, apron, rampFactor, depth, matrix,
                 stagger };
-  const GEOM_KEYS = ['spread', 'plateauPad', 'apron', 'rampFactor'];
+  const GEOM_KEYS = ['spread', 'plateauPad', 'plateauRound', 'shapeRound', 'plateauGrain',
+                     'apron', 'rampFactor'];
 
   const resolve = g => (Array.isArray(g) ? g : [g])
     .flatMap(s => typeof s === 'string' ? [...container.querySelectorAll(s)] : [s])
@@ -479,6 +706,7 @@ export function mountCrystals({ container, groups, matrix = true, spread = 0.14,
     layer.innerHTML = html;
     layer.querySelectorAll('svg').forEach(sv => { sv.style.display = 'block';
       sv.style.width = '100%'; sv.style.height = '100%'; });
+    onGrow?.(k);
     onDone?.(shards);
   }
 
