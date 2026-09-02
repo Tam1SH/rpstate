@@ -128,10 +128,7 @@ where
 
     let arena_sub = arena.clone();
     let sub = arena.subscribe_map_any(handle, move |_| {
-        let entries = arena_sub
-            .get_map_entries(handle)
-            .into_iter()
-            .collect();
+        let entries = arena_sub.get_map_entries(handle).into_iter().collect();
         set_signal.set(entries);
     });
     on_cleanup(move || drop(sub));

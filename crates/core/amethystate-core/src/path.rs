@@ -546,7 +546,6 @@ fn unescape(level: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-
 /// Why a set of segments is not a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorePathError {
@@ -886,21 +885,55 @@ mod tests {
         let cases: &[(&[&str], &[&str], bool, &str)] = &[
             (&["ui"], &["ui"], true, "the same path"),
             (&["ui"], &["ui", "theme"], true, "a child"),
-            (&["ui"], &["ui", "a", "b"], true, "a grandchild - a subtree is not one level"),
+            (
+                &["ui"],
+                &["ui", "a", "b"],
+                true,
+                "a grandchild - a subtree is not one level",
+            ),
             (&["ui", "theme"], &["ui", "width"], false, "siblings"),
             (&["ui"], &["net"], false, "strangers"),
-            (&["ui"], &["uix"], false, "a string prefix is not a level prefix"),
-            (&["ui"], &["uix", "width"], false, "and neither is its subtree"),
-            (&["ui"], &["ui!x"], false, "`!` sorts below the separator, and is still not under `ui`"),
-            (&["ui.theme"], &["ui"], false, "one level literally named `ui.theme`, escaped as `ui\\.theme`"),
-            (&["ui.theme"], &["ui", "theme"], false, "which is a different place from two levels"),
+            (
+                &["ui"],
+                &["uix"],
+                false,
+                "a string prefix is not a level prefix",
+            ),
+            (
+                &["ui"],
+                &["uix", "width"],
+                false,
+                "and neither is its subtree",
+            ),
+            (
+                &["ui"],
+                &["ui!x"],
+                false,
+                "`!` sorts below the separator, and is still not under `ui`",
+            ),
+            (
+                &["ui.theme"],
+                &["ui"],
+                false,
+                "one level literally named `ui.theme`, escaped as `ui\\.theme`",
+            ),
+            (
+                &["ui.theme"],
+                &["ui", "theme"],
+                false,
+                "which is a different place from two levels",
+            ),
             (&[], &["ui", "theme"], true, "the root holds everything"),
         ];
 
         for (a, b, want, why) in cases {
             let (a, b) = (StorePath::from_segments(*a), StorePath::from_segments(*b));
             assert_eq!(a.overlaps(&b), *want, "{why}: {a} vs {b}");
-            assert_eq!(b.overlaps(&a), *want, "{why}, the other way round: {b} vs {a}");
+            assert_eq!(
+                b.overlaps(&a),
+                *want,
+                "{why}, the other way round: {b} vs {a}"
+            );
         }
     }
 

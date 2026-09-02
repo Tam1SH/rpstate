@@ -26,9 +26,7 @@ fn test_arena_field() {
     let username_handle = arena.register_field(state.username());
     assert_eq!(arena.get_field(username_handle), "Alice");
 
-    arena
-        .set_field(username_handle, "Bob".to_string())
-        .unwrap();
+    arena.set_field(username_handle, "Bob".to_string()).unwrap();
     assert_eq!(arena.get_field(username_handle), "Bob");
 
     let last_val = Arc::new(Mutex::new(String::new()));

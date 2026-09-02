@@ -70,9 +70,7 @@ impl Arena {
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
     {
-        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| {
-            field.set(value)
-        })
+        self.with_item::<Field<T>, _, _>(handle.key, "Field", |field| field.set(value))
     }
 
     pub fn subscribe_external_field<T, F>(
@@ -89,11 +87,7 @@ impl Arena {
         })
     }
 
-    pub fn subscribe_field<T, F>(
-        &self,
-        handle: FieldHandle<T>,
-        callback: F,
-    ) -> SignalSubscription
+    pub fn subscribe_field<T, F>(&self, handle: FieldHandle<T>, callback: F) -> SignalSubscription
     where
         T: DeserializeOwned + Serialize + Clone + Send + Sync + 'static,
         F: for<'a> Fn(&'a T) + Send + Sync + 'static,
@@ -112,11 +106,7 @@ impl Arena {
         }
     }
 
-    pub fn get_map_entry<K, V>(
-        &self,
-        handle: MapHandle<K, V>,
-        key: &K,
-    ) -> Option<V>
+    pub fn get_map_entry<K, V>(&self, handle: MapHandle<K, V>, key: &K) -> Option<V>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
@@ -204,10 +194,7 @@ impl Arena {
         })
     }
 
-    pub fn get_map_entries<K, V>(
-        &self,
-        handle: MapHandle<K, V>,
-    ) -> Vec<(K, V)>
+    pub fn get_map_entries<K, V>(&self, handle: MapHandle<K, V>) -> Vec<(K, V)>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
@@ -226,9 +213,7 @@ impl Arena {
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.remove(key)
-        })
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| map.remove(key))
     }
 
     pub fn clear_map<K, V>(&self, handle: MapHandle<K, V>) -> ReactiveMapResult<()>
@@ -236,9 +221,7 @@ impl Arena {
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| {
-            map.clear()
-        })
+        self.with_item::<ReactiveMap<K, V>, _, _>(handle.key, "ReactiveMap", |map| map.clear())
     }
 }
 

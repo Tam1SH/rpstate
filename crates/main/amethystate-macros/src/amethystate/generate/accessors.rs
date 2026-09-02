@@ -148,22 +148,25 @@ pub(crate) fn scope(
 /// the holder declared, and nothing inside the nested struct can be told apart
 /// by it.
 pub(crate) fn refused_marker(entries: &[StoreFieldEntry]) -> TokenStream2 {
-    let marks = entries.iter().filter(|e| e.get_map_types().is_none()).map(|e| {
-        let fname = e.ident.as_ref().unwrap();
-        let named = e.stored_name();
+    let marks = entries
+        .iter()
+        .filter(|e| e.get_map_types().is_none())
+        .map(|e| {
+            let fname = e.ident.as_ref().unwrap();
+            let named = e.stored_name();
 
-        let mark = if e.nested {
-            quote! { self.#fname.__ame_refused(::core::option::Option::None, why); }
-        } else {
-            quote! { self.#fname.__ame_refused(why); }
-        };
+            let mark = if e.nested {
+                quote! { self.#fname.__ame_refused(::core::option::Option::None, why); }
+            } else {
+                quote! { self.#fname.__ame_refused(why); }
+            };
 
-        quote! {
-            if fields.is_none_or(|named| named.contains(&#named)) {
-                #mark
+            quote! {
+                if fields.is_none_or(|named| named.contains(&#named)) {
+                    #mark
+                }
             }
-        }
-    });
+        });
 
     quote! {
         #[doc(hidden)]

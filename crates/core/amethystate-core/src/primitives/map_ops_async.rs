@@ -1,9 +1,9 @@
 use crate::AmeBackendAsync as AmeBackend;
+use crate::facts::{Facts, Prefix};
 use crate::path::StorePath;
 use crate::primitives::error::WriteError;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
-use crate::facts::{Facts, Prefix};
 use crate::{MapChange, ReactiveMapCore, map_apply_remote_change};
 use error_stack::{Report, ResultExt};
 use uuid::Uuid;
@@ -96,10 +96,8 @@ where
     let old_value = match read_entry::<B, V>(backend, &full_path).await? {
         Some(old_value) => old_value,
         None => {
-            return Err(
-                Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                    .attach(Prefix(path.clone())),
-            );
+            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(Prefix(path.clone())));
         }
     };
 

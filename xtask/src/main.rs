@@ -676,7 +676,6 @@ fn book() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-
 /// What each type in the workspace has on it, read out of the syntax rather
 /// than looked for in the text.
 ///

@@ -50,8 +50,7 @@ async fn test_use_field_requirements() {
     let arena = DefaultArena::new();
 
     let field =
-        amethystate::store::field_with_path(&store, ["field_1"], 10, uuid::Uuid::new_v4())
-            .unwrap();
+        amethystate::store::field_with_path(&store, ["field_1"], 10, uuid::Uuid::new_v4()).unwrap();
     let handle = arena.register_field(field);
 
     let probe = Probe::new();
@@ -195,13 +194,8 @@ async fn test_real_component_lifecycle() {
 
     let store = unique_store("comp");
     let arena = DefaultArena::new();
-    let field = amethystate::store::field_with_path(
-        &store,
-        ["field_1"],
-        10,
-        uuid::Uuid::new_v4(),
-    )
-    .unwrap();
+    let field =
+        amethystate::store::field_with_path(&store, ["field_1"], 10, uuid::Uuid::new_v4()).unwrap();
     let handle = arena.register_field(field);
 
     let probe = Probe::new();

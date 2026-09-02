@@ -77,13 +77,8 @@ async fn test_use_field_requirements() {
     let store = unique_store("field");
     let arena = DefaultArena::new();
 
-    let field = amethystate::store::field_with_path(
-        &store,
-        ["field_1"],
-        10,
-        uuid::Uuid::new_v4(),
-    )
-    .unwrap();
+    let field =
+        amethystate::store::field_with_path(&store, ["field_1"], 10, uuid::Uuid::new_v4()).unwrap();
     let handle = arena.register_field(field);
 
     let probe = Probe::new();
@@ -478,13 +473,9 @@ async fn test_all_primitives_simultaneous_lifecycle() {
     let store = unique_store("all_primitives");
     let arena = DefaultArena::new();
 
-    let field = amethystate::store::field_with_path(
-        &store,
-        ["field_all"],
-        10,
-        uuid::Uuid::new_v4(),
-    )
-    .unwrap();
+    let field =
+        amethystate::store::field_with_path(&store, ["field_all"], 10, uuid::Uuid::new_v4())
+            .unwrap();
     let field_handle = arena.register_field(field);
 
     let map = amethystate::store::reactive_map_with_path::<DummyScope, String, String>(

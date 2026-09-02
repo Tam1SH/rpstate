@@ -157,10 +157,7 @@ where
     use_hook(move || {
         let arena_sub_sub = arena_sub.clone();
         let sub = arena_sub.subscribe_map_any(handle, move |_| {
-            let entries = arena_sub_sub
-                .get_map_entries(handle)
-                .into_iter()
-                .collect();
+            let entries = arena_sub_sub.get_map_entries(handle).into_iter().collect();
             let _ = tx.send(entries);
         });
         Arc::new(sub)

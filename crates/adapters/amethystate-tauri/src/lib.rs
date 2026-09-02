@@ -49,17 +49,16 @@ impl AmeBackendAsync for TauriBackend {
 
         const COMMAND: &str = "plugin:amethystate|amethystate_get";
 
-        let raw = core::invoke_result::<Option<serde_json::Value>, String>(COMMAND, &GetArgs {
-            key: path.as_str(),
-        })
+        let raw = core::invoke_result::<Option<serde_json::Value>, String>(
+            COMMAND,
+            &GetArgs { key: path.as_str() },
+        )
         .await
         .map_err(|e| commanded(e, COMMAND, path))?;
 
         raw.map(serde_json::from_value)
             .transpose()
-            .map_err(|e| {
-                Report::new(Error::Serde(e.to_string())).attach(format!("path: {path}"))
-            })
+            .map_err(|e| Report::new(Error::Serde(e.to_string())).attach(format!("path: {path}")))
     }
 
     async fn set<T>(&self, path: &StorePath, value: &T) -> Result<(), Report<Self::Error>>
@@ -87,11 +86,14 @@ impl AmeBackendAsync for TauriBackend {
         let value = serde_json::to_value(value).map_err(|e| {
             Report::new(Error::Serde(e.to_string())).attach(format!("path: {path}"))
         })?;
-        core::invoke_result::<(), String>(COMMAND, &SetArgs {
-            key: path.as_str(),
-            value,
-            source,
-        })
+        core::invoke_result::<(), String>(
+            COMMAND,
+            &SetArgs {
+                key: path.as_str(),
+                value,
+                source,
+            },
+        )
         .await
         .map_err(|e| commanded(e, COMMAND, path))
     }
@@ -122,10 +124,13 @@ impl AmeBackendAsync for TauriBackend {
 
         const COMMAND: &str = "plugin:amethystate|amethystate_delete";
 
-        core::invoke_result::<(), String>(COMMAND, &DeleteArgs {
-            key: path.as_str(),
-            source,
-        })
+        core::invoke_result::<(), String>(
+            COMMAND,
+            &DeleteArgs {
+                key: path.as_str(),
+                source,
+            },
+        )
         .await
         .map_err(|e| commanded(e, COMMAND, path))
     }
@@ -143,18 +148,18 @@ impl AmeBackendAsync for TauriBackend {
 
         const COMMAND: &str = "plugin:amethystate|amethystate_delete_prefix";
 
-        core::invoke_result::<(), String>(COMMAND, &DeletePrefixArgs {
-            prefix: prefix.as_str(),
-            source,
-        })
+        core::invoke_result::<(), String>(
+            COMMAND,
+            &DeletePrefixArgs {
+                prefix: prefix.as_str(),
+                source,
+            },
+        )
         .await
         .map_err(|e| commanded(e, COMMAND, prefix))
     }
 
-    async fn scan_keys(
-        &self,
-        prefix: &StorePath,
-    ) -> Result<Vec<StorePath>, Report<Self::Error>> {
+    async fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<StorePath>, Report<Self::Error>> {
         #[derive(Serialize)]
         struct PrefixArgs<'a> {
             prefix: &'a str,
@@ -162,9 +167,12 @@ impl AmeBackendAsync for TauriBackend {
 
         const COMMAND: &str = "plugin:amethystate|amethystate_scan_keys";
 
-        let keys: Vec<String> = core::invoke_result::<_, String>(COMMAND, &PrefixArgs {
-            prefix: prefix.as_str(),
-        })
+        let keys: Vec<String> = core::invoke_result::<_, String>(
+            COMMAND,
+            &PrefixArgs {
+                prefix: prefix.as_str(),
+            },
+        )
         .await
         .map_err(|e| commanded(e, COMMAND, prefix))?;
 
@@ -191,9 +199,12 @@ impl AmeBackendAsync for TauriBackend {
         const COMMAND: &str = "plugin:amethystate|amethystate_get_prefix";
 
         let raw: std::collections::HashMap<String, serde_json::Value> =
-            core::invoke_result::<_, String>(COMMAND, &PrefixArgs {
-                prefix: prefix.as_str(),
-            })
+            core::invoke_result::<_, String>(
+                COMMAND,
+                &PrefixArgs {
+                    prefix: prefix.as_str(),
+                },
+            )
             .await
             .map_err(|e| commanded(e, COMMAND, prefix))?;
 
@@ -213,8 +224,7 @@ impl AmeBackendAsync for TauriBackend {
     where
         T: DeserializeOwned + Default,
     {
-        serde_json::from_value(raw.clone())
-            .map_err(|e| Report::new(Error::Serde(e.to_string())))
+        serde_json::from_value(raw.clone()).map_err(|e| Report::new(Error::Serde(e.to_string())))
     }
 }
 

@@ -115,8 +115,7 @@ pub trait AmeBackendAsync {
         prefix: &StorePath,
     ) -> Result<Vec<(StorePath, Self::Raw)>, Report<Self::Error>>;
 
-    async fn scan_keys(&self, prefix: &StorePath)
-    -> Result<Vec<StorePath>, Report<Self::Error>>;
+    async fn scan_keys(&self, prefix: &StorePath) -> Result<Vec<StorePath>, Report<Self::Error>>;
 
     fn decode<T>(&self, raw: &Self::Raw) -> Result<T, Report<Self::Error>>
     where

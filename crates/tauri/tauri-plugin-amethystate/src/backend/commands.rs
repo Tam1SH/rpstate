@@ -182,7 +182,7 @@ pub async fn amethystate_scan_keys(
     prefix: String,
 ) -> Result<Vec<String>, String> {
     let prefix = StorePath::parse_joined(&prefix).map_err(|e| e.to_string())?;
-    let keys = amethystate::StoreBackend::scan_keys(&store.store, &prefix)
-        .map_err(|e| e.to_string())?;
+    let keys =
+        amethystate::StoreBackend::scan_keys(&store.store, &prefix).map_err(|e| e.to_string())?;
     Ok(keys.iter().map(|k| k.as_str().to_string()).collect())
 }

@@ -1,10 +1,10 @@
 use crate::AmeBackendSync;
+use crate::facts::{Facts, Prefix};
 use crate::path::StorePath;
 use crate::primitives::error::WriteError;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
 use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore};
-use crate::facts::{Facts, Prefix};
 use error_stack::{Report, ResultExt};
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -28,10 +28,8 @@ where
     let old_value = match read_entry::<B, V>(backend, &full_path)? {
         Some(old_value) => old_value,
         None => {
-            return Err(
-                Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                    .attach(Prefix(path.clone())),
-            );
+            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
+                .attach(Prefix(path.clone())));
         }
     };
 

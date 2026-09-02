@@ -39,8 +39,13 @@ pub fn segment() -> impl Strategy<Value = String> {
 /// A name that holds the separator, with the two halves it was built from, for
 /// the tests that have to address both it and the two levels it looks like.
 pub fn name_holding_the_separator() -> impl Strategy<Value = (String, String, String)> {
-    (segment(), segment())
-        .prop_map(|(left, right)| (left.clone(), right.clone(), format!("{left}{SEPARATOR}{right}")))
+    (segment(), segment()).prop_map(|(left, right)| {
+        (
+            left.clone(),
+            right.clone(),
+            format!("{left}{SEPARATOR}{right}"),
+        )
+    })
 }
 
 /// A whole stored key rather than one level: what a flat engine hands back,

@@ -194,7 +194,10 @@ mod tests {
     fn two_facts_of_different_types_do_not_collide() {
         let key = StorePath::from_segments(["ui", "theme"]);
         let prefix = StorePath::segment("ui");
-        let report = failing().attach_key(&key).attach_prefix(&prefix).unwrap_err();
+        let report = failing()
+            .attach_key(&key)
+            .attach_prefix(&prefix)
+            .unwrap_err();
 
         assert_eq!(all::<Key, _>(&report).count(), 1);
         assert_eq!(all::<Prefix, _>(&report).count(), 1);
