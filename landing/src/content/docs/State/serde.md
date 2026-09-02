@@ -96,6 +96,32 @@ pub port: u16,
 
 says what serde needs a `fn default_port() -> u16 { 8080 }` to say.
 
+Written on the struct rather than the field, `#[serde(default)]` is refused. It
+fills in what one encoded value left out, from one `Default` for the whole
+struct — and here there is no encoded value to leave anything out of. Each field
+is present or absent on its own, so the default belongs on each of them.
+
+### A field stored some other way
+
+`serialize_with`, `deserialize_with` and `with` are serde's answer to a type
+whose own encoding is not the one you want on disk. Serde runs them from inside
+the struct holding the field, and this struct is never encoded — so the same
+thing is said to this macro instead, taking the same functions:
+
+```rust
+#[amestate(with = since_the_epoch)]
+pub opened: SystemTime,
+```
+
+`with = m` is `m::serialize` and `m::deserialize`, and either half can be named
+alone as `serialize_with` or `deserialize_with`. Write one half and the other
+stays the type's own — which is how a value gets written one way and read back
+another, so it is worth writing both unless you mean exactly that.
+
+The pair is the only thing between the value and the path: what lands there is
+what the write half produced, and nothing else reads it back. So the type never
+needs an encoding of its own, and a type from another crate can be a leaf.
+
 ### What is refused
 
 Each of these is a compile error where it is written, in a sentence saying what
@@ -113,7 +139,9 @@ to write instead.
 | `alias` | names a second spelling to read, and a path is looked for under one name. A `#[migrate]` step with `#[rename(old => new)]` moves the data once at the open and is done |
 | `getter` | reads through a function, which serde does for a type it does not own |
 | `borrow` | borrows from the input, and a value comes back from the engine owned, one path at a time |
-| `serialize_with`, `deserialize_with`, `with` | make one field encode differently from how its own type encodes, and a path holds one value with nothing beside it to say which of the two is there. A second form of a type is a second type: a newtype whose own `Serialize` does it — which is also how a type from another crate gets one |
+| `serialize_with`, `deserialize_with`, `with` | are run by serde from inside the struct holding the field, and this one is never encoded. Say the same to this macro: `#[amestate(with = ..)]`, or one half of it, taking the same functions |
+| `default` on the struct | fills in what one encoded value left out, and there is none. Each field is absent on its own, so the default goes on the field |
+| `crate` | tells the derive where serde itself lives; no serde impl is written for this struct |
 
 The attributes are read with serde's own parser, so what serde itself calls a
 contradiction comes back in serde's words.
