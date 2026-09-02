@@ -451,12 +451,71 @@ function fbm(x, y, seed, oct = 4, scale = 900) {
   return sum / norm;
 }
 
+function hash2(i, j, seed) {
+  let n = (i * 374761393 + j * 668265263 + seed * 1442695040888963407) | 0;
+  n = (n ^ (n >> 13)) * 1274126177;
+  return (n ^ (n >> 16)) >>> 0;
+}
+
+/**
+ * Cellular noise, and the three things a broken surface asks of it: how far a point
+ * lies into its block, how close it is to the seam with the next, and which block it
+ * is in. A sum of octaves can answer none of the last two — it has no blocks and no
+ * seams, which is why smooth noise reads as cloth however it is folded.
+ */
+function cells(x, y, seed, scale) {
+  const fx = x / scale, fy = y / scale;
+  const ix = Math.floor(fx), iy = Math.floor(fy);
+  let f1 = 1e9, f2 = 1e9, own = 0;
+  for (let j = -1; j <= 1; j++)
+    for (let i = -1; i <= 1; i++) {
+      const gx = ix + i, gy = iy + j;
+      const h = hash2(gx, gy, seed);
+      const dx = gx + (h & 1023) / 1024 - fx;
+      const dy = gy + ((h >>> 10) & 1023) / 1024 - fy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < f1) { f2 = f1; f1 = d; own = ((h >>> 20) & 4095) / 4095; }
+      else if (d < f2) { f2 = d; }
+    }
+  return [f1, f2, own];
+}
+
+/**
+ * Folded noise. A sum of octaves settles into round hills because every octave is
+ * smooth through its own zero; folding at the zero puts a crease there instead, and
+ * weighting each octave by the one above carves the creases into ridges and gullies
+ * that run, rather than blobs that sit.
+ */
+function ridged(x, y, seed, oct = 4, scale = 900) {
+  let a = 1, f = 1 / scale, sum = 0, norm = 0, prev = 1;
+  for (let o = 0; o < oct; o++) {
+    const n = 1 - Math.abs(2 * noise2(x * f, y * f, seed + o * 131) - 1);
+    sum += a * n * n * prev;
+    norm += a;
+    prev = n;
+    a *= 0.52; f *= 2.13;
+  }
+  return sum / norm;
+}
+
 /** Matrix rock the outcrops grow out of. `sockets` are outcrop contours in page coordinates. */
 export function prepareMatrix(W, H, sockets, opts = {}) {
-  const { seed = 3, step = 300, lo = 4.5, hi = 19, hue = 264, relief = 52,
-          swell = 45, dome = 70, sizeVar = 0.62,
-          stoneShare = 0.35, stoneSize = 26, stoneRise = 0.9,
-          clusterSize = 90, clusterCount = 5, clusterSpread = 2.4,
+  const { seed = 3, step: step0 = 300, lo = 4.5, hi = 19, hue = 264, relief: relief0 = 52,
+          swell: swell0 = 45, dome: dome0 = 70, sizeVar = 0.62, rockRidge = 0.55,
+          rockFracture = 0.7, fractureSize: fractureSize0 = 260, rockRim = 0.5,
+          // Every length below is in page pixels, and the page has no fixed size.
+          // Left alone, a wider window does not show a bigger stone in more rock — it
+          // shows more of the same small one, until the nests tile it like wallpaper
+          // and the triangle count climbs with the area. Measured against a reference
+          // window, the picture keeps its proportions and its cost. Never below one:
+          // a small window should not be given a coarser world, only a smaller view
+          // of the same one.
+          sceneRef = 1920 * 1080,
+          stoneShare = 0.35, stoneSize: stoneSize0 = 26, stoneRise = 0.9, stoneCrown = 0.42,
+          intergrow = 0, stoneLean = 0, stoneSink = 0.08,
+          nestCrust = false, crustHeight = 0.45, crustSpread = 0.5, crustFacet = 0.3,
+          crustBudget = 500,
+          clusterSize: clusterSize0 = 90, clusterCount = 5, clusterSpread = 2.4,
           // How much of the rock itself is crystalline, beyond the chips: 0 leaves
           // it stone, 1 turns the whole field to crystal.
           crystalField = 0,
@@ -466,6 +525,17 @@ export function prepareMatrix(W, H, sockets, opts = {}) {
           keepOut = sockets } = opts;
   const r = rng(seed);
   const pts = [];
+
+  const scene = Math.max(1, Math.sqrt((W * H) / Math.max(1, sceneRef)));
+  const step = step0 * scene;
+  const relief = relief0 * scene;
+  const dome = dome0 * scene;
+  const fractureSize = fractureSize0 * scene;
+  const stoneSize = stoneSize0 * scene;
+  const clusterSize = clusterSize0 * scene;
+  // Kept out of the mesh and re-added by the renderer each frame, so whoever moves it
+  // there has to apply the same factor or the two drift apart.
+  const swell = swell0 * scene;
 
   // Candidates are laid finer than the grain wants and thinned by a spacing that
   // follows the density field. Dropping one to three points into each cell of a
@@ -505,37 +575,269 @@ export function prepareMatrix(W, H, sockets, opts = {}) {
   pts.length = kept.length;
   for (let i = 0; i < kept.length; i++) pts[i] = kept[i];
 
-  // Stones are grown out of the matrix itself rather than laid on top of it: their
-  // ring and apex join this same triangulation, so there is one continuous surface.
-  // They are seeded after spaceOut, which would otherwise cull a ring finer than
-  // the rock's own grain.
-  const stoneOf = new Array(pts.length).fill(-1);
+  // The rock is triangulated on its own points and nothing else. A stone seeded into
+  // this set drags the grain around it into slivers reaching for its ring, which is
+  // the tessellation the rock gets judged by.
+  const socket = [];
+  const ground = (x, y) => {
+    // The heave around the outcrop is kept as a weight as well as baked in, so a
+    // renderer that can move it per frame has the shape to move. Read first: how
+    // near the outcrop a point is decides how broken it gets.
+    let w = 0;
+    for (const poly of sockets)
+      w = Math.max(w, smooth(clamp(1 - Math.max(polyDist(x, y, poly), 0) / 260, 0, 1)));
+
+    let z = relief * (fbm(x, y, seed, 5, 1100) - 0.5)
+          + relief * 0.45 * (fbm(x, y, seed + 91, 3, 320) - 0.5);
+    // An octave the width of one facet. Without it a finer grain only interpolates
+    // the same two long waves more times: more polygons, and a smoother surface for
+    // it, because neighbouring faces end up holding the same normal.
+    z += relief * 0.30 * (fbm(x, y, seed + 217, 2, Math.max(70, step * 0.85)) - 0.5);
+
+    // Wall, not landscape. Blocks each sitting at their own level, parted by the
+    // seams they broke along, and more broken the nearer they are to what came
+    // through. Two sizes, because a block that broke is not one clean slab either.
+    if (rockFracture > 0) {
+      const near = rockFracture * (1 + 1.6 * w);
+      const [f1, f2, own] = cells(x, y, seed + 811, fractureSize);
+      z += relief * near * (own - 0.5) * 1.15;
+      z -= relief * near * 0.85 * Math.exp(-Math.pow((f2 - f1) / 0.11, 2));
+      const [g1, g2, gown] = cells(x, y, seed + 1213, fractureSize * 0.34);
+      z += relief * near * 0.40 * (gown - 0.5);
+      z -= relief * near * 0.28 * Math.exp(-Math.pow((g2 - g1) / 0.16, 2));
+    }
+    // The lip of the socket: rock heaved and split along the line the body came out
+    // of, rather than a rim smoothly swelling out of nowhere.
+    if (rockRim > 0)
+      z += relief * rockRim * Math.exp(-Math.pow((w - 0.5) / 0.19, 2))
+         * (0.7 + 1.1 * (cells(x, y, seed + 1601, fractureSize * 0.55)[2] - 0.5));
+
+    if (rockRidge > 0)
+      z += relief * rockRidge *
+           ((ridged(x, y, seed + 401, 4, 640) - 0.42) * 1.5
+          + (ridged(x, y, seed + 733, 3, Math.max(90, step * 1.6)) - 0.42) * 0.8);
+
+    // A spherical cap over the page: the ground reads as a body bulging towards
+    // the viewer rather than as a hollow seen into.
+    const dx = (x - W/2) / (W/2 || 1), dy = (y - H/2) / (H/2 || 1);
+    z += dome * Math.sqrt(Math.max(0, 1 - Math.min(1, dx*dx + dy*dy)));
+    return [z + swell * w, w];
+  };
+
+  const Z = pts.map(([x, y], i) => {
+    const [z, w] = ground(x, y);
+    socket[i] = w;
+    return z;
+  });
+
+  const del = new Delaunator(Float64Array.from(pts.flat()));
+  const faces = [];
+  for (let i = 0; i < del.triangles.length; i += 3)
+    faces.push([del.triangles[i], del.triangles[i + 1], del.triangles[i + 2],
+                crystalField > 0 && ((i * 2654435761) >>> 0) / 4294967296 < crystalField]);
+
+  // Stones are bodies standing on that rock, wired by hand: a ring in the ground, a
+  // crown short of the point, and the point. Their faces are known to be stone as
+  // they are made, which is also the end of guessing it back from which vertices a
+  // triangle happens to touch.
   const stoneApex = new Array(pts.length).fill(0);
   const stones = [];
+  const nest = [];
   if (stoneShare > 0 && stoneSize > 0) {
     const seedStone = (cx, cy) => {
       if (cx < 0 || cy < 0 || cx > W || cy > H) return;
       // Not under the thick body: a stone seeded there sits inside it and reads
       // as a blot rather than as something lying in the ground.
       if (keepOut.some(poly => polyDist(cx, cy, poly) < stoneSize * 0.9)) return;
-      // Nor on top of one already placed: overlapping rings fuse into chains.
+      // Crystals in a druse grow into one another: they share ground, they
+      // interpenetrate, and the taller ones take the light off the rest. Stones used
+      // to be kept apart because rings overlapping inside one shared triangulation
+      // fused into chains — they carry their own meshes now, and what crosses is
+      // sorted by depth like any other pair of solids.
+      const crowd = 0.85 * (1 - 0.92 * clamp(intergrow, 0, 1));
       for (const st of stones)
-        if (Math.hypot(cx - st.cx, cy - st.cy) < (stoneSize + st.rad) * 0.85) return;
+        if (Math.hypot(cx - st.cx, cy - st.cy) < (stoneSize + st.rad) * crowd) return;
 
       const rad = stoneSize * rand(r, 0.6, 1.35);
-      const n = 4 + Math.floor(r() * 4);
+      // Quartz grows a six-sided prism closed by two rhombohedra, so the head is six
+      // triangles in alternating sizes rather than a ring of equal ones. That
+      // alternation is what the eye reads as quartz and not as a spike.
+      const n = 6;
       const phase = r() * Math.PI * 2;
-      const id = stones.length;
-      stones.push({ cx, cy, rad });
+      const rise = rad * stoneRise * rand(r, 0.7, 1.4);
+      const [base, w] = ground(cx, cy);
+      const me = { cx, cy, rad, rise, base, w };
+      stones.push(me);
+      nest.push(me);
+
+      // A druse does not grow straight up. Crystals start on the wall of a cavity
+      // and lean off it, and a crowd of them points every way at once. Standing
+      // them all on one axis is what makes intergrowth read as nested cones rather
+      // than as a nest.
+      const dir = r() * Math.PI * 2;
+      const tilt = rise * stoneLean * Math.sqrt(r());
+      const lx = Math.cos(dir) * tilt, ly = Math.sin(dir) * tilt;
+
+      const vert = (x, y, lift) => {
+        pts.push([x, y]);
+        Z.push(base + lift);
+        stoneApex.push(Math.max(0, lift));
+        socket.push(w);
+        return pts.length - 1;
+      };
+
+      // The ring sits under the surface, and how far under is the difference between
+      // a crystal and a pebble laid on the ground. Two that grew into each other meet
+      // along a line running down their sides; buried, that line is buried with it and
+      // only the heads stand out — which is a sprout. Left at the surface, the line is
+      // in full view and reads as one mesh sitting inside another.
+      const ring = [], crown = [];
       for (let i = 0; i < n; i++) {
         const a = phase + (i / n) * Math.PI * 2;
-        const rr = rad * rand(r, 0.72, 1.18);
-        pts.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
-        stoneOf.push(id); stoneApex.push(0);
+        const rr = rad * rand(r, 0.94, 1.07);
+        ring.push(vert(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, -rise * stoneSink));
       }
-      pts.push([cx + rand(r, -rad * 0.18, rad * 0.18),
-                cy + rand(r, -rad * 0.18, rad * 0.18)]);
-      stoneOf.push(id); stoneApex.push(rad * stoneRise * rand(r, 0.7, 1.4));
+      // A shoulder short of the point. Ring straight to apex is a fan of faces that
+      // all lean the same way — a cone, taking light as one surface. The break puts
+      // a small crown on top standing at an angle the sides do not have.
+      const cr = clamp(stoneCrown, 0.06, 0.9);
+      for (let i = 0; i < n; i++) {
+        const a = phase + (i / n) * Math.PI * 2;
+        const alt = i % 2 ? 0.64 : 1;
+        const rr = rad * cr * alt * rand(r, 0.94, 1.07);
+        const lift = i % 2 ? 0.72 : 0.56;
+        crown.push(vert(cx + Math.cos(a) * rr + lx * lift,
+                        cy + Math.sin(a) * rr + ly * lift, rise * lift));
+      }
+      // A termination meets on the axis.
+      const tip = vert(cx + lx, cy + ly, rise);
+
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        faces.push([ring[i], ring[j], crown[j], true]);
+        faces.push([ring[i], crown[j], crown[i], true]);
+        faces.push([crown[i], crown[j], tip, true]);
+      }
+    };
+
+    /**
+     * One crust under a whole nest. Not a stone joined to a stone: a single height
+     * field taking the highest cap at every point, triangulated once. Between two
+     * crystals there is then no boundary to draw, because there are not two surfaces
+     * — the pad runs from one into the other and buries the feet, the rings and every
+     * line where the bodies cross, and what stands above it is heads.
+     */
+    const emitCrust = () => {
+      if (nest.length < 2) return;
+      // Scattered and triangulated on its own points, not drawn as a fan from the
+      // middle: a fan gives petals, and a smooth dome over the nest gives a pillow
+      // facing straight into the light. The crust of a druse is itself crystal, so
+      // it wants faces — the height carries a jitter of its own, and each triangle
+      // takes its own angle.
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const s of nest) {
+        const rr = s.rad * (1.1 + 1.3 * crustSpread);
+        x0 = Math.min(x0, s.cx - rr); x1 = Math.max(x1, s.cx + rr);
+        y0 = Math.min(y0, s.cy - rr); y1 = Math.max(y1, s.cy + rr);
+      }
+      // A facet the size of the crystals is the right look, and on a wide nest it is
+      // also thousands of triangles that go on being drawn every frame. The step is
+      // whichever is coarser: that size, or what fits the budget over this nest's own
+      // area — so a nest costs about the same whether it is small or spread out.
+      const grid = Math.max(3, stoneSize * 0.38,
+                            Math.sqrt((x1 - x0) * (y1 - y0) / crustBudget));
+      // Squared radii, kept beside the nest rather than recomputed per sample. This
+      // runs over the whole bounding box of every nest on the page, and the two
+      // square roots per stone per point were most of what it cost.
+      const reach2 = new Float64Array(nest.length);
+      const edge2 = new Float64Array(nest.length);
+      const cap = new Float64Array(nest.length);
+      for (let i = 0; i < nest.length; i++) {
+        const s = nest[i];
+        const rr = s.rad * (1.1 + 1.3 * crustSpread);
+        reach2[i] = rr * rr;
+        edge2[i] = (rr + grid * 1.2) * (rr + grid * 1.2);
+        cap[i] = s.rise * crustHeight;
+      }
+
+      // How far the crust stands above the rock here, and whether the point is close
+      // enough to a cap to be worth keeping at all. Zero lift outside every cap, so
+      // the pad rides the relief it lies on instead of flattening it. One ring of
+      // flat points beyond them gives it an edge to sit on.
+      let near = false;
+      const liftAt = (x, y) => {
+        let lift = 0;
+        near = false;
+        for (let i = 0; i < nest.length; i++) {
+          const dx = x - nest[i].cx, dy = y - nest[i].cy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= edge2[i]) continue;
+          near = true;
+          if (d2 >= reach2[i]) continue;
+          const h = cap[i] * (1 - d2 / reach2[i]);
+          if (h > lift) lift = h;
+        }
+        return lift;
+      };
+
+      // The rock under a nest, read on a lattice three steps wide and interpolated
+      // between. Asking ground() per sample means five octaves of fBm, three walks
+      // of the cellular field, two folded ones and a distance to the plateau contour
+      // — for every point of every crust on the page, which is where the whole cost
+      // of this was. The rock has no feature that fine to lose.
+      const gx0 = x0 - grid * 2, gy0 = y0 - grid * 2;
+      const gstep = grid * 3;
+      const gcols = Math.ceil((x1 - x0 + grid * 4) / gstep) + 2;
+      const grows = Math.ceil((y1 - y0 + grid * 4) / gstep) + 2;
+      const gz = new Float64Array(gcols * grows);
+      const gwt = new Float64Array(gcols * grows);
+      for (let j = 0; j < grows; j++)
+        for (let i = 0; i < gcols; i++) {
+          const [z, w] = ground(gx0 + i * gstep, gy0 + j * gstep);
+          gz[j * gcols + i] = z;
+          gwt[j * gcols + i] = w;
+        }
+      const groundAt = (x, y) => {
+        const u = (x - gx0) / gstep, v = (y - gy0) / gstep;
+        const i = Math.max(0, Math.min(gcols - 2, Math.floor(u)));
+        const j = Math.max(0, Math.min(grows - 2, Math.floor(v)));
+        const fu = u - i, fv = v - j;
+        const k = j * gcols + i;
+        const lerp = a =>
+          (a[k] * (1 - fu) + a[k + 1] * fu) * (1 - fv)
+        + (a[k + gcols] * (1 - fu) + a[k + gcols + 1] * fu) * fv;
+        return [lerp(gz), lerp(gwt)];
+      };
+
+      const local = [], idx = [], lifts = [];
+      for (let y = y0 - grid; y <= y1 + grid; y += grid)
+        for (let x = x0 - grid; x <= x1 + grid; x += grid) {
+          const px = x + rand(r, -grid * 0.42, grid * 0.42);
+          const py = y + rand(r, -grid * 0.42, grid * 0.42);
+          const lift = liftAt(px, py);
+          if (!near) continue;
+          const [gz0, gw] = groundAt(px, py);
+          const rough = lift > 0 ? rand(r, -1, 1) * grid * crustFacet : 0;
+          local.push([px, py]);
+          lifts.push(lift);
+          pts.push([px, py]);
+          Z.push(gz0 + lift + rough);
+          socket.push(gw);
+          stoneApex.push(Math.max(0, lift + rough));
+          idx.push(pts.length - 1);
+        }
+      if (local.length < 3) return;
+
+      const dl = new Delaunator(Float64Array.from(local.flat()));
+      for (let i = 0; i < dl.triangles.length; i += 3) {
+        const [a, b, c] = [dl.triangles[i], dl.triangles[i + 1], dl.triangles[i + 2]];
+        // Only where the crust actually stands: the scatter reaches past the caps to
+        // give the pad an edge, and triangulating that margin would tile the whole
+        // bounding box in crystal. Read off the lift already computed for each point,
+        // which is the same answer as asking the field again at the centre.
+        if (lifts[a] <= 0 && lifts[b] <= 0 && lifts[c] <= 0) continue;
+        faces.push([idx[a], idx[b], idx[c], true]);
+      }
     };
 
     // Crystal grows in pockets, not evenly over a field. Cluster centres are seeded
@@ -548,36 +850,28 @@ export function prepareMatrix(W, H, sockets, opts = {}) {
         const cx = (gx + rand(r, 0.15, 0.85)) * cell;
         const cy = (gy + rand(r, 0.15, 0.85)) * cell;
         const count = 1 + Math.floor(r() * Math.max(1, clusterCount));
+        nest.length = 0;
         for (let k = 0; k < count; k++) {
           const a = r() * Math.PI * 2;
           const d = clusterSize * Math.sqrt(r());
           seedStone(cx + Math.cos(a) * d, cy + Math.sin(a) * d);
         }
+        if (nestCrust) emitCrust();
       }
   }
 
-  const socket = new Float64Array(pts.length);
-  const Z = pts.map(([x, y], i) => {
-    let z = relief * (fbm(x, y, seed, 5, 1100) - 0.5)
-          + relief * 0.45 * (fbm(x, y, seed + 91, 3, 320) - 0.5);
-    // A spherical cap over the page: the ground reads as a body bulging towards
-    // the viewer rather than as a hollow seen into.
-    const dx = (x - W/2) / (W/2 || 1), dy = (y - H/2) / (H/2 || 1);
-    z += dome * Math.sqrt(Math.max(0, 1 - Math.min(1, dx*dx + dy*dy)));
-    // The heave around the outcrop is kept as a weight as well as baked in, so a
-    // renderer that can move it per frame has the shape to move.
-    let w = 0;
-    for (const poly of sockets)
-      w = Math.max(w, smooth(clamp(1 - Math.max(polyDist(x, y, poly), 0) / 260, 0, 1)));
-    socket[i] = w;
-    return z + swell * w + stoneApex[i];
-  });
+  // Spread over an argument list this overflows the stack once the stones have put
+  // their own vertices in.
+  let zmin = Infinity, zmax = -Infinity;
+  for (const z of Z) { if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
+  // The tallest chip on the page: what a shader needs to turn a thickness in page
+  // units into how far up its own stone a pixel sits.
+  let apexMax = 0;
+  for (const a of stoneApex) if (a > apexMax) apexMax = a;
 
-  const zmin = Math.min(...Z), zmax = Math.max(...Z);
-  const del = new Delaunator(Float64Array.from(pts.flat()));
   const tri = [];
-  for (let i = 0; i < del.triangles.length; i += 3) {
-    const [a,b,c] = [del.triangles[i], del.triangles[i+1], del.triangles[i+2]];
+  for (let i = 0; i < faces.length; i++) {
+    const [a, b, c, isStone] = faces[i];
     const A=[pts[a][0],pts[a][1],Z[a]], B=[pts[b][0],pts[b][1],Z[b]], C=[pts[c][0],pts[c][1],Z[c]];
     let N = norm3([
       (B[1]-A[1])*(C[2]-A[2])-(B[2]-A[2])*(C[1]-A[1]),
@@ -590,24 +884,10 @@ export function prepareMatrix(W, H, sockets, opts = {}) {
     lam = lam*q + clamp(LIGHT[2], 0, 1)*(1 - q);
     const cz = (A[2]+B[2]+C[2])/3;
     const sh = clamp(0.38*((cz-zmin)/(zmax-zmin+1e-9)) + 0.62*Math.pow(lam,1.9), 0, 1);
-    // A side face of a chip has two vertices on its ring and the third out in the
-    // rock, so requiring all three leaves those faces shaded as rock: near vertical,
-    // taking no light, reading as a black hole in the stone they belong to. Two is
-    // enough — but only when the third vertex is still near that chip, or the rule
-    // swallows every long triangle that happens to touch two rings.
-    const sa = stoneOf[a], sb = stoneOf[b], sc = stoneOf[c];
-    let stone = false;
-    for (const [p, q, far] of [[sa, sb, c], [sa, sc, b], [sb, sc, a]]) {
-      if (p < 0 || p !== q) continue;
-      const st = stones[p];
-      if (Math.hypot(pts[far][0] - st.cx, pts[far][1] - st.cy) <= st.rad * 1.8) stone = true;
-    }
-    if (!stone && crystalField > 0)
-      stone = ((i * 2654435761) >>> 0) / 4294967296 < crystalField;
-    tri.push({ a, b, c, cz, sh, stone, jit: rand(r, -6, 6) });
+    tri.push({ a, b, c, cz, sh, stone: isStone, jit: rand(r, -6, 6) });
   }
   tri.sort((p, q) => p.cz - q.cz);
-  return { pts, Z, socket, swell, apex: stoneApex, tris: tri, stones,
+  return { pts, Z, socket, swell, apex: stoneApex, apexMax, tris: tri, stones,
            zmin, zmax, W, H, lo, hi, hue };
 }
 

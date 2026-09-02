@@ -309,8 +309,8 @@ export function mountControls(handle, opts = {}) {
     absorb[0] = slider('absorbR', 'absorb red', 0, 6, 0.05, absorb[0], 2, v => setAbsorb(0, v));
     absorb[1] = slider('absorbG', 'absorb green', 0, 6, 0.05, absorb[1], 2, v => setAbsorb(1, v));
     absorb[2] = slider('absorbB', 'absorb blue', 0, 6, 0.05, absorb[2], 2, v => setAbsorb(2, v));
-    slider('stoneDensity', 'stone density', 0, 4, 0.02, 1, 2);
-    slider('core', 'denser core', 0.2, 6, 0.05, 2.2, 2);
+    slider('stoneDensity', 'stone density', 0, 16, 0.02, 1, 2);
+    slider('core', 'denser core', 0.2, 24, 0.05, 2.2, 2);
     slider('ior', 'refractive index', 1, 3.2, 0.01, 1.55, 2);
     slider('dispersion', 'dispersion', 0, 4, 0.05, 1, 2);
     slider('refractScale', 'refraction offset', 0, 5, 0.01, 0.25, 2);
@@ -337,6 +337,13 @@ export function mountControls(handle, opts = {}) {
          v => handle.update({ matrix: v }));
   if (gpu) {
     slider('rockStep', 'rock grain', 40, 900, 5, 130, 0);
+    slider('rockRelief', 'relief', 0, 240, 2, 52, 0);
+    slider('rockFracture', 'broken into blocks', 0, 2, 0.05, 1, 2);
+    slider('fractureSize', 'block size', 40, 700, 10, 260, 0);
+    slider('rockRim', 'lip of the socket', 0, 5, 0.05, 1, 2);
+    slider('rockRidge', 'ridges', 0, 4, 0.05, 0.2, 2);
+    slider('rockDetail', 'surface detail', 0, 2, 0.05, 0.5, 2);
+    slider('rockDetailScale', 'detail size', 4, 120, 1, 26, 0);
     slider('rockDome', 'rock dome', -500, 500, 5, 85, 0);
     slider('rockSwell', 'swell at outcrop', -400, 400, 5, 10, 0);
     slider('breathAmp', 'swell breath', 0, 90, 1, 28, 0);
@@ -346,15 +353,33 @@ export function mountControls(handle, opts = {}) {
     slider('stoneShare', 'how many', 0, 1, 0.02, 0.35, 2);
     slider('stoneSize', 'size', 8, 140, 1, 54, 0);
     slider('stoneRise', 'rise', 0.1, 2.2, 0.05, 0.9, 2);
+    slider('stoneCrown', 'crown', 0, 0.8, 0.02, 0.42, 2);
+    slider('stoneZoning', 'pale foot, violet head', 0, 1, 0.05, 0.7, 2);
+    // One pad under the whole nest instead of a body per crystal.
+    choice('nestCrust', 'nest', [['separate', false], ['one crust', true]], false,
+           v => handle.update({ nestCrust: v }));
+    slider('crustHeight', 'how far the crust comes up', 0, 1, 0.05, 0.45, 2);
+    slider('crustSpread', 'how far it reaches out', 0, 1.5, 0.05, 0.5, 2);
+    slider('crustFacet', 'how rough the crust is', 0, 1.2, 0.05, 0.3, 2);
+    slider('crustBudget', 'points a nest may spend', 80, 3000, 20, 500, 0);
+    slider('intergrow', 'grown into each other', 0, 1, 0.05, 0.6, 2);
+    slider('stoneLean', 'lean off the wall', 0, 1.2, 0.05, 0.3, 2);
+    slider('stoneSink', 'how deep the foot is buried', 0, 1.2, 0.05, 0.45, 2);
     slider('stoneGlow', 'glow', 0, 2.5, 0.05, 0.9, 2);
     slider('stoneSpec', 'specular', 0, 2, 0.02, 0.55, 2);
     slider('stoneShine', 'shininess', 4, 240, 2, 54, 0);
     slider('stoneDeep', 'colour with thickness', 0, 30, 0.5, 7, 1);
     slider('crystalField', 'rock turned to crystal', 0, 1, 0.02, 0, 2);
     slider('clusterSize', 'nest radius', 10, 320, 5, 90, 0);
-    slider('clusterCount', 'stones per nest', 1, 14, 1, 5, 0);
+    slider('clusterCount', 'stones per nest', 1, 60, 1, 5, 0);
     slider('clusterSpread', 'space between nests', 1, 6, 0.1, 2.4, 1);
   }
+
+  label('ambient occlusion');
+  slider('aoPower', 'strength', 0, 1.5, 0.05, 0.9, 2);
+  slider('aoRadius', 'radius', 2, 60, 1, 14, 0);
+  slider('aoRange', 'depth it reads as full', 0.005, 0.3, 0.005, 0.03, 3);
+  slider('aoBias', 'height before it shades at all', 0, 0.1, 0.002, 0.02, 3);
 
   section('colour');
   slider('hue', 'hue', 240, 300, 1, 266, 0);
@@ -433,6 +458,12 @@ export function mountControls(handle, opts = {}) {
   saveRow.append(save);
   name.addEventListener('keydown', e => { if (e.key === 'Enter') save.click(); });
   renderPresets();
+
+  // Every pixel is paid for by four passes and every frame by all of them, so these
+  // two are the whole cost of the page in two numbers.
+  section('cost');
+  slider('maxPixelRatio', 'render scale cap', 0.5, 2, 0.05, 1.5, 2);
+  slider('idleFps', 'frames while only breathing', 6, 60, 1, 30, 0);
 
   section('panel');
   choice('boxes', 'boxes', [['hide', 'off'], ['show', 'on']], 'off',

@@ -2,7 +2,7 @@ import { prepareShard, shardHeights, prepareMatrix } from './crystal.js';
 
 const CRYSTAL_FLOATS = 8;
 const ROCK_FLOATS = 7;
-const UNIFORM_BYTES = 224;
+const UNIFORM_BYTES = 240;
 const ROCK_FORMAT = 'rgba8unorm';
 
 const SHADER = /* wgsl */`
@@ -45,9 +45,15 @@ struct U {
   stoneShine: f32,
   facetVary: f32,
   facetBase: f32,
-  pad1: f32,
-  pad2: f32,
-  pad3: f32,
+  aoPower: f32,
+  aoRadius: f32,
+  aoRange: f32,
+  rockDetail: f32,
+  rockDetailScale: f32,
+  stoneZoning: f32,
+  stoneRiseRef: f32,
+  aoBias: f32,
+  pad4: f32,
 };
 
 // An orthographic eye sees no displacement through a flat top: the ray goes
@@ -66,6 +72,56 @@ fn clipOf(p: vec2f, z: f32) -> vec4f {
   let y = 1.0 - p.y / u.res.y * 2.0;
   let d = 0.5 - clamp(z / u.zMax, -1.0, 1.0) * 0.5;
   return vec4f(x, y, clamp(d, 0.0001, 0.9999), 1.0);
+}
+
+fn hash3(c: vec3f) -> f32 {
+  let p = fract(c * 0.3183099 + vec3f(0.1, 0.2, 0.3));
+  let q = p * 17.0;
+  return fract(q.x * q.y * q.z * (q.x + q.y + q.z));
+}
+
+/** Value noise on a lattice: irregular by construction, unlike a sum of sines. */
+fn noise3(x: vec3f) -> f32 {
+  let i = floor(x);
+  let f = x - i;
+  let w = f * f * (3.0 - 2.0 * f);
+  let a = mix(mix(mix(hash3(i + vec3f(0.0, 0.0, 0.0)), hash3(i + vec3f(1.0, 0.0, 0.0)), w.x),
+                  mix(hash3(i + vec3f(0.0, 1.0, 0.0)), hash3(i + vec3f(1.0, 1.0, 0.0)), w.x), w.y),
+              mix(mix(hash3(i + vec3f(0.0, 0.0, 1.0)), hash3(i + vec3f(1.0, 0.0, 1.0)), w.x),
+                  mix(hash3(i + vec3f(0.0, 1.0, 1.0)), hash3(i + vec3f(1.0, 1.0, 1.0)), w.x), w.y),
+              w.z);
+  return a;
+}
+
+// The same fold the geometry uses, at a size no triangle could carry. Two octaves:
+// the third costs eight more lattice corners for detail this is already past.
+fn rockBump(p: vec2f) -> f32 {
+  var s = 0.0;
+  var a = 1.0;
+  var norm = 0.0;
+  var q = p;
+  for (var o = 0; o < 2; o = o + 1) {
+    let n = 1.0 - abs(2.0 * noise3(vec3f(q, 3.7)) - 1.0);
+    s = s + a * n * n;
+    norm = norm + a;
+    a = a * 0.5;
+    q = q * 2.17;
+  }
+  return s / norm;
+}
+
+/**
+ * Detail the mesh is too coarse to hold, added to the normal rather than to the
+ * height: the surface answers the light per pixel, and a facet stops being one
+ * flat tone across its whole width.
+ */
+fn bumped(n: vec3f, world: vec3f) -> vec3f {
+  if (u.rockDetail <= 0.0) { return n; }
+  let p = world.xy / max(u.rockDetailScale, 1.0);
+  let h = rockBump(p);
+  let e = 0.35;
+  let g = vec2f(rockBump(p + vec2f(e, 0.0)) - h, rockBump(p + vec2f(0.0, e)) - h);
+  return normalize(n - vec3f(g, 0.0) * u.rockDetail);
 }
 
 fn faceNormal(world: vec3f, jit: f32, bevel: f32) -> vec3f {
@@ -121,7 +177,7 @@ fn rockVert(@location(0) p: vec2f, @location(1) z: f32,
 
 @fragment
 fn rockFrag(in: RockOut) -> @location(0) vec4f {
-  let n = faceNormal(in.world, in.jit, u.bevel * 0.5);
+  let n = bumped(faceNormal(in.world, in.jit, u.bevel * 0.5), in.world);
   let key = max(dot(n, normalize(u.lightDir)), 0.0) * u.lightPower;
   let height = clamp((in.world.z - u.rockMin) / max(u.rockSpan, 1e-3), 0.0, 1.0);
   let sh = clamp(0.38 * height + 0.62 * pow(key, 1.9), 0.0, 1.0);
@@ -144,7 +200,16 @@ fn rockFrag(in: RockOut) -> @location(0) vec4f {
   // fresnel-weighted glint, which is what a white one added flat is not.
   let t = max(in.thick, 0.0);
   let deep = exp(-u.absorb * u.stoneDensity * (t * u.stoneDeep) * 0.002);
-  let facet = u.tint * u.stoneGlow * (0.42 + 0.58 * key);
+  // Amethyst is zoned along its own growth: the colour gathers in the head and the
+  // foot stays pale, often nearly white. Uniform violet from ring to point is the
+  // one thing that reads as plastic however well the facets are lit.
+  let zone = clamp(t / max(u.stoneRiseRef, 1e-3), 0.0, 1.0);
+  // Massive quartz, not white paint: the foot of a crystal is duller and darker than
+  // its head, not brighter. Taken as a pale grey it lights up under the glow the
+  // heads are tuned for, and a crust of it burns the frame out.
+  let foot = u.tint * 0.40 + vec3f(0.05, 0.045, 0.065);
+  let zoned = mix(u.tint, mix(foot, u.tint, smoothstep(0.12, 0.88, zone)), u.stoneZoning);
+  let facet = zoned * u.stoneGlow * (0.42 + 0.58 * key);
   let body = mix(facet, facet * deep * 1.7, 0.5);
   let spark = glintOf(in.world, n, u.stoneShine) * u.stoneSpec
             * glintFresnel(in.world, 0.08);
@@ -171,6 +236,52 @@ fn bgFrag(in: BgOut) -> @location(0) vec4f {
   // Alpha carries the rock height and must survive into the mip levels; on screen
   // the canvas is opaque, so passing it through costs nothing there.
   return textureSampleLevel(rockTex, samp, in.uv, 0.0);
+}
+
+// The same blit, with the occlusion the rock owes itself. Kept apart from bgFrag
+// because that one also builds the mip chain, and darkening applied once per level
+// compounds into soot.
+@fragment
+fn screenFrag(in: BgOut) -> @location(0) vec4f {
+  let c = textureSampleLevel(rockTex, samp, in.uv, 0.0);
+  if (u.aoPower <= 0.0) { return c; }
+
+  // Ambient occlusion read off the height the rock pass left in alpha. Every
+  // neighbour standing above this pixel takes a share of its sky; how much they
+  // take together is how deep in a crease it sits. Two rings, so a chip darkens
+  // where it meets the ground and not merely along its own outline.
+  //
+  // Measured against the blurred field, not against the raw height. That alpha
+  // carries the dome and the heave as well as the chips, and on a slope every
+  // uphill neighbour stands higher — plain differences would shade the whole
+  // upward side of the rock and leave a ten-pixel stone, a hundredth of the span,
+  // invisible. A coarse mip is the surface those chips are standing on.
+  // The smooth surface is read once, not per tap. Over a radius of a dozen pixels
+  // a mip that coarse barely moves, and sampling it sixteen more times buys a
+  // difference below the eighth bit at twice the bandwidth.
+  let dim = vec2f(textureDimensions(rockTex, 0));
+  let lod = log2(max(u.aoRadius, 2.0)) + 1.0;
+  let flat = textureSampleLevel(rockTex, samp, in.uv, lod).a;
+  let mine = c.a - flat;
+  var occ = 0.0;
+  var wsum = 0.0;
+  for (var ring = 0; ring < 2; ring = ring + 1) {
+    let rad = u.aoRadius * (0.45 + 0.75 * f32(ring));
+    let w = 1.0 / (1.0 + f32(ring));
+    for (var i = 0; i < 6; i = i + 1) {
+      let a = (f32(i) + 0.5 * f32(ring)) * 1.0471975512;
+      let uv = in.uv + vec2f(cos(a), sin(a)) * rad / dim;
+      // A neighbour has to stand meaningfully higher to take any sky. Without the
+      // bias two crystals grown into each other shade one another exactly as the
+      // ground is shaded, and every one of them gets drawn round in its own dark
+      // outline — which is what makes a sprout of them read as stacked meshes.
+      let rel = textureSampleLevel(rockTex, samp, uv, 0.0).a - flat - mine;
+      occ = occ + w * max(0.0, rel - u.aoBias);
+      wsum = wsum + w;
+    }
+  }
+  let ao = 1.0 - u.aoPower * smoothstep(0.0, max(u.aoRange, 1e-4), occ / max(wsum, 1e-4));
+  return vec4f(c.rgb * ao, c.a);
 }
 
 struct Out {
@@ -207,24 +318,6 @@ fn vert(@builtin(vertex_index) vi: u32,
   return out;
 }
 
-fn hash3(c: vec3f) -> f32 {
-  let p = fract(c * 0.3183099 + vec3f(0.1, 0.2, 0.3));
-  let q = p * 17.0;
-  return fract(q.x * q.y * q.z * (q.x + q.y + q.z));
-}
-
-/** Value noise on a lattice: irregular by construction, unlike a sum of sines. */
-fn noise3(x: vec3f) -> f32 {
-  let i = floor(x);
-  let f = x - i;
-  let w = f * f * (3.0 - 2.0 * f);
-  let a = mix(mix(mix(hash3(i + vec3f(0.0, 0.0, 0.0)), hash3(i + vec3f(1.0, 0.0, 0.0)), w.x),
-                  mix(hash3(i + vec3f(0.0, 1.0, 0.0)), hash3(i + vec3f(1.0, 1.0, 0.0)), w.x), w.y),
-              mix(mix(hash3(i + vec3f(0.0, 0.0, 1.0)), hash3(i + vec3f(1.0, 0.0, 1.0)), w.x),
-                  mix(hash3(i + vec3f(0.0, 1.0, 1.0)), hash3(i + vec3f(1.0, 1.0, 1.0)), w.x), w.y),
-              w.z);
-  return a;
-}
 
 fn fbm3(x: vec3f) -> f32 {
   var sum = 0.0;
@@ -509,20 +602,29 @@ export function gpuAvailable() {
  * missing or the adapter is refused, so the caller can fall back to SVG.
  */
 export async function mountCrystalsGPU({
-  container, groups, seed = 500, pad = 0, tessel = 70,
-  plateauPad = 44, plateauRound = 0, plateauBulge = 0, shapeRound = 1, plateauGrain = 2.5,
-  spread = 0.4, apron = 200, rampFactor = 1 + 200 / 120,
-  depth = 400, flatTilt = 0, hue = 259, floor = 6,
+  container, groups, seed = 500, pad = 0, tessel = 78,
+  plateauPad = 14, plateauRound = 0, plateauBulge = 0, shapeRound = 1, plateauGrain = 5,
+  spread = 0.58, apron = 155, rampFactor = 1 + 155 / 120,
+  depth = 20, flatTilt = 0, hue = 259, floor = 6,
   absorb = [1, 2.65, 0.7], ior = 2.4, dispersion = 4,
   spec = 0.51, shininess = 138, refractScale = 1.5, glow = 0, bevel = 0.8,
   scatter = 0.05, veil = 0.5, edge = 0, plateauDome = 0,
   eyeDist = 6000, eyeFollow = 0.6, stoneDensity = 0.84, veilFlash = 1.45,
   innerFacets = 0, core = 3.95,
-  rockStep = 340, rockSwell = 55, rockDome = 40,
+  rockStep = 340, rockSwell = 55, rockDome = 40, rockRelief = 52,
   breathAmp = 41, breathPeriod = 3.5,
   stoneShare = 1, stoneSize = 28, stoneRise = 1.05, stoneGlow = 1.2, crystalField = 0,
-  clusterSize = 90, clusterCount = 5, clusterSpread = 2.4,
+  stoneCrown = 0.42,
+  clusterSize = 115, clusterCount = 25, clusterSpread = 4.4,
   stoneSpec = 1.06, stoneDeep = 8, stoneShine = 192, facetVary = 0.9, facetBase = 0.55,
+  aoPower = 0.9, aoRadius = 14, aoRange = 0.03,
+  rockRidge = 1.5, rockDetail = 0.5, rockDetailScale = 26,
+  rockFracture = 0.65, fractureSize = 530, rockRim = 2,
+  maxPixelRatio = 1.5, idleFps = 30,
+  stoneZoning = 0.7, intergrow = 0.6, stoneLean = 0.3,
+  nestCrust = true, crustHeight = 0.45, crustSpread = 0.5, crustFacet = 0.3,
+  crustBudget = 500,
+  stoneSink = 0.45, aoBias = 0.02,
   // On the screen normal every upward-facing facet takes the same amount of light,
   // so the body fills evenly and only the highlight tells one facet from another.
   // Tuned to 90 all the same; lowering it is what brings the facets back.
@@ -638,7 +740,7 @@ export async function mountCrystalsGPU({
   const bgPipe = device.createRenderPipeline({
     layout: screenLayout,
     vertex: { module, entryPoint: 'bgVert' },
-    fragment: { module, entryPoint: 'bgFrag', targets: [{ format }] },
+    fragment: { module, entryPoint: 'screenFrag', targets: [{ format }] },
     primitive: { topology: 'triangle-list' },
     depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
   });
@@ -649,12 +751,20 @@ export async function mountCrystalsGPU({
                 scatter, veil, edge, plateauDome, eyeDist, eyeFollow, stoneDensity,
                 veilFlash, innerFacets, core,
                 breathAmp, breathPeriod,
-                rockStep, rockSwell, rockDome, stoneShare, stoneSize, stoneRise, stoneGlow, crystalField,
-                clusterSize, clusterCount, clusterSpread,
+                rockStep, rockSwell, rockDome, rockRelief,
+                stoneShare, stoneSize, stoneRise, stoneGlow, crystalField,
+                stoneCrown, clusterSize, clusterCount, clusterSpread,
                 stoneSpec, stoneDeep, stoneShine, facetVary, facetBase,
+                aoPower, aoRadius, aoRange,
+                rockRidge, rockDetail, rockDetailScale,
+                rockFracture, fractureSize, rockRim,
+                maxPixelRatio, idleFps, stoneZoning, intergrow, stoneLean,
+                nestCrust, crustHeight, crustSpread, crustFacet, crustBudget,
+                stoneSink, aoBias,
                 lightAzimuth, lightElevation, lightPower, stagger };
 
-  let W = 0, H = 0, zMax = 1, rockMin = 0, rockSpan = 1;
+  let lastDraw = 0, drawn = 0;
+  let W = 0, H = 0, zMax = 1, rockMin = 0, rockSpan = 1, apexMax = 1;
   let cbuf = null, ccount = 0, rbuf = null, rcount = 0;
   let depthTex = null, rockDepth = null, rockTex = null, texBind = null;
   let mipCount = 1, mipSteps = [], rockLevel0 = null;
@@ -679,7 +789,12 @@ export async function mountCrystalsGPU({
     const base = container.getBoundingClientRect();
     W = Math.round(base.width);
     H = Math.round(container.scrollHeight);
-    const dpr = Math.min(devicePixelRatio || 1, 2);
+    // Every pixel here is paid for four times over: the rock pass, the mip chain
+    // built from it, the occlusion read back off it and the ray march through it.
+    // At full device ratio a 1440p window is six megapixels of that, sixty times a
+    // second, for a decorative low-poly background. Capped where the flat facets
+    // and the soft rock stop showing the difference.
+    const dpr = Math.min(devicePixelRatio || 1, Math.max(0.5, cfg.maxPixelRatio));
     canvas.width = Math.max(1, Math.round(W * dpr));
     canvas.height = Math.max(1, Math.round(H * dpr));
 
@@ -709,13 +824,22 @@ export async function mountCrystalsGPU({
 
     const m = prepareMatrix(W, H, geoms.map(g => g.poly), {
       hue: cfg.hue, step: cfg.rockStep, swell: cfg.rockSwell, dome: cfg.rockDome,
+      relief: cfg.rockRelief, rockRidge: cfg.rockRidge,
+      rockFracture: cfg.rockFracture, fractureSize: cfg.fractureSize,
+      rockRim: cfg.rockRim,
       stoneShare: cfg.stoneShare, stoneSize: cfg.stoneSize, stoneRise: cfg.stoneRise,
+      stoneCrown: cfg.stoneCrown,
+      nestCrust: cfg.nestCrust, crustHeight: cfg.crustHeight,
+      crustSpread: cfg.crustSpread, crustFacet: cfg.crustFacet,
+      crustBudget: cfg.crustBudget,
+      intergrow: cfg.intergrow, stoneLean: cfg.stoneLean, stoneSink: cfg.stoneSink,
       crystalField: cfg.crystalField, clusterSize: cfg.clusterSize,
       clusterCount: cfg.clusterCount, clusterSpread: cfg.clusterSpread,
       keepOut: geoms.flatMap(g => g.plateaus),
     });
     rockMin = m.zmin;
     rockSpan = m.zmax - m.zmin;
+    apexMax = Math.max(1e-3, m.apexMax);
     const rock = rockMesh(m);
     rcount = rock.length / ROCK_FLOATS;
     rbuf = writeMesh(rbuf, rock, GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST);
@@ -738,7 +862,10 @@ export async function mountCrystalsGPU({
     rockDepth = device.createTexture({ size: [canvas.width, canvas.height], format: 'depth24plus',
                                        usage: GPUTextureUsage.RENDER_ATTACHMENT });
     rockTex?.destroy();
-    mipCount = Math.floor(Math.log2(Math.max(canvas.width, canvas.height))) + 1;
+    // Each level is its own render pass every frame. Past a 256-fold reduction the
+    // rock behind the stone is one flat colour and the levels below only add passes,
+    // so the chain stops there; a lookup asking for deeper is clamped to the last.
+    mipCount = Math.min(9, Math.floor(Math.log2(Math.max(canvas.width, canvas.height))) + 1);
     rockTex = device.createTexture({
       size: [canvas.width, canvas.height], format: ROCK_FORMAT, mipLevelCount: mipCount,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -808,13 +935,20 @@ export async function mountCrystalsGPU({
     const breath = cfg.breathAmp
       ? Math.sin(2 * Math.PI * t / Math.max(1, cfg.breathPeriod)) * cfg.breathAmp
       : 0;
-    uni[39] = cfg.rockSwell + breath;
+    // The same factor prepareMatrix scaled its lengths by: the heave is left out of
+    // the mesh so it can move per frame, and it has to arrive here already scaled or
+    // the moving part and the baked part are in different worlds.
+    uni[39] = (cfg.rockSwell + breath) * Math.max(1, Math.sqrt((W * H) / (1920 * 1080)));
     uni[40] = cfg.veilFlash; uni[41] = cfg.innerFacets; uni[42] = cfg.core;
     // The eye rides towards the pointer, so what is seen through the stone moves.
     uni[44] = W * 0.5 + (pointer.x - W * 0.5) * cfg.eyeFollow;
     uni[45] = H * 0.5 + (pointer.y - H * 0.5) * cfg.eyeFollow;
     uni[46] = cfg.stoneSpec; uni[47] = cfg.stoneDeep; uni[48] = cfg.stoneShine;
     uni[49] = cfg.facetVary; uni[50] = cfg.facetBase;
+    uni[51] = cfg.aoPower; uni[52] = cfg.aoRadius; uni[53] = cfg.aoRange;
+    uni[54] = cfg.rockDetail; uni[55] = cfg.rockDetailScale;
+    uni[56] = cfg.stoneZoning;
+    uni[57] = apexMax; uni[58] = cfg.aoBias;
     device.queue.writeBuffer(uniformBuf, 0, uni);
   }
 
@@ -825,6 +959,16 @@ export async function mountCrystalsGPU({
     // rise, or the ground's own breath.
     const breathing = cfg.breathAmp > 0 && !reduced;
     if (!dirty && riseMs === 0 && !breathing) { raf = requestAnimationFrame(frame); return; }
+    // The breath has a period of seconds. Drawing it at the display's rate spends a
+    // whole pass — rock, mips, occlusion, ray march — to move the ground by a
+    // fraction of a pixel. Nothing else is animating in that case, and half rate is
+    // the same picture. The pointer and the rise are never throttled: those are
+    // answered by eye and a dropped frame on them is felt.
+    if (!dirty && riseMs === 0 && now - lastDraw < 1000 / Math.max(1, cfg.idleFps) - 2) {
+      raf = requestAnimationFrame(frame);
+      return;
+    }
+    lastDraw = now;
     dirty = false;
 
     if (riseMs > 0) {
@@ -883,6 +1027,7 @@ export async function mountCrystalsGPU({
     pass.end();
 
     device.queue.submit([enc.finish()]);
+    drawn++;
     raf = requestAnimationFrame(frame);
   }
 
@@ -932,9 +1077,12 @@ export async function mountCrystalsGPU({
   const GEOM_KEYS = ['spread', 'plateauPad', 'plateauRound', 'plateauBulge', 'shapeRound',
                      'apron', 'rampFactor',
                      'tessel', 'depth', 'flatTilt', 'plateauDome', 'plateauGrain',
-                     'hue', 'rockStep', 'rockSwell', 'rockDome',
-                     'stoneShare', 'stoneSize', 'stoneRise', 'crystalField',
-                     'clusterSize', 'clusterCount', 'clusterSpread'];
+                     'hue', 'rockStep', 'rockSwell', 'rockDome', 'rockRelief', 'rockRidge',
+                     'rockFracture', 'fractureSize', 'rockRim',
+                     'stoneShare', 'stoneSize', 'stoneRise', 'stoneCrown',
+                     'intergrow', 'stoneLean', 'stoneSink', 'crystalField',
+                     'nestCrust', 'crustHeight', 'crustSpread', 'crustFacet', 'crustBudget',
+                     'clusterSize', 'clusterCount', 'clusterSpread', 'maxPixelRatio'];
 
   const handle = () => {
     disposed = true;
@@ -963,5 +1111,11 @@ export async function mountCrystalsGPU({
     onGrow?.(tablePhase(grow));
   };
   handle.backend = 'webgpu';
+  /** What the frame actually costs: passes submitted, and over how many pixels. */
+  handle.cost = () => ({
+    drawn, mips: mipCount, w: canvas.width, h: canvas.height,
+    rockTris: rcount / 3, crystalTris: ccount / 3,
+    megapixels: +(canvas.width * canvas.height / 1e6).toFixed(2),
+  });
   return handle;
 }
