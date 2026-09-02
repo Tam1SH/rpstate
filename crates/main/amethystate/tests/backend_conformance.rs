@@ -58,7 +58,6 @@ fn ns(joined: &str) -> StorePath {
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-
 /// A store on `backend`, with the debouncer and the watcher pushed far enough
 /// out that nothing lands except when a property asks for it.
 fn open(backend: Backend, file: &TempPath) -> Store {
@@ -101,10 +100,8 @@ fn config() -> ProptestConfig {
 /// is bytes and an engine that quotes its keys has to survive whatever is in
 /// them.
 fn segment() -> impl Strategy<Value = String> {
-    amethystate_core::strategies::segment().prop_filter(
-        "a level named `.` has its own test",
-        |name| name != ".",
-    )
+    amethystate_core::strategies::segment()
+        .prop_filter("a level named `.` has its own test", |name| name != ".")
 }
 
 fn path() -> impl Strategy<Value = Vec<String>> {

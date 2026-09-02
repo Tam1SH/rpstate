@@ -401,8 +401,7 @@ impl Kv {
         let mut cleared = Cleared::default();
 
         for namespace in seeded_namespaces_under(&at) {
-            self.store
-                .set_initialized(&namespace, InitState::Fresh)?;
+            self.store.set_initialized(&namespace, InitState::Fresh)?;
         }
 
         self.reset_under(&at, &mut cleared)?;

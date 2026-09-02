@@ -7,12 +7,13 @@ use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
-use crate::store::screening::Screening;
+use crate::store::debouncer::Debouncer;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::facts::{Facts, Key, StoreFile};
+use crate::store::format::{self, StorageFactSet};
+use crate::store::screening::Screening;
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
-use crate::store::debouncer::Debouncer;
 use crate::store::{
     InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
     SubscriptionEntry, SubscriptionId, SubscriptionKind,
@@ -31,6 +32,71 @@ use tracing::info;
 pub mod error;
 mod inspector;
 mod migration;
+
+/// The oldest SQLite that can open what this build writes, in the encoding
+/// SQLite gives its own versions.
+///
+/// 3.7.0 is where `journal_mode = WAL` arrived.
+const FLOOR: i32 = 3_007_000;
+
+/// What marks a database as this library's, so that `user_version` read out of
+/// it is known to be a floor rather than some other tool's number.
+///
+/// ASCII `AMES`.
+const APPLICATION_ID: i32 = 0x414D_4553;
+
+/// Reads the floor from the header and refuses below it, then records ours.
+///
+/// This runs before any statement that would parse the schema, because the
+/// failure it is here to name is one SQLite reports as a corrupt schema.
+fn settle_floor(conn: &Connection, path: &Path) -> StorageResult<()> {
+    let claimed: i32 = conn
+        .pragma_query_value(None, "application_id", |row| row.get(0))
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Open, path)
+        .attach("reading the application id")?;
+
+    if claimed != 0 && claimed != APPLICATION_ID {
+        return Err(error_stack::Report::new(StorageError::Open)
+            .attach(StoreFile(path.to_path_buf()))
+            .attach(format!(
+                "application_id is {claimed}, and this library writes {APPLICATION_ID}"
+            ))
+            .attach("the file is some other application's database"));
+    }
+
+    if claimed == 0 {
+        conn.pragma_update(None, "application_id", APPLICATION_ID)
+            .map_err(SqliteStoreError::from)
+            .doing(StorageError::Open, path)
+            .attach("claiming the database")?;
+    }
+
+    let recorded: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Open, path)
+        .attach("reading the recorded sqlite floor")?;
+
+    let running = rusqlite::version_number();
+    if recorded > running {
+        return Err(error_stack::Report::new(StorageError::Open)
+            .attach(StoreFile(path.to_path_buf()))
+            .attach(format!(
+                "this store needs sqlite {recorded} or newer, and this build links {running}"
+            ))
+            .attach("written with a feature the running sqlite would report as a corrupt schema"));
+    }
+
+    if recorded < FLOOR {
+        conn.pragma_update(None, "user_version", FLOOR)
+            .map_err(SqliteStoreError::from)
+            .doing(StorageError::Open, path)
+            .attach("recording the sqlite floor")?;
+    }
+
+    Ok(())
+}
 
 /// Writes every buffered change through `txn`'s prepared statements.
 /// Committing `txn` is the caller's own last step - a synchronous flush that
@@ -158,8 +224,9 @@ impl SqliteStoreInner {
     fn buffer(&self, fill: impl FnOnce(&mut utils::Pending)) -> StorageResult<()> {
         let mut lock = self.pending.lock();
         if self.debouncer.is_stopped() {
-            return Err(error_stack::Report::new(StorageError::Closed)
-                .attach(StoreFile(self.path.clone())));
+            return Err(
+                error_stack::Report::new(StorageError::Closed).attach(StoreFile(self.path.clone()))
+            );
         }
         fill(&mut lock);
         Ok(())
@@ -546,6 +613,51 @@ impl SqliteStoreInner {
         commit
     }
 
+    fn read_format_facts(&self) -> StorageResult<Option<StorageFactSet>> {
+        let record = format::RECORD;
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare_cached("SELECT value FROM metadata WHERE key = ?")
+            .map_err(SqliteStoreError::from)
+            .doing(StorageError::Meta, &self.path)
+            .attach_meta_node(record)?;
+
+        let found: Option<Vec<u8>> = stmt
+            .query_row([record], |row| row.get(0))
+            .optional()
+            .map_err(SqliteStoreError::from)
+            .doing(StorageError::Meta, &self.path)
+            .attach_meta_node(record)?;
+
+        let Some(bytes) = found else {
+            return Ok(None);
+        };
+
+        sonic_rs::from_slice(&bytes)
+            .change_context(StorageError::Meta)
+            .attach_meta_node(record)
+            .map(Some)
+    }
+
+    fn write_format_facts(&self, facts: &StorageFactSet) -> StorageResult<()> {
+        let record = format::RECORD;
+        let bytes = sonic_rs::to_vec(facts)
+            .change_context(StorageError::Meta)
+            .attach_meta_node(record)?;
+
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO metadata (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![record, bytes],
+        )
+        .map_err(SqliteStoreError::from)
+        .doing(StorageError::Meta, &self.path)
+        .attach_meta_node(record)?;
+
+        Ok(())
+    }
+
     fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
         if self.initialized.lock().contains(namespace.as_str()) {
             return Ok(true);
@@ -628,6 +740,8 @@ impl SqliteStore {
             .map_err(SqliteStoreError::from)
             .doing(StorageError::Open, &config.path)?;
 
+        settle_floor(&conn, &config.path)?;
+
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -675,13 +789,12 @@ impl SqliteStore {
                 };
 
                 let landed: StorageResult<()> = (|| {
-                    let mut conn = parking_lot::MutexGuard::try_map(conn_save.lock(), |held| {
-                        held.as_mut()
-                    })
-                    .map_err(|_| {
-                        error_stack::Report::new(StorageError::Closed)
-                            .attach(StoreFile(path_save.clone()))
-                    })?;
+                    let mut conn =
+                        parking_lot::MutexGuard::try_map(conn_save.lock(), |held| held.as_mut())
+                            .map_err(|_| {
+                                error_stack::Report::new(StorageError::Closed)
+                                    .attach(StoreFile(path_save.clone()))
+                            })?;
                     let txn = conn
                         .transaction()
                         .map_err(SqliteStoreError::from)
@@ -714,6 +827,10 @@ impl SqliteStore {
         });
 
         let store = Self { inner };
+        format::settle(&store, Backend::Sqlite)
+            .attach_store_file(&store.inner.path)
+            .attach("opening the store")?;
+
         let report = store.run_migrations(migration_set)?;
 
         Ok((store, report))
@@ -777,6 +894,11 @@ impl StoreBackend for SqliteStore {
         source: Option<uuid::Uuid>,
     ) -> StorageResult<()> {
         self.inner.set_owned_erased(path, value, source)
+    }
+
+    #[cfg(feature = "test-utils")]
+    fn format_record(&self) -> Option<&dyn crate::store::format::TestFormatRecord> {
+        Some(self)
     }
 
     fn files_layout(&self) -> Option<StoreLayout> {
@@ -1008,5 +1130,15 @@ mod tests {
                 "UI should now be persisted on disk"
             );
         }
+    }
+}
+
+impl format::FormatRecord for SqliteStore {
+    fn format_facts(&self) -> StorageResult<Option<StorageFactSet>> {
+        self.inner.read_format_facts()
+    }
+
+    fn set_format_facts(&self, facts: &StorageFactSet) -> StorageResult<()> {
+        self.inner.write_format_facts(facts)
     }
 }

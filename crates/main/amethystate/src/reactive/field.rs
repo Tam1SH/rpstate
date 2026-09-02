@@ -258,7 +258,6 @@ where
             .is_some_and(|sub| sub.store().is_closed())
     }
 
-
     /// The full path this field is stored under, prefix included.
     ///
     /// The prefix's levels come first and the key's after, with the empty ones

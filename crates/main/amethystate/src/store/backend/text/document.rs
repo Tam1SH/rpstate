@@ -30,8 +30,10 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     /// A refusal comes back as this codec's own error, because that is all a
     /// `Serializer` may return; [`Noticed::overflowed`] is how a caller asks
     /// whether the count was what stopped it.
-    fn serialize_node<T: Serialize + ?Sized>(value: &T, seen: &Noticed)
-    -> StorageResult<Self::Node>;
+    fn serialize_node<T: Serialize + ?Sized>(
+        value: &T,
+        seen: &Noticed,
+    ) -> StorageResult<Self::Node>;
     fn node_to_bytes(node: &Self::Node) -> StorageResult<Vec<u8>>;
     fn bytes_to_node(bytes: &[u8]) -> StorageResult<Self::Node>;
 

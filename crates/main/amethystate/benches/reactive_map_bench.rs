@@ -610,7 +610,9 @@ fn bench_store_scan(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new(format!("scan_keys_pending{pending}"), n),
                 &n,
-                |b, _| b.iter(|| black_box(StoreBackend::scan_keys(&store, &prefix).unwrap().len())),
+                |b, _| {
+                    b.iter(|| black_box(StoreBackend::scan_keys(&store, &prefix).unwrap().len()))
+                },
             );
             group.bench_with_input(
                 BenchmarkId::new(format!("scan_prefix_pending{pending}"), n),

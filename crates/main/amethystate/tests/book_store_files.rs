@@ -23,7 +23,8 @@ fn a_store_says_which_files_it_opened() -> Result<(), Box<dyn Error + Send + Syn
         }) => {
             println!("values:      {}", data.display());
             println!("bookkeeping: {}", meta.display());
-            println!("kept while rewriting: {}, {}",
+            println!(
+                "kept while rewriting: {}, {}",
                 data_backup.display(),
                 meta_backup.display(),
             );
@@ -42,8 +43,8 @@ fn a_store_says_which_files_it_opened() -> Result<(), Box<dyn Error + Send + Syn
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn a_text_store_keeps_its_bookkeeping_beside_the_data()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_text_store_keeps_its_bookkeeping_beside_the_data() -> Result<(), Box<dyn Error + Send + Sync>>
+{
     let path = TempPath::new("book_files_text");
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())

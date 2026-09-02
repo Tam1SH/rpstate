@@ -7,6 +7,7 @@ pub mod default;
 pub mod durable;
 mod error;
 pub mod facts;
+pub mod format;
 pub mod kv;
 pub mod meta;
 pub mod owners;

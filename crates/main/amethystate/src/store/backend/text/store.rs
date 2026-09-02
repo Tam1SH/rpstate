@@ -8,11 +8,12 @@ use crate::store::backend::text::migration::TextMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::config::{FileWritePolicy, StoreConfig};
-use crate::store::screening::{Noticed, Screening};
+use crate::store::debouncer::Debouncer;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::facts::{Facts, Key, StoreFile as StoreFileFact};
+use crate::store::format::{self, StorageFactSet};
+use crate::store::screening::{Noticed, Screening};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
-use crate::store::debouncer::Debouncer;
 use crate::store::{
     EXTERNAL_EDIT, InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback,
     StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId, SubscriptionKind,
@@ -172,11 +173,7 @@ impl<D: TextDocument> StoreFile<D> {
     pub fn persist(&self) -> StorageResult<()> {
         let _flushing = self.flush.lock();
 
-        let content = self
-            .doc
-            .read()
-            .serialize()
-            .attach_store_file(&self.path)?;
+        let content = self.doc.read().serialize().attach_store_file(&self.path)?;
         persist_atomic(&self.path, &content, self.write_policy)
             .map_err(TextStoreError::from)
             .change_context(StorageError::Flush)
@@ -327,6 +324,9 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         *files.meta.doc.write() = initial_meta.clone();
 
         let store = Self::new(config, files)?;
+        format::settle_for_codec(&store, D::format())
+            .attach_store_file(&store.inner.files.data.path)
+            .attach("opening the store")?;
 
         match store.run_migrations(migration_set) {
             Ok(report) => {
@@ -569,7 +569,8 @@ impl<D: TextDocument> TextStoreInner<D> {
 
         self.debouncer.shutdown();
         self.watch_debouncer.shutdown();
-        self.save_now().attach("rendering the document before close")
+        self.save_now()
+            .attach("rendering the document before close")
     }
 
     /// Refuses a read or a write once the store has closed.
@@ -606,15 +607,13 @@ impl<D: TextDocument> TextStoreInner<D> {
     fn scan_prefix(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
         self.refuse_if_closed()?;
         let guard = self.files.data.doc.read();
-        scan_prefix_impl(&*guard, prefix)
-            .attach_store_file(&self.files.data.path)
+        scan_prefix_impl(&*guard, prefix).attach_store_file(&self.files.data.path)
     }
 
     fn scan_keys(&self, prefix: &StorePath) -> StorageResult<Vec<StorePath>> {
         self.refuse_if_closed()?;
         let guard = self.files.data.doc.read();
-        scan_keys_impl(&*guard, prefix)
-            .attach_store_file(&self.files.data.path)
+        scan_keys_impl(&*guard, prefix).attach_store_file(&self.files.data.path)
     }
 
     fn delete(&self, path: &StorePath, source: Option<uuid::Uuid>) -> StorageResult<()> {
@@ -707,7 +706,39 @@ impl<D: TextDocument> TextStoreInner<D> {
     }
 
     fn init_key(&self, namespace: &StorePath) -> StorePath {
-        meta_key("__init", namespace)
+        meta_key("init", namespace)
+    }
+
+    pub(crate) fn read_format_facts(&self) -> StorageResult<Option<StorageFactSet>> {
+        let record = format::RECORD;
+        let guard = self.files.meta.doc.read();
+
+        let Some(node) = guard.get(&[record]) else {
+            return Ok(None);
+        };
+
+        D::deserialize_node(node)
+            .in_meta(StorageError::Meta, &self.files.meta.path)
+            .attach_meta_node(record)
+            .map(Some)
+    }
+
+    pub(crate) fn write_format_facts(&self, facts: &StorageFactSet) -> StorageResult<()> {
+        let record = format::RECORD;
+        let node = D::serialize_node(facts, &Noticed::unlimited())
+            .in_meta(StorageError::Meta, &self.files.meta.path)
+            .attach_meta_node(record)?;
+
+        {
+            let mut guard = self.files.meta.doc.write();
+            guard
+                .set(&[record], node)
+                .in_meta(StorageError::Meta, &self.files.meta.path)
+                .attach_meta_node(record)?;
+        }
+
+        self.debouncer.schedule();
+        Ok(())
     }
 
     fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
@@ -849,8 +880,7 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
         bytes: &[u8],
         f: &mut dyn FnMut(&mut dyn erased_serde::Deserializer) -> StorageResult<()>,
     ) -> StorageResult<()> {
-        D::with_bytes_de(bytes, f)
-            .attach_store_file(&self.inner.files.data.path)
+        D::with_bytes_de(bytes, f).attach_store_file(&self.inner.files.data.path)
     }
 
     fn set_erased(
@@ -881,6 +911,11 @@ impl<D: TextDocument + Send + 'static> StoreBackend for TextStore<D> {
 
     fn is_closed(&self) -> bool {
         self.inner.debouncer.is_stopped()
+    }
+
+    #[cfg(feature = "test-utils")]
+    fn format_record(&self) -> Option<&dyn crate::store::format::TestFormatRecord> {
+        Some(self)
     }
 
     fn files_layout(&self) -> Option<StoreLayout> {
@@ -1286,4 +1321,14 @@ fn scan_keys_recursive<D: TextDocument>(
     }
 
     Ok(())
+}
+
+impl<D: TextDocument> format::FormatRecord for TextStore<D> {
+    fn format_facts(&self) -> StorageResult<Option<StorageFactSet>> {
+        self.inner.read_format_facts()
+    }
+
+    fn set_format_facts(&self, facts: &StorageFactSet) -> StorageResult<()> {
+        self.inner.write_format_facts(facts)
+    }
 }

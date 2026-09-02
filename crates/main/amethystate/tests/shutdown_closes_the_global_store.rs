@@ -9,7 +9,9 @@ use common::shape;
 #[backends(Redb)]
 fn a_write_after_shutdown_is_refused_and_what_came_before_it_is_on_disk(backend: Backend) {
     let path = TempPath::new("global_shutdown");
-    let guard = StoreBuilder::new(path.path()).backend(backend).init_global();
+    let guard = StoreBuilder::new(path.path())
+        .backend(backend)
+        .init_global();
 
     global_store().kv().set("port", &8080u16).unwrap();
 

@@ -40,7 +40,11 @@ fn raw_values_at_paths(backend: Backend) -> Result<(), Box<dyn Error + Send + Sy
     assert_eq!(kv.get::<String>("theme")?, None);
 
     let listed: Vec<&str> = under_ui.iter().map(|key| key.as_str()).collect();
-    assert_eq!(listed, ["ui.width"], "keys are the whole path, not the leaf");
+    assert_eq!(
+        listed,
+        ["ui.width"],
+        "keys are the whole path, not the leaf"
+    );
 
     Ok(())
 }
@@ -108,7 +112,8 @@ fn a_path_a_struct_declared_is_refused(
     //@show writing where a struct lives
     let refused = kv.namespace("network").set("port", &"8080".to_string());
 
-    kv.namespace("networkish").set("port", &"8080".to_string())?;
+    kv.namespace("networkish")
+        .set("port", &"8080".to_string())?;
     //@show-end
 
     assert!(refused.is_err(), "the declared prefix is not Kv's to write");

@@ -90,9 +90,7 @@ fn assert_refused(label: &str, value: f64) {
     let file = TempPath::new(label);
     let store = opened(file.path());
 
-    let refused = store
-        .set(["probe", "v"], &value)
-        .unwrap_err();
+    let refused = store.set(["probe", "v"], &value).unwrap_err();
 
     assert!(
         format!("{refused:?}").contains("NaN or an infinity"),
@@ -774,7 +772,10 @@ fn nested_option_keeps_the_layers_it_can_and_refuses_the_one_it_cannot() {
         .set(["probe", "v"], &Some(None::<u32>))
         .expect_err("Some(None) was taken, and it reads back as None");
 
-    assert!(format!("{refused:?}").contains("holding nothing"), "{refused:?}");
+    assert!(
+        format!("{refused:?}").contains("holding nothing"),
+        "{refused:?}"
+    );
 }
 
 #[test]
@@ -1048,7 +1049,11 @@ fn a_non_finite_f32_is_refused_too() {
             taken.push(format!("{v}"));
         }
     }
-    assert!(taken.is_empty(), "taken and unreadable: {}", taken.join(", "));
+    assert!(
+        taken.is_empty(),
+        "taken and unreadable: {}",
+        taken.join(", ")
+    );
 }
 
 /// A struct with a non-finite field, which is how one actually reaches a store.
@@ -1165,9 +1170,7 @@ fn a_namespace_can_be_returned_to_fresh_after_a_reopen() {
     }
     {
         let store = opened(file.path());
-        store
-            .set_initialized(&ns("cfg"), InitState::Fresh)
-            .unwrap();
+        store.set_initialized(&ns("cfg"), InitState::Fresh).unwrap();
         store.save_now().unwrap();
     }
     let store = opened(file.path());

@@ -22,8 +22,8 @@ fn a_store_opens_at_the_path_it_is_given() -> Result<(), Box<dyn Error + Send + 
 
 #[cfg(feature = "json")]
 #[test]
-fn the_engine_names_the_file_when_the_caller_does_not()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_engine_names_the_file_when_the_caller_does_not() -> Result<(), Box<dyn Error + Send + Sync>>
+{
     let dir = TempPath::new("book_store_extension");
     std::fs::create_dir_all(dir.path())?;
     let config_dir = dir.path();
@@ -78,8 +78,8 @@ fn the_three_places_a_location_can_name() -> Result<(), Box<dyn Error + Send + S
     //@show letting the platform say where the file goes
     let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?.build()?;
 
-    let named = StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?
-        .build()?;
+    let named =
+        StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?.build()?;
 
     let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
     //@show-end

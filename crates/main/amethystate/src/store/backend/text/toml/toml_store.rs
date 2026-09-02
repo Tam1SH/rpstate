@@ -2,6 +2,7 @@ use super::toml_doc::TomlDocument;
 use crate::migration::set::MigrationSet;
 use crate::store::backend::text::store::TextStore;
 use crate::store::config::StoreConfig;
+use crate::store::traits::StoreLayout;
 use crate::store::{StoreBackend, StoreCallback, SubscriptionId, SubscriptionKind};
 use crate::{MigrationReport, StorageResult};
 use amethystate_core::path::StorePath;
@@ -79,7 +80,12 @@ impl StoreBackend for TomlStore {
         self.0.scan_prefix(prefix)
     }
 
-    fn files_layout(&self) -> Option<crate::store::traits::StoreLayout> {
+    #[cfg(feature = "test-utils")]
+    fn format_record(&self) -> Option<&dyn crate::store::format::TestFormatRecord> {
+        Some(&self.0)
+    }
+
+    fn files_layout(&self) -> Option<StoreLayout> {
         self.0.files_layout()
     }
 

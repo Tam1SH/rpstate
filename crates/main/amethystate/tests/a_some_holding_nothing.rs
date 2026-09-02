@@ -6,7 +6,10 @@ use amethystate_core::test_utils::TempPath;
 mod common;
 
 fn store_on(backend: amethystate::store::builder::Backend, at: &TempPath) -> amethystate::Store {
-    StoreBuilder::new(at.path()).backend(backend).build().unwrap()
+    StoreBuilder::new(at.path())
+        .backend(backend)
+        .build()
+        .unwrap()
 }
 
 #[test]

@@ -202,6 +202,16 @@ pub trait StoreBackend: Send + Sync + 'static {
         None
     }
 
+    /// The format record, for a test that wants to see or forge one.
+    ///
+    /// Absent from a build without `test-utils`: the write half can make a
+    /// store unopenable, and an open is its only honest caller. What the open
+    /// uses is `format::FormatRecord`, which is crate-private.
+    #[cfg(feature = "test-utils")]
+    fn format_record(&self) -> Option<&dyn crate::store::format::TestFormatRecord> {
+        None
+    }
+
     /// Writes everything buffered and says whether it landed.
     ///
     /// This is the fallible half of dropping the store, and the point of

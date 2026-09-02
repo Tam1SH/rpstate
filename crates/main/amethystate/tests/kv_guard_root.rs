@@ -1,8 +1,8 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_test_macros::backends;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use amethystate_test_macros::backends;
 
 mod common;
 use common::shape;

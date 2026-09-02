@@ -12,11 +12,44 @@ the two must not become one.
 
 ---
 
-## 1. What is recorded
+## 1. Two layers, and only one of them moves
 
-Two things, and they answer different questions.
+The set of facts describing how the data was written has to be read before the
+data can be. So it cannot be described by itself, and something has to be true
+without being recorded anywhere.
 
-### 1.1 A set of facts about how the bytes were written
+That something is the meta layer's **addressing**, and it is frozen.
+
+| | what | moves |
+| --- | --- | --- |
+| addressing of the meta | separator `.`, escape `\`, flat keys, one record is one value | never |
+| inside a record | `SchemaSnapshot`, the `StoredShape` tree, whatever a record says about the application's data | freely, additively |
+| the data | `codec.*`, `path.*`, `layout` | freely, each change named by a fact |
+
+This is the shape ext4 gives its superblock and ZFS its uberblock: an outer
+record that never changes, so that it can describe an inner one that does.
+
+**The freeze costs nothing today, because it names what is already true.**
+`meta_key` joins once and stores the result whole, and the reason is already
+written down beside it - *this file cannot be laid out by a rule that has to be
+read out of it*. redb and sqlite hold their bookkeeping in a table keyed by
+`&str`, which is the same flatness by another route.
+
+**It is addressing that is frozen, not content.** `StoredShape` already carries
+a `children` tree, and that nesting is inside a serialized value rather than in
+the key space, so no reader has to know `path.sep` to walk it. Everything the
+meta says about the application's data can grow this way - `Role` settling into
+`StoredShape` is a new field with `#[serde(default)]`, not a break.
+
+**What the freeze does forbid** is a nested meta key space, another separator,
+another escape, and another encoding for a record. Those four are permanent, and
+they are permanent deliberately: they are the part we control completely.
+
+---
+
+## 2. What is recorded
+
+### 2.1 A set of facts about how the bytes were written
 
 Not a version. What is unrecorded today is not one thing that moves together; it
 is a handful of independent settings on separate schedules, and a single number
@@ -29,11 +62,36 @@ cannot say which of them moved.
 | `codec.bytes` | `bin` | a byte vector will not read as a sequence |
 | `path.sep` | `.` | every key renamed |
 | `path.escape` | `\` | every key renamed |
-| `layout` | `nested` for data, `flat` for the meta sidecar | the document is walked by the wrong rule |
-| `init.marker` | `__init::` on flat engines, `__init.` on text | seeding markers lost, and defaults land on top of the user's data |
+| `layout` | `nested`, for the data | the document is walked by the wrong rule |
 
-Three of the seven already take different values in one tree. This is not
+The floor an engine has to meet is not on this list. It is a fact by the
+definition in §5 - it changes who can open the file - but it is not in the set,
+because the set cannot be read early enough to be of use: the failure it warns
+about is the one sqlite reports as a corrupt schema, from behind the door the
+record sits inside. It lives in sqlite's `user_version` instead, and a copy of
+it here would be the second record of one truth §5 forbids.
+
+The initialization marker was on this list, at `__init::` on the flat engines
+and `__init.` on the text ones, and a silent change to it loses the seeding
+markers and lands defaults on top of the user's data. It is not on it any more,
+because the difference was in the spelling and not in anything a reader needs
+told: the kind is `init` everywhere now, and how a kind is joined to a path is
+the meta addressing §1 froze. A fact every writer emits at one value is not a
+fact - §7, promotion, applied before the set was ever written.
+
+The join still differs - `::` on the flat engines, a `StorePath` join on the
+text ones - and nothing depends on it either way: these keys are built and
+looked up whole, never split back into a kind and a path. Worth keeping as it
+is for what it would buy if something ever did split them, since a namespace
+with a dot in it makes `init.ui.panels` three readings and `init::ui.panels`
+one.
+
+Three of the six already take different values in one tree. This is not
 provision for the future; it is the present, undescribed.
+
+`layout` describes the data only. The meta's own layout is not here, because §1
+froze it - a fact that has to be read to find out how to read the record it sits
+in is not a fact.
 
 **Every fact is written from the first release that writes facts at all**, at its
 current value, even where nothing varies yet. A fact that first appears on the
@@ -47,20 +105,88 @@ use `codec.struct`" is indistinguishable from "this file predates facts".
 **Sub-facts are scoped by their parent's value.** `codec.struct` and
 `codec.bytes` mean something only when `codec` is `msgpack`.
 
-### 1.2 A current/compatible pair for the shape of the bookkeeping records
+### 2.2 Where the set lives
 
-`PrefixMeta`, `SchemaSnapshot`, `Vec<AppliedStep>`. These evolve the way an
-application schema evolves - almost always by adding a field - and for that a
-number plus a floor is a better fit than a set of facts, and much harder to get
-wrong.
+As an ordinary meta record, on all three engines, addressed by the frozen rule
+of §1. No engine header, no `application_id`, no `user_version`, no slot inside
+redb's transaction block.
 
-One pair for the meta layer, not one per record. The three are read by
-substantially the same code; split them only if they turn out to move on
-different schedules.
+That answers the difficulty §5 raises about uneven ground. The ground is
+only uneven if the set has to sit in what each engine reserves for itself. Every
+engine here already has a meta layer of our own making, and all three are flat
+and keyed by strings.
+
+The dotted names above are keys *inside* the record, not paths in the store. A
+fact called `path.sep` addressed as a store path would have to be found using
+the separator it describes; as a field of one serialized value it is just a
+name, and the circle does not close.
+
+**One fact is not in the set, and is the exception to "no engine header": the
+floor.** A fact only works if it can be read before the thing it warns about
+goes wrong, and this one cannot be: our record sits inside the database whose
+schema is exactly what an old sqlite fails to parse, so the warning would be
+behind the door it was meant to keep shut.
+
+It goes to `PRAGMA user_version` instead, which is in the header and readable
+before any schema is. It holds the number sqlite gives its own versions -
+`major * 1000000 + minor * 1000 + patch`, the same shape
+`sqlite3_libversion_number()` returns - so the comparison is one integer against
+another with nothing parsed. §7 calls the move compatibility by construction:
+put the thing where a reader that knows nothing can still reach it.
+
+Only sqlite has a floor to record. redb refuses on its own format byte and says
+so, and the text engines have no such version to be too old. So this is one
+number in one header rather than a fact with three values, and duplicating it
+into the set would buy nothing and leave two copies to drift.
+
+**It leaves a question this document does not settle.** A `user_version` read
+out of a stranger's sqlite file is some other tool's number, and nothing in the
+header says the file is ours. `application_id` is the slot that would say so.
+Claiming it is cheap and §8 warns against claiming names without a reason; this
+may be a reason.
+
+### 2.3 How the meta records evolve
+
+Not by a version pair. §8 argues that a number is as forgettable as a fact, and
+a current/compatible pair for the meta layer would be exactly such a number,
+introduced by the same document that distrusts them.
+
+What replaces it is a discipline that serde already half-enforces:
+
+- **A meta record only ever grows.** No field is removed.
+- **Every field added after the first release carries `#[serde(default)]`.** An
+  older record then reads on a newer build.
+- **A field is never retyped or repurposed under its own name.** A new meaning
+  gets a new name, because a reader cannot tell a repurposed field from a
+  correct one.
+- **A change that breaks any of the three is a fact in §2.1**, not a version.
+
+The first direction already works by construction: no record sets
+`deny_unknown_fields`, so a newer record reads on an older build. The second
+does not - `#[serde(default)]` appears once, on `StoredShape::children`, and
+`AppliedStep`, `SchemaSnapshot` and `PrefixMeta` have required fields
+throughout. Additivity holds today only because nothing has been added yet.
+
+### 2.4 Still open
+
+The questions this document does not answer, all of which have to be
+settled before anything writes a fact, because §8 makes a written name
+permanent.
+
+- **What the record is called** and what its scope is. The existing kinds -
+  `meta`, `schema`, `log`, `__init` - are per-prefix. The set is per-store, so
+  it is the first record with no prefix under it.
+- **Whether the record's presence is the marker**, or a marker lives inside it.
+  Presence is enough unless an empty record is reachable.
+- **The form of a value.** Strings read in a document a person opens; numbers do
+  not.
+- **The spelling of the six names**, which is the part §8 makes permanent.
+- **Whether `application_id` is claimed**, so that a `user_version` we read is
+  known to be ours. See §2.2.
 
 ---
 
-## 2. Reading
+## 3. Reading
 
 A build meeting a store does exactly one of these, and never anything else:
 
@@ -78,7 +204,7 @@ A build meeting a store does exactly one of these, and never anything else:
 was written by something newer; a set missing facts this build knows how to
 write means it is older.
 
-## 3. Writing
+## 4. Writing
 
 - **What a build does not understand survives its writes.** Unknown facts,
   unknown keys, unknown tables. This already holds by construction - the text
@@ -94,7 +220,7 @@ write means it is older.
   enable-time initialisation - and without it a fact recorded ahead of the bytes
   it describes is a lie.
 
-## 3.5 Facts belong to whoever owns the bytes
+## 5. Facts belong to whoever owns the bytes
 
 A fact is ours only where nothing beneath us records it.
 
@@ -105,13 +231,14 @@ A fact is ours only where nothing beneath us records it.
 | `codec.*`, `path.*`, `layout` | **us** | **nowhere** |
 
 Putting WAL into our set would be a second record of one truth, free to drift
-from the first. Our facts pass the test: nothing below knows that a struct was
-written with `with_struct_map`.
+from the first. The same goes for redb's file format version: redb records it,
+redb refuses on it, and a copy of it here could only ever disagree. Our facts
+pass the test - nothing below knows that a struct was written with
+`with_struct_map`.
 
-The ground beneath is not level. SQLite records its own facts *and* leaves us
-two free slots (`application_id`, `user_version`). redb records its format
-version but leaves no room in a header that is fully spoken for. The text
-engines record nothing about anything. The same set has to sit on all three.
+Which engine version wrote a file is a different thing and not a deciding fact.
+It decides nothing, it duplicates nothing, and it is worth having for a bug
+report, so it belongs in the additive namespace of §7 rather than in `codec.*`.
 
 **But a floor we impose on an engine is ours, and it is recorded nowhere.**
 `PRAGMA journal_mode = WAL` raises bytes 18/19 to 2, so these files already do
@@ -122,16 +249,33 @@ bytes 18/19 at all, because that change is one of the ones SQLite never gave a
 name - and a file using it reports `malformed database schema` on an older
 build. Inheriting that failure is a choice we would be making silently.
 
-So each backend states the oldest version of its dependency that can still open
-what we write, in this document, with a test. It is the same current/compatible
-pair as §1.2, pointed at what we depend on rather than at what we write.
+So the floor is a fact by the definition below - it changes who can open the
+file - and it is not a second record of anything: sqlite's bytes 18/19 carry
+*sqlite's* minimum from WAL, and ours carries the one our own decisions add up
+to, including the ones sqlite never named.
+
+It is recorded, and it is not in the set. Where the two engines differ is not
+whether they leave us a slot but what they do when they refuse: redb refuses on
+its own format byte and says so, and our floor coincides with its, because
+nothing we enable moves compatibility past that byte. sqlite refuses on a schema
+it cannot parse, with a message about corruption, which is why §2.2 sends its
+floor to `user_version` - where it can be read in time.
+
+sqlite's floor is measured and recorded: 3.7.0, where `journal_mode = WAL`
+arrived, written to `user_version` on open and read back before any statement
+that would parse the schema. Nobody has checked whether anything since has
+raised it.
+
+**redb and the text engines have no measured floor.** redb is pinned at `4.0`
+and resolves to 4.1.0 with nothing asking it for a format version. Measuring
+those two, and pinning each with a test, is work this document does not do.
 
 **And what distinguishes a fact from a setting:** a fact changes how bytes
 already written read back, or who can open the file. `synchronous = NORMAL` is
 configuration - it changes durability and speed and nothing about readability.
 `journal_mode = WAL` is not.
 
-## 4. Not promised
+## 6. Not promised
 
 - That any build reads any file. Only that it says which fact stopped it.
 - That a store moves between engines.
@@ -144,7 +288,7 @@ configuration - it changes durability and speed and nothing about readability.
 
 ---
 
-## 5. Room to manoeuvre
+## 7. Room to manoeuvre
 
 Which moves stay available once the contract is in force.
 
@@ -176,9 +320,15 @@ carry - an undeclared nested subtree that could be either a key holding an
 object or a path to a value - a migration would be guessing, and guessing in a
 store is silent corruption. A converter has somewhere to ask.
 
+That case is not hypothetical and it is not only about conversion. A document
+engine cannot tell a value that is itself a map from a level with values under
+it, which is why `scan_prefix_impl` stops one level below its prefix and guesses.
+`Role` answers it for declared paths once it reaches the meta; nothing answers
+it for what `Kv` writes outside a schema.
+
 ---
 
-## 6. What forecloses a move
+## 8. What forecloses a move
 
 **A loosening, once granted, is permanent.** git honoured `extensions.*` at
 repository format version 0 before deciding it should not have, and the fix
@@ -196,18 +346,20 @@ it forever.
 
 **A change you did not record is a change you cannot detect later.** This is the
 current state, generalised. A number is as forgettable as a fact - Room added an
-identity hash precisely because developers forget to bump the version. What
-catches it is byte fixtures of each old format in the repository with a test
-that opens them, and, more cheaply, a debug-mode check that the bytes a build
-produces agree with the facts it recorded. Vulkan's answer to the same problem
-is a validation layer.
+identity hash precisely because developers forget to bump the version. Catching
+it is a testing problem and is settled there, not here: fixtures of each old
+format with a test that opens them, and a debug-mode check that the bytes a
+build produces agree with the facts it recorded. Vulkan's answer to the same
+problem is a validation layer.
 
-**Shipping the marker with the break spends the one free move.** The absence of
-the whole set has exactly one honest meaning: written before the set existed.
-That works once. Cargo is the worked example - cargo before 1.47 ignored the
+**The clock starts at the first release someone depends on.** The absence of the
+whole set has exactly one honest meaning - written before the set existed - and
+that works once. Cargo is the worked example: cargo before 1.47 ignored the
 top-level `version` in `Cargo.lock` entirely, so the marker added when it was
 needed did not protect the versions it was meant to protect. **The set has to
-land before the break, not with it.**
+land before the break, not with it** - but "the break" means a break someone's
+files live through, and today there are none. Until facts ship, deleting the
+store is still the answer, and breaking is free.
 
 **Freezing the format is a real option with a real price.** SQLite has not
 changed its file format since 2004 and got a universal interchange format for
@@ -216,9 +368,13 @@ exists, and what does not fit is diagnosed by a parser error that lies about the
 cause: a perfectly intact database reports `malformed database schema`. **The
 quality of an error is a function of whether the change was given a name.**
 
+§1 takes this price deliberately, and only for the meta's addressing, where the
+surface is four constants we control and the alternative is a set of facts that
+cannot be read without itself.
+
 ---
 
-## 7. Deferred, with the cost counted
+## 9. Deferred, with the cost counted
 
 **Read-only compatibility.** The third outcome between "works" and "refuses" -
 an older build that can still read the user's settings, so the application

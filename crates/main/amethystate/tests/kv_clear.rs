@@ -6,9 +6,9 @@
 
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_test_macros::backends;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "app")]
 pub struct App {
@@ -137,10 +137,7 @@ fn resetting_puts_the_declared_defaults_back_on_the_next_build(backend: Backend)
     let path = unique_path("kv_reset");
 
     {
-        let store = StoreBuilder::new(&path)
-            .backend(backend)
-            .build()
-            .unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let app = App::new_with(&store).unwrap();
         app.width().set(640).unwrap();
         app.panel().visible().set(false).unwrap();
@@ -149,19 +146,13 @@ fn resetting_puts_the_declared_defaults_back_on_the_next_build(backend: Backend)
     }
 
     {
-        let store = StoreBuilder::new(&path)
-            .backend(backend)
-            .build()
-            .unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let cleared = store.kv().namespace("app").reset_to_defaults().unwrap();
         assert!(!cleared.removed.is_empty(), "nothing was reset");
         store.save_now().unwrap();
     }
 
-    let store = StoreBuilder::new(&path)
-        .backend(backend)
-        .build()
-        .unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let app = App::new_with(&store).unwrap();
 
     assert_eq!(app.width().get(), 1280, "the default did not come back");

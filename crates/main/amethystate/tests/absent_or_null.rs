@@ -82,7 +82,8 @@ fn what_a_document_holds_for_nothing() -> Result<(), Box<dyn Error + Send + Sync
         ]);
 
         assert_ne!(
-            with_value, with_nothing,
+            with_value,
+            with_nothing,
             "on {}: a value and its absence must not write the same document",
             backend.extension()
         );

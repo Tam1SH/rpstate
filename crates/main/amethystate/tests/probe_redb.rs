@@ -1849,9 +1849,10 @@ fn a_migration_scans_past_the_level_boundary_and_then_refuses_what_it_found() {
         1,
         "the migration did not run, or ran without writing"
     );
-    assert_eq!(cfg.routes().keys().collect::<Vec<_>>(), vec![
-        "a".to_string()
-    ]);
+    assert_eq!(
+        cfg.routes().keys().collect::<Vec<_>>(),
+        vec!["a".to_string()]
+    );
     assert_eq!(
         cfg.routes_v2().keys().collect::<Vec<_>>(),
         vec!["b".to_string()],

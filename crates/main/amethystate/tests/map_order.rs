@@ -10,10 +10,7 @@ pub struct Cfg {
 }
 
 fn seeded(backend: Backend, path: &std::path::Path) -> (amethystate::Store, Cfg) {
-    let store = StoreBuilder::new(path)
-        .backend(backend)
-        .build()
-        .unwrap();
+    let store = StoreBuilder::new(path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
     for k in ["zulu", "alpha", "mike", "bravo", "delta"] {

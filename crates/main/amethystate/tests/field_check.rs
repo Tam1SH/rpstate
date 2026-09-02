@@ -25,7 +25,9 @@ fn a_theme_that_is_installed(theme: &String, cx: &CheckContext) -> Result<(), In
     if installed.0.contains(&theme.as_str()) {
         Ok(())
     } else {
-        Err(Invalid::new(format!("no theme called {theme} is installed")))
+        Err(Invalid::new(format!(
+            "no theme called {theme} is installed"
+        )))
     }
 }
 
@@ -81,8 +83,7 @@ fn a_value_the_check_refuses_does_not_open_a_strict_struct()
 }
 
 #[test]
-fn a_refused_open_hands_over_the_path_and_the_reason()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_refused_open_hands_over_the_path_and_the_reason() -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("field_check_matched");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -211,8 +212,7 @@ fn a_theme_the_application_does_not_have_is_refused() -> Result<(), Box<dyn Erro
 }
 
 #[test]
-fn a_check_whose_input_nobody_gave_refuses_the_value()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_check_whose_input_nobody_gave_refuses_the_value() -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = TempPath::new("field_check_no_context");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -312,8 +312,8 @@ fn an_edit_from_outside_the_check_accepts_arrives() -> Result<(), Box<dyn Error 
 }
 
 #[test]
-fn a_store_that_agrees_with_every_check_opens_quietly()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_store_that_agrees_with_every_check_opens_quietly() -> Result<(), Box<dyn Error + Send + Sync>>
+{
     let path = TempPath::new("field_check_ordinary");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 

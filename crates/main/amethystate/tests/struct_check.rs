@@ -1,7 +1,7 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::{AmeData, amethystate};
 use amethystate::store::facts::{Refused, all};
 use amethystate::store::{CheckContext, Invalid};
+use amethystate::{AmeData, amethystate};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
@@ -13,8 +13,7 @@ fn the_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest")
-            .at(&["min", "max"]))
+        Err(Invalid::new("the smallest window is wider than the largest").at(&["min", "max"]))
     }
 }
 
@@ -42,7 +41,9 @@ fn the_strict_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest"))
+        Err(Invalid::new(
+            "the smallest window is wider than the largest",
+        ))
     }
 }
 
@@ -198,7 +199,9 @@ fn the_kept_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest"))
+        Err(Invalid::new(
+            "the smallest window is wider than the largest",
+        ))
     }
 }
 //@show-end
@@ -262,7 +265,9 @@ fn the_lenient_kept_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest"))
+        Err(Invalid::new(
+            "the smallest window is wider than the largest",
+        ))
     }
 }
 
@@ -298,7 +303,9 @@ fn the_either_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest"))
+        Err(Invalid::new(
+            "the smallest window is wider than the largest",
+        ))
     }
 }
 

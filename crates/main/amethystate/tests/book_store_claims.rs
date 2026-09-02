@@ -40,8 +40,8 @@ fn the_second_claim_on_one_place_is_refused(
     //@show what the refusal looks like
     let _ui = Ui::new_with(&store)?;
 
-    let refused = Panels::new_with(&store)
-        .expect_err("`ui.panels.left.visible` is spelled by both of them");
+    let refused =
+        Panels::new_with(&store).expect_err("`ui.panels.left.visible` is spelled by both of them");
 
     assert_eq!(refused.current_context(), &StorageError::Claimed);
 

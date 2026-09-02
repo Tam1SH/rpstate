@@ -174,10 +174,7 @@ mod tests {
 
     #[test]
     fn stopping_an_idle_thread_ends_it() {
-        assert_eq!(
-            stepping_over(State::Idle, &[Trigger::Stop]),
-            State::Stopped
-        );
+        assert_eq!(stepping_over(State::Idle, &[Trigger::Stop]), State::Stopped);
     }
 
     #[test]
@@ -248,7 +245,11 @@ mod tests {
     fn a_stopped_thread_stays_stopped_and_runs_nothing() {
         let mut work = Work::answering(Next::Wake);
         assert_eq!(
-            step(State::Stopped, &[Trigger::Schedule, Trigger::Now], &mut work),
+            step(
+                State::Stopped,
+                &[Trigger::Schedule, Trigger::Now],
+                &mut work
+            ),
             State::Stopped
         );
         assert_eq!(work.runs, 0);

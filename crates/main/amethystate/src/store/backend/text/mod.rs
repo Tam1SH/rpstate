@@ -64,9 +64,7 @@ macro_rules! define_store_test_suite {
                 let (tx, rx) = std::sync::mpsc::channel::<StoreEvent>();
 
                 store.subscribe(
-                    SubscriptionKind::ExactPath(StorePath::from_segments([
-                        "ui", "theme", "dark",
-                    ])),
+                    SubscriptionKind::ExactPath(StorePath::from_segments(["ui", "theme", "dark"])),
                     Arc::new(move |evt| {
                         let _ = tx.send(evt.clone());
                     }),
@@ -94,9 +92,7 @@ macro_rules! define_store_test_suite {
                 let (tx, rx) = std::sync::mpsc::channel::<StoreEvent>();
 
                 store.subscribe(
-                    SubscriptionKind::ExactPath(StorePath::from_segments([
-                        "ui", "theme", "dark",
-                    ])),
+                    SubscriptionKind::ExactPath(StorePath::from_segments(["ui", "theme", "dark"])),
                     Arc::new(move |evt| {
                         let _ = tx.send(evt.clone());
                     }),
@@ -105,7 +101,9 @@ macro_rules! define_store_test_suite {
                 std::fs::write(&path, $watch_delete_empty).expect("updated file should be written");
                 store.0.inner.pull_external_changes();
 
-                let event = rx.try_recv().expect("the reread should emit a delete event");
+                let event = rx
+                    .try_recv()
+                    .expect("the reread should emit a delete event");
 
                 assert_eq!(event.path.as_str(), "ui.theme.dark");
                 assert_eq!(event.op, StoreOp::Delete);

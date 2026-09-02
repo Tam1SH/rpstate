@@ -12,8 +12,9 @@ use tables::{TABLE_DATA, TABLE_DIFF_LOG, TABLE_META, TABLE_MIGRATION_LOG};
 
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
-use crate::store::screening::Screening;
 use crate::store::facts::{Facts, Key, StoreFile};
+use crate::store::format::{self, StorageFactSet};
+use crate::store::screening::Screening;
 use crate::{
     MigrationReport,
     store::error::{StorageError, StorageResult},
@@ -25,9 +26,9 @@ use crate::migration::set::MigrationSet;
 use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
+use crate::store::debouncer::Debouncer;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
-use crate::store::debouncer::Debouncer;
 use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
 use rmp_serde::config::BytesMode;
@@ -256,7 +257,10 @@ impl RedbStoreInner {
     fn read_data(
         &self,
         what: StorageError,
-    ) -> StorageResult<(redb::ReadTransaction, ReadOnlyTable<&'static str, &'static [u8]>)> {
+    ) -> StorageResult<(
+        redb::ReadTransaction,
+        ReadOnlyTable<&'static str, &'static [u8]>,
+    )> {
         let txn = self
             .db()?
             .begin_read()
@@ -422,6 +426,10 @@ impl RedbStore {
         });
 
         let store = Self { inner };
+        format::settle(&store, Backend::Redb)
+            .attach_store_file(&store.inner.path)
+            .attach("opening the store")?;
+
         let report = store
             .run_migrations(migration_set)
             .attach_store_file(&store.inner.path)
@@ -645,6 +653,11 @@ impl StoreBackend for RedbStore {
         self.inner.parallel_reads
     }
 
+    #[cfg(feature = "test-utils")]
+    fn format_record(&self) -> Option<&dyn crate::store::format::TestFormatRecord> {
+        Some(self)
+    }
+
     fn files_layout(&self) -> Option<StoreLayout> {
         Some(StoreLayout::Single {
             data: self.inner.path.to_path_buf(),
@@ -668,7 +681,10 @@ impl StoreBackend for RedbStore {
 
         let mut committed: Vec<(StorePath, Vec<u8>)> = Vec::new();
 
-        let (_txn, table) = self.inner.read_data(StorageError::Scan).attach_prefix(prefix)?;
+        let (_txn, table) = self
+            .inner
+            .read_data(StorageError::Scan)
+            .attach_prefix(prefix)?;
 
         let range = subtree.prefix()..;
         let entries = table
@@ -723,7 +739,10 @@ impl StoreBackend for RedbStore {
         };
         buffered.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        let (_txn, table) = self.inner.read_data(StorageError::Scan).attach_prefix(prefix)?;
+        let (_txn, table) = self
+            .inner
+            .read_data(StorageError::Scan)
+            .attach_prefix(prefix)?;
         let entries = table
             .range(subtree.prefix()..)
             .doing(StorageError::Scan, &self.inner.path)
@@ -1400,5 +1419,57 @@ mod tests {
             logs_contain("the store's closing flush failed"),
             "a store that could not write on the way out said nothing"
         );
+    }
+}
+
+impl format::FormatRecord for RedbStore {
+    fn format_facts(&self) -> StorageResult<Option<StorageFactSet>> {
+        let read_txn = self
+            .inner
+            .db()?
+            .begin_read()
+            .doing(StorageError::Meta, &self.inner.path)?;
+        let table = read_txn
+            .open_table(TABLE_META)
+            .doing(StorageError::Meta, &self.inner.path)
+            .attach_table(TABLE_META.name())?;
+
+        let Some(found) = table
+            .get(format::RECORD)
+            .doing(StorageError::Meta, &self.inner.path)
+            .attach_meta_node(format::RECORD)?
+        else {
+            return Ok(None);
+        };
+
+        rmp_serde::from_slice(found.value())
+            .change_context(StorageError::Meta)
+            .attach_meta_node(format::RECORD)
+            .map(Some)
+    }
+
+    fn set_format_facts(&self, facts: &StorageFactSet) -> StorageResult<()> {
+        let bytes = rmp_serde::to_vec_named(facts)
+            .change_context(StorageError::Meta)
+            .attach_meta_node(format::RECORD)?;
+
+        let write_txn = self
+            .inner
+            .db()?
+            .begin_write()
+            .doing(StorageError::Meta, &self.inner.path)?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE_META)
+                .doing(StorageError::Meta, &self.inner.path)
+                .attach_table(TABLE_META.name())?;
+            table
+                .insert(format::RECORD, bytes.as_slice())
+                .doing(StorageError::Meta, &self.inner.path)
+                .attach_meta_node(format::RECORD)?;
+        }
+        write_txn
+            .commit()
+            .doing(StorageError::Meta, &self.inner.path)
     }
 }

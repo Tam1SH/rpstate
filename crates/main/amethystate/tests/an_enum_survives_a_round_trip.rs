@@ -1,8 +1,8 @@
 #[cfg(feature = "ron")]
 use amethystate::store::StorageError;
-use amethystate::store::builder::StoreBuilder;
 #[cfg(feature = "ron")]
 use amethystate::store::builder::Backend;
+use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::TempPath;
 use serde::{Deserialize, Serialize};
 

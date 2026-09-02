@@ -78,7 +78,7 @@ etcetera.workspace = true
 uuid = { workspace = true, features = [ "v4", "js", "serde"] }
 
 [dev-dependencies]
-amethystate = { path = ".", features = ["redb", "sqlite", "json", "toml", "ron"] }
+amethystate = { path = ".", features = ["redb", "sqlite", "json", "toml", "ron", "test-utils"] }
 amethystate-test-macros = { path = "../../test/amethystate-test-macros" }
 insta.workspace = true
 serde_json = { workspace = true }

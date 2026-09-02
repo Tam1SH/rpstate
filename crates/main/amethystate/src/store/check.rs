@@ -76,7 +76,8 @@ impl CheckContext {
     }
 
     fn on_offer(&self) -> String {
-        let mut names: Vec<&'static str> = self.values.values().map(|held| held.type_name).collect();
+        let mut names: Vec<&'static str> =
+            self.values.values().map(|held| held.type_name).collect();
         names.sort_unstable();
 
         if names.is_empty() {

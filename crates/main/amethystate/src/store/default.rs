@@ -17,6 +17,7 @@ pub use backend::text::RonStore;
 
 use crate::MigrationReport;
 use crate::store::config::StoreConfig;
+use crate::store::traits::StoreLayout;
 use crate::store::{
     InitState, StorageResult, StoreBackend, StoreCallback, StoreExt, SubscriptionId, to_path,
 };
@@ -300,9 +301,15 @@ impl StoreBackend for Store {
     fn parallel_reads(&self) -> bool {
         self.backend.parallel_reads()
     }
-    fn files_layout(&self) -> Option<crate::store::traits::StoreLayout> {
+    fn files_layout(&self) -> Option<StoreLayout> {
         self.backend.files_layout()
     }
+
+    #[cfg(feature = "test-utils")]
+    fn format_record(&self) -> Option<&dyn crate::store::format::TestFormatRecord> {
+        self.backend.format_record()
+    }
+
     fn save_now(&self) -> StorageResult<()> {
         self.backend.save_now()
     }

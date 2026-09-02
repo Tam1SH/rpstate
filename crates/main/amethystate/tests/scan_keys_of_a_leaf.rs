@@ -76,4 +76,3 @@ fn a_path_that_is_not_there_has_no_members(backend: Backend) {
         "a path nobody wrote has no subtree, not even itself"
     );
 }
-

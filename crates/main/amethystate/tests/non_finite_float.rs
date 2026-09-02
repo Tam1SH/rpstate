@@ -26,9 +26,9 @@
 use amethystate::amethystate;
 #[cfg(feature = "json")]
 use amethystate::store::StorageError;
-use amethystate::store::builder::StoreBuilder;
 #[cfg(any(feature = "json", feature = "sqlite"))]
 use amethystate::store::builder::Backend;
+use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 

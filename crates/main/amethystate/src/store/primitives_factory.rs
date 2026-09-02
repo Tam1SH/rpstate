@@ -366,9 +366,7 @@ where
     if store.parallel_reads() {
         use rayon::prelude::*;
 
-        let scanned = store
-            .scan_prefix(path)
-            .attach_prefix(path)?;
+        let scanned = store.scan_prefix(path).attach_prefix(path)?;
 
         if scanned.len() >= PARALLEL_MIN_LEN {
             let decoded: Vec<(K, V)> = scanned

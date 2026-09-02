@@ -98,12 +98,24 @@ macro_rules! durability_across_a_crash {
     };
 }
 
-durability_across_a_crash!("redb", a_durable_write_survives_a_crash_on_redb, Backend::Redb);
+durability_across_a_crash!(
+    "redb",
+    a_durable_write_survives_a_crash_on_redb,
+    Backend::Redb
+);
 durability_across_a_crash!(
     "sqlite",
     a_durable_write_survives_a_crash_on_sqlite,
     Backend::Sqlite
 );
-durability_across_a_crash!("json", a_durable_write_survives_a_crash_on_json, Backend::Json);
-durability_across_a_crash!("toml", a_durable_write_survives_a_crash_on_toml, Backend::Toml);
+durability_across_a_crash!(
+    "json",
+    a_durable_write_survives_a_crash_on_json,
+    Backend::Json
+);
+durability_across_a_crash!(
+    "toml",
+    a_durable_write_survives_a_crash_on_toml,
+    Backend::Toml
+);
 durability_across_a_crash!("ron", a_durable_write_survives_a_crash_on_ron, Backend::Ron);

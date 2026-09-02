@@ -1,8 +1,8 @@
 use crate::SubscriptionKind;
+use crate::store::debouncer::Debouncer;
 use crate::store::durable::PersistHealth;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::Facts;
-use crate::store::debouncer::Debouncer;
 use crate::store::{StoreEvent, SubscriptionEntry};
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
@@ -120,11 +120,17 @@ pub fn stored_path(key: &str) -> StorageResult<StorePath> {
         .attach("the store holds a key this library could not have written")
 }
 
-/// The key a namespace's initialization marker is stored under, in the same
-/// table as data - redb and sqlite keep no table of their own for it.
+/// The key a namespace's initialization marker is stored under, in the
+/// bookkeeping table beside `meta`, `schema` and `log`.
+///
+/// `::` joins the kind to the path for no reason anything depends on: these
+/// keys are built and looked up whole, never split back into a kind and a
+/// path, so the separator is free. It is worth keeping only for what it would
+/// buy if something ever did split them - a namespace with a dot in it makes
+/// `init.ui.panels` three readings at once, and `::` one.
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 pub fn init_key(namespace: &str) -> String {
-    format!("__init::{namespace}")
+    format!("init::{namespace}")
 }
 
 pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent) {
@@ -359,10 +365,7 @@ mod tests {
     }
 
     fn stored(entries: &[(&str, &[u8])]) -> Vec<(StorePath, Vec<u8>)> {
-        entries
-            .iter()
-            .map(|(k, v)| (path(k), v.to_vec()))
-            .collect()
+        entries.iter().map(|(k, v)| (path(k), v.to_vec())).collect()
     }
 
     fn pending(entries: &[(&str, Option<&[u8]>)]) -> Vec<(StorePath, Option<Vec<u8>>)> {
@@ -408,10 +411,7 @@ mod tests {
         );
         assert_eq!(
             merged,
-            vec![
-                (path("a"), b"new".to_vec()),
-                (path("b"), b"kept".to_vec()),
-            ]
+            vec![(path("a"), b"new".to_vec()), (path("b"), b"kept".to_vec()),]
         );
     }
 

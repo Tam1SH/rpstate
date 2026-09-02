@@ -76,10 +76,13 @@ impl Owners {
             }
         }
 
-        claims.insert(at, Claimed {
-            path: path.clone(),
-            by,
-        });
+        claims.insert(
+            at,
+            Claimed {
+                path: path.clone(),
+                by,
+            },
+        );
         Ok(())
     }
 

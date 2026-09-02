@@ -117,7 +117,11 @@ fn a_view_dies_with_its_source_and_an_owning_cell_does_not(
 
     drop(owned);
 
-    assert_eq!(view.get(), None, "with nothing holding the field, the view is empty");
+    assert_eq!(
+        view.get(),
+        None,
+        "with nothing holding the field, the view is empty"
+    );
 
     Ok(())
 }

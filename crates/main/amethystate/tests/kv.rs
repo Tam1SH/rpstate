@@ -1,8 +1,8 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_test_macros::backends;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::unique_path;
+use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
 mod common;
@@ -169,7 +169,10 @@ fn the_same_path_cannot_be_two_types(backend: Backend) {
     let _width = kv.namespace("ui").cell("width", 800u32).unwrap();
     let err = kv.namespace("ui").cell("width", String::new()).unwrap_err();
 
-    insta::assert_snapshot!(per_engine(backend, "kv_asked_for_a_second_type"), shape(&err));
+    insta::assert_snapshot!(
+        per_engine(backend, "kv_asked_for_a_second_type"),
+        shape(&err)
+    );
 }
 
 #[backends(all)]
@@ -206,10 +209,7 @@ fn values_survive_a_reopen(backend: Backend) {
     let path = unique_path("kv_reopen");
 
     {
-        let store = StoreBuilder::new(&path)
-            .backend(backend)
-            .build()
-            .unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         store
             .kv()
             .namespace("ui")
@@ -220,10 +220,7 @@ fn values_survive_a_reopen(backend: Backend) {
         store.save_now().unwrap();
     }
 
-    let store = StoreBuilder::new(&path)
-        .backend(backend)
-        .build()
-        .unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     assert_eq!(
         store
             .kv()

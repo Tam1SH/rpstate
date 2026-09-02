@@ -81,7 +81,10 @@ fn a_closed_store_lets_the_platform_have_the_file() {
         let store = written(&removing, backend);
         store.close().unwrap();
         let removed = std::fs::remove_file(removing.path());
-        assert!(removed.is_ok(), "{backend:?} still held the file: {removed:?}");
+        assert!(
+            removed.is_ok(),
+            "{backend:?} still held the file: {removed:?}"
+        );
         drop(store);
 
         let renaming = TempPath::new("claims_closed_rename");
@@ -89,7 +92,10 @@ fn a_closed_store_lets_the_platform_have_the_file() {
         let store = written(&renaming, backend);
         store.close().unwrap();
         let renamed = std::fs::rename(renaming.path(), &beside);
-        assert!(renamed.is_ok(), "{backend:?} still held the file: {renamed:?}");
+        assert!(
+            renamed.is_ok(),
+            "{backend:?} still held the file: {renamed:?}"
+        );
         drop(store);
         let _ = std::fs::remove_file(&beside);
     }
@@ -106,7 +112,11 @@ fn a_write_after_a_close_is_refused_rather_than_lost() {
             .set(["b"], &2u8)
             .expect_err(&format!("{backend:?} took a write after close"));
 
-        assert_eq!(refused.current_context(), &StorageError::Closed, "{backend:?}");
+        assert_eq!(
+            refused.current_context(),
+            &StorageError::Closed,
+            "{backend:?}"
+        );
     }
 }
 

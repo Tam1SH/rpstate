@@ -193,7 +193,10 @@ fn a_backup_older_than_the_data_does_not_roll_the_store_back_in_silence() {
         let older = std::fs::read_to_string(&files.data).unwrap();
 
         {
-            let store = StoreBuilder::new(path.path()).backend(backend).build().unwrap();
+            let store = StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .unwrap();
             let kv = store.kv().namespace(PREFIX);
             kv.set("a", &11u32).unwrap();
             kv.set("b", &22u32).unwrap();
@@ -227,7 +230,10 @@ fn a_backup_a_refused_open_left_behind_is_not_the_truth_at_the_next_one() {
 
         std::fs::write(&files.meta, "{ this never finished").unwrap();
         assert!(
-            StoreBuilder::new(path.path()).backend(backend).build().is_err(),
+            StoreBuilder::new(path.path())
+                .backend(backend)
+                .build()
+                .is_err(),
             "on {}: unreadable bookkeeping with nothing to recover it from must not open",
             backend.extension()
         );
@@ -283,7 +289,8 @@ fn an_open_that_was_refused_leaves_nothing_of_its_own_behind() {
         drop(base);
 
         assert_eq!(
-            found, expected,
+            found,
+            expected,
             "on {}: an open that was refused left a backup beside the store; every later \
              open treats one as an unfinished previous run and recovers onto it",
             backend.extension()
@@ -327,8 +334,16 @@ fn one_buffered_write_does_not_erase_what_another_store_committed() {
         first.save_now().unwrap();
         drop(first);
 
-        let reopened = StoreBuilder::new(path.path()).backend(backend).build().unwrap();
-        let survivor = reopened.kv().namespace(PREFIX).get::<u32>("d").ok().flatten();
+        let reopened = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
+        let survivor = reopened
+            .kv()
+            .namespace(PREFIX)
+            .get::<u32>("d")
+            .ok()
+            .flatten();
         drop(reopened);
 
         assert_eq!(
@@ -352,7 +367,10 @@ fn a_flush_that_reported_failure_committed_none_of_itself() {
         let path = TempPath::new(&format!("torn_half_{}", backend.extension()));
         let files = seeded(backend, path.path(), [11, 22, 33]);
 
-        let store = StoreBuilder::new(path.path()).backend(backend).build().unwrap();
+        let store = StoreBuilder::new(path.path())
+            .backend(backend)
+            .build()
+            .unwrap();
         let before = std::fs::read_to_string(&files.data).unwrap();
 
         const FILE_SHARE_READ: u32 = 1;
@@ -375,7 +393,8 @@ fn a_flush_that_reported_failure_committed_none_of_itself() {
             backend.extension()
         );
         assert_eq!(
-            before, after,
+            before,
+            after,
             "on {}: the flush returned an error, so the caller has been told nothing landed - \
              and the data file was replaced anyway, leaving new values beside the bookkeeping \
              of the old ones",
@@ -441,7 +460,10 @@ fn a_write_killed_between_the_temporary_and_the_target_leaves_no_temporary_behin
     );
 
     let found = listing(&dir);
-    let store = StoreBuilder::new(&store_path).backend(backend).build().unwrap();
+    let store = StoreBuilder::new(&store_path)
+        .backend(backend)
+        .build()
+        .unwrap();
     let files = sidecars(&store);
     drop(store);
 
