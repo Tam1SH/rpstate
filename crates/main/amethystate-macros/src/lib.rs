@@ -45,8 +45,9 @@ mod ts_mapping;
 /// | Declaration | Path |
 /// | :--- | :--- |
 /// | `#[amethystate(prefix = "net")]`, field `port` | `net.port` |
-/// | the same, with `#[amestate(key = "listen_port")]` | `net.listen_port` |
+/// | the same, with `#[serde(rename = "listen_port")]` | `net.listen_port` |
 /// | nested struct at field `db` inside prefix `sys`, its field `host` | `sys.db.host` |
+/// | the same, with `#[serde(flatten)]` on `db` | `sys.host` |
 /// | `#[amethystate(as_root)]`, field `port` | `port` |
 ///
 /// `as_root` gives the struct no levels of its own, so a field's key is the

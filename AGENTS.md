@@ -64,6 +64,56 @@ One difference from the GitHub workflow worth knowing: that one excludes
 
 `sqlite` compiles SQLite in from source, so building it needs a C toolchain.
 
+## Working on the book
+
+The book is two locales over the same tree: English at
+`landing/src/content/docs/`, Russian under `ru/` beside it. A page added to one
+belongs in the other, and the sidebar is generated from the directory, so the
+file landing there is what puts it in the nav.
+
+**Code in the book is not written in the book.** A page asks for a block by
+name and `cargo xtask book` fills it:
+
+```markdown
+<!-- shown: a struct that says where its fields go -->
+<!-- /shown -->
+```
+
+What lands between the two comes from a test that marked the same name:
+
+```rust
+//@show a struct that says where its fields go
+...
+//@show-end
+```
+
+Marks are read from `crates/main/amethystate/tests/*.rs` — the top level only,
+not `expand/` or `fails/`. Both locales draw from one pool of names, so the
+same name gives byte-identical code on both pages: the prose is translated, the
+code cannot drift apart.
+
+`<!-- printed: <field> from <test> -->` is the other half. That one runs the
+named test and captures what it prints, so a page quoting an error message
+quotes the message the code actually produces.
+
+```bash
+cargo xtask book           # fill every block
+cargo xtask book --check   # fail instead of writing, for CI
+```
+
+It fails rather than writing when a page asks for a name no test marks, or for
+output no run produced. It also checks the identifiers the prose names against
+the sources, so a method renamed in the code is caught in the pages that still
+name the old one.
+
+`cargo xtask docs` is separate: it regenerates `Limitations/` wholesale from the
+probe tests that measure each limit. Those pages carry a header saying so — edit
+the probe, not the page.
+
+**So the workflow for changing an example is: change the test, run the test,
+run `cargo xtask book`.** Editing the fenced block in the page is wasted work;
+the next run overwrites it.
+
 ## Documentation examples
 
 Most rustdoc examples are real doctests with assertions, and they build their
@@ -89,7 +139,7 @@ compiling. Both run from `compile_tests.rs`. The `.stderr` files are
 regenerated rather than edited by hand:
 
 ```bash
-TRYBUILD=overwrite cargo test -p amethystate --test compile_tests
+TRYBUILD=overwrite cargo test -p amethystate --all-features --features golden --test compile_tests
 ```
 
 Regenerate them only after reading the diff — they are the record of the errors
@@ -100,9 +150,11 @@ declares a struct through it, so a change that matters shows up as a failure
 somewhere that means something; a snapshot of the emitted tokens only records
 that the tokens changed.
 
-The trybuild goldens quote rustc diagnostics, which qualify type paths
-differently depending on what else is in scope, so they are checked in the
-single-backend configuration only.
+The goldens are behind the `golden` feature, because trybuild compiles a crate
+per case and that one test costs more than the rest of the suite together. They
+run with every engine in scope, and have to: this crate's dev-dependency on
+itself names them all, so a test target is built with the union whatever the
+command line says.
 
 ## Releasing
 

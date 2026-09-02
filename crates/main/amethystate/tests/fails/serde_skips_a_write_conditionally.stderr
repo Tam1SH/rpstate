@@ -1,0 +1,5 @@
+error: `proxy` would be left out of the encoded value when a rule says so, and this struct has no encoded value. Left out here would mean the path is not written - so the value already at it stays, and setting `proxy` to the very thing the rule names would fail to clear it. An `Option` field is already an absence the store knows how to keep, and `on_delete` says what a path going away does
+ --> tests/fails/serde_skips_a_write_conditionally.rs:5:5
+  |
+5 |     #[serde(skip_serializing_if = "Option::is_none")]
+  |     ^

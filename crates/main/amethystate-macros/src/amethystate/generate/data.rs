@@ -58,6 +58,7 @@ pub(crate) fn data_impl(
         let type_name = quote!(#ty).to_string().replace(" ", "");
 
         if e.nested {
+            let flattened = e.flatten;
             quote! {
                 #crate_name::migration::fields::FieldDescriptor {
                     name: #fname_str,
@@ -66,6 +67,7 @@ pub(crate) fn data_impl(
                     role: #crate_name::migration::fields::Role::Node,
                     optional: false,
                     children: < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::FIELDS,
+                    flattened: #flattened,
                 }
             }
         } else if let Some((k, v)) = e.get_map_types() {
@@ -77,6 +79,7 @@ pub(crate) fn data_impl(
                     role: <#crate_name::shape::Probe<#ty>>::ROLE,
                     optional: <#crate_name::shape::Probe<#ty>>::OPTIONAL,
                     children: &[],
+                    flattened: false,
                 }
             }
         } else {
@@ -88,6 +91,7 @@ pub(crate) fn data_impl(
                     role: <#crate_name::shape::Probe<#ty>>::ROLE,
                     optional: <#crate_name::shape::Probe<#ty>>::OPTIONAL,
                     children: &[],
+                    flattened: false,
                 }
             }
         }
@@ -124,15 +128,70 @@ pub(crate) fn data_impl(
         }
     });
 
+    let flat: Vec<&&StoreFieldEntry> = p_fields.iter().filter(|e| e.flatten).collect();
+
+    let own_names: Vec<String> = p_fields
+        .iter()
+        .filter(|e| !e.flatten)
+        .map(|e| e.stored_name())
+        .collect();
+
+    let mut flatten_checks: Vec<TokenStream2> = Vec::new();
+
+    for (at, one) in flat.iter().enumerate() {
+        let held = one.ident.as_ref().unwrap();
+        let ty = &one.ty;
+
+        if !own_names.is_empty() {
+            let message = format!(
+                "`{held}` is flattened into `{name}`, so its own fields are stored at this level - and one of them is spelled the same as a field written here. Two paths cannot be the same path: rename one, or drop the flatten and let `{held}` keep its segment"
+            );
+            let names = own_names.iter().map(|n| quote!(#n));
+
+            flatten_checks.push(quote! {
+                const _: () = assert!(
+                    !#crate_name::migration::fields::brings_any(
+                        < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::FIELDS,
+                        &[#(#names),*],
+                    ),
+                    #message
+                );
+            });
+        }
+
+        for other in &flat[at + 1..] {
+            let beside = other.ident.as_ref().unwrap();
+            let other_ty = &other.ty;
+            let message = format!(
+                "`{held}` and `{beside}` are both flattened into `{name}`, and they have a field name in common. Flattened, each stores its fields at this level, so the two would write over each other"
+            );
+
+            flatten_checks.push(quote! {
+                const _: () = assert!(
+                    !#crate_name::migration::fields::overlap(
+                        < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::FIELDS,
+                        < <#other_ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::FIELDS,
+                    ),
+                    #message
+                );
+            });
+        }
+    }
+
     let load_fields = p_fields.iter().map(|e| {
         let fname = e.ident.as_ref().unwrap();
         let key = e.stored_name();
         let ty = &e.ty;
 
         if e.nested {
+            let sub_ctx = if e.flatten {
+                quote!(ctx.here())
+            } else {
+                quote!(ctx.scoped(#key))
+            };
             quote! {
                 #fname: {
-                    let mut sub_ctx = ctx.scoped(#key);
+                    let mut sub_ctx = #sub_ctx;
                     < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::fields::AmeStateFields>::load_struct(&mut sub_ctx)?
                 }
             }
@@ -157,9 +216,14 @@ pub(crate) fn data_impl(
         let key = e.stored_name();
 
         if e.nested {
+            let sub_ctx = if e.flatten {
+                quote!(ctx.here())
+            } else {
+                quote!(ctx.scoped(#key))
+            };
             quote! {
                 {
-                    let mut sub_ctx = ctx.scoped(#key);
+                    let mut sub_ctx = #sub_ctx;
                     self.#fname.save_struct(&mut sub_ctx)?;
                 }
             }
@@ -186,8 +250,13 @@ pub(crate) fn data_impl(
         let ty = &e.ty;
         if e.nested {
             let data_ty = get_data_type(ty);
+            let under = if e.flatten {
+                quote!(prefix.clone())
+            } else {
+                quote!(prefix.join(&#key_path))
+            };
             quote! {
-                #fname: <#data_ty>::__amethystate_load_from(store, &prefix.join(&#key_path))?
+                #fname: <#data_ty>::__amethystate_load_from(store, &#under)?
             }
         } else if let Some((k, v)) = e.get_map_types() {
             quote! {
@@ -242,8 +311,13 @@ pub(crate) fn data_impl(
         let key_path = path_literal(crate_name, &key);
 
         if e.nested {
+            let under = if e.flatten {
+                quote!(prefix.clone())
+            } else {
+                quote!(prefix.join(&#key_path))
+            };
             quote! {
-                self.#fname.__amethystate_save_to(store, &prefix.join(&#key_path))?;
+                self.#fname.__amethystate_save_to(store, &#under)?;
             }
         } else if e.get_map_types().is_some() {
             quote! {
@@ -516,6 +590,7 @@ pub(crate) fn data_impl(
                 use #crate_name::shape::AnyShape as _;
 
                 #(#shape_checks)*
+                #(#flatten_checks)*
 
                 &[
                     #(#field_descriptors),*

@@ -82,6 +82,14 @@ pub struct FieldDescriptor {
     /// cycle is refused at compile time by
     /// [`AmeStateNode::CONSTRUCTION_TERMINATES`](crate::AmeStateNode::CONSTRUCTION_TERMINATES).
     pub children: &'static [FieldDescriptor],
+
+    /// Whether this node gives the paths under it a segment of its own.
+    ///
+    /// A flattened node does not: its children sit at its holder's level, so
+    /// anything walking this tree to reach a path has to pass through without
+    /// adding [`name`](FieldDescriptor::name). Written as `#[serde(flatten)]`,
+    /// and false for everything that is not a [`Role::Node`].
+    pub flattened: bool,
 }
 
 impl FieldDescriptor {
@@ -94,8 +102,73 @@ impl FieldDescriptor {
             role: Role::Field,
             optional: false,
             children: &[],
+            flattened: false,
         }
     }
+}
+
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Whether `fields` puts a path called `name` at its own level.
+///
+/// Reached through flattened nodes, which contribute no segment: a name a
+/// flattened grandchild brings up arrives here as if it were written here.
+pub const fn brings(fields: &[FieldDescriptor], name: &str) -> bool {
+    let mut i = 0;
+    while i < fields.len() {
+        if fields[i].flattened {
+            if brings(fields[i].children, name) {
+                return true;
+            }
+        } else if same(fields[i].name, name) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether two sets of fields, flattened into the same level, would land on a
+/// name in common.
+pub const fn overlap(a: &[FieldDescriptor], b: &[FieldDescriptor]) -> bool {
+    let mut i = 0;
+    while i < a.len() {
+        if a[i].flattened {
+            if overlap(a[i].children, b) {
+                return true;
+            }
+        } else if brings(b, a[i].name) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether a name already spelled at this level is also brought up by `fields`.
+pub const fn brings_any(fields: &[FieldDescriptor], names: &[&str]) -> bool {
+    let mut i = 0;
+    while i < names.len() {
+        if brings(fields, names[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 pub trait AmeStateFields: Sized {

@@ -1,0 +1,5 @@
+error: `#[serde(rename = ..)]` names the type inside an encoded value, and this type is never encoded. Where its *fields* go is `rename` on each of them, or `rename_all` here
+ --> tests/fails/serde_renames_the_type.rs:4:1
+  |
+4 | #[serde(rename = "SomethingElse")]
+  | ^

@@ -1,6 +1,7 @@
 use crate::migration::builder::MigrationBuilder;
 use crate::store::config::{Disk, FileWritePolicy, StoreConfig, WriteLimits};
 use crate::store::facts::Facts;
+use crate::store::traits::StoreLayout;
 use crate::store::{StorageError, StorageResult};
 use crate::{MigrationReport, Store};
 use error_stack::{Report, ResultExt};
@@ -391,7 +392,23 @@ impl Location {
         self.app_under(Layout::default_for_build(), app_name, config_name)
     }
 
+    /// Which files a store at `path` under `backend` is made of.
+    ///
+    /// The other methods here answer with the path a store would be opened at,
+    /// and that is one name where the engine writes two or four. A closure that
+    /// moves a store from where an older release left it needs the rest, and
+    /// the old place is not open to be asked - so the names are worked out from
+    /// the path instead.
+    ///
+    /// [`StoreLayout::present`] is the half worth moving; the rewrite copies
+    /// are named whether or not they exist, and normally they do not.
+    pub fn files_at(self, path: impl AsRef<Path>, backend: Backend) -> StoreLayout {
+        StoreLayout::of(path, backend)
+    }
+
     /// The same, under the layout named.
+    ///
+    /// Answers under the temporary directory instead when `test-utils` is on.
     pub fn app_under(
         self,
         layout: Layout,
@@ -399,6 +416,17 @@ impl Location {
         config_name: impl AsRef<str>,
     ) -> StorageResult<PathBuf> {
         let app_name = app_name.as_ref();
+
+        if cfg!(feature = "test-utils") {
+            let path = std::env::temp_dir()
+                .join("amethystate-app-dirs")
+                .join(app_name)
+                .join(config_name.as_ref());
+
+            ensure_parent(&path).attach_with(|| format!("application: {app_name}"))?;
+            return Ok(path);
+        }
+
         let args = || etcetera::AppStrategyArgs {
             top_level_domain: "rs".to_string(),
             author: String::new(),

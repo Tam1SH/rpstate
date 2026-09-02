@@ -1525,16 +1525,16 @@ fn attributes_that_hand_serde_arbitrary_code() {
 
 /// A declared struct whose fields carry serde names beside their Rust ones.
 ///
-/// The macro reads `amestate` and nothing else, so whether the serde name ever
-/// reaches the store, the schema or both is what this asks.
+/// The macro reads the serde name as the name the field is stored under, so
+/// what this asks is whether the store, the schema or both come back saying it.
 #[amethystate(prefix = "serde_named", version = 1)]
 pub struct SerdeNamed {
     #[serde(rename = "renamed_port")]
     #[amestate(default = 8080)]
     pub port: u16,
 
-    #[amestate(key = "keyed_host", default = "h".to_string())]
-    #[serde(rename = "serde_host")]
+    #[serde(rename = "renamed_host")]
+    #[amestate(default = "h".to_string())]
     pub host: String,
 }
 

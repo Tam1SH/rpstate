@@ -4,7 +4,7 @@ use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Watch, Watchable};
 use crate::store::facts::{Facts, Key, Refused};
 use crate::store::sync_backend::SyncBridge;
-use crate::store::{Commit, Durable, StoreBackend, StoreSubscription};
+use crate::store::{Commit, Durable, StoreBackend, StoreSubscription, StoredAs};
 use amethystate_core::Signal;
 use amethystate_core::path::{IntoStorePath, StorePath};
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
@@ -40,6 +40,7 @@ pub(crate) struct FieldInner<TValue> {
     pub(crate) instance_id: Uuid,
     pub(crate) store_sub: Option<Arc<StoreSubscription>>,
     pub(crate) unreadable: Unreadable,
+    pub(crate) stored_as: StoredAs<TValue>,
 }
 
 /// Why the store's value for a field could not be read, while that is the
@@ -158,6 +159,16 @@ where
         self.fork_with_id(Uuid::new_v4())
     }
 
+    /// The value this handle's interceptors let through, as the change they
+    /// made of it.
+    fn intercepted(&self, value: TValue) -> ReactiveFieldResult<Change<TValue>> {
+        self.inner
+            .core
+            .run_interceptors(self.inner.path.clone(), value, Some(self.inner.instance_id))
+            .map_err(FieldError::intercepted)
+            .attach_key(&self.inner.path)
+    }
+
     /// [`Field::fork`] with the instance id chosen rather than generated.
     pub fn fork_with_id(&self, new_instance_id: Uuid) -> Self {
         Self {
@@ -167,6 +178,7 @@ where
                 instance_id: new_instance_id,
                 store_sub: self.inner.store_sub.clone(),
                 unreadable: self.inner.unreadable.clone(),
+                stored_as: self.inner.stored_as,
             }),
         }
     }
@@ -525,21 +537,27 @@ where
         );
 
         if let Some(sub) = &self.inner.store_sub {
-            let backend = SyncBridge::new(sub.store().clone());
-            amethystate_core::field_set(
-                &backend,
-                &self.inner.core,
-                self.inner.path.clone(),
-                value,
-                Some(self.inner.instance_id),
-            )?;
+            if let Some(write) = self.inner.stored_as.write {
+                let change = self.intercepted(value)?;
+
+                write(&change.new_value, &mut |erased| {
+                    StoreBackend::set_erased(sub.store(), &self.inner.path, erased, change.source)
+                })
+                .change_context(FieldError::Storage)
+                .attach_key(&self.inner.path)?;
+            } else {
+                let backend = SyncBridge::new(sub.store().clone());
+                amethystate_core::field_set(
+                    &backend,
+                    &self.inner.core,
+                    self.inner.path.clone(),
+                    value,
+                    Some(self.inner.instance_id),
+                )?;
+            }
         } else {
             let change = self
-                .inner
-                .core
-                .run_interceptors(self.inner.path.clone(), value, Some(self.inner.instance_id))
-                .map_err(FieldError::intercepted)
-                .attach_key(&self.inner.path)
+                .intercepted(value)
                 .attach("a volatile field: nothing was going to be stored either way")?;
             self.inner
                 .core
@@ -666,6 +684,7 @@ where
                 instance_id,
                 store_sub: None,
                 unreadable: Unreadable::default(),
+                stored_as: StoredAs::default(),
             }),
         }
     }
@@ -923,6 +942,7 @@ mod tests {
                     store_sub: Some(Arc::new(StoreSubscription::new(store.clone(), sub_id))),
                     instance_id: Default::default(),
                     unreadable: Unreadable::default(),
+                    stored_as: StoredAs::default(),
                 }),
             };
 

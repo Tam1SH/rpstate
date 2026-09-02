@@ -81,14 +81,7 @@ pub(super) fn meta_key(kind: &str, path: &StorePath) -> StorePath {
 
 impl<D: TextDocument> StoreFile<D> {
     pub fn new(path: PathBuf, initial_doc: D, write_policy: FileWritePolicy) -> Self {
-        let backup_path = match path.file_name() {
-            Some(name) => {
-                let mut name = name.to_os_string();
-                name.push(".bak");
-                path.with_file_name(name)
-            }
-            None => path.with_extension("bak"),
-        };
+        let backup_path = StoreLayout::rewrite_copy_of(&path);
         Self {
             path,
             backup_path,

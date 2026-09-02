@@ -12,13 +12,15 @@ reaches as deep as a dotted prefix does:
 ```rust
 #[amethystate(prefix = "ui", version = 1)]
 pub struct Ui {
-    #[amestate(key = "panels.left.visible", default = true)]
+    #[serde(rename = "panels.left.visible")]
+    #[amestate(default = true)]
     pub left_panel_visible: bool,
 }
 
 #[amethystate(prefix = "ui.panels", version = 1)]
 pub struct Panels {
-    #[amestate(key = "left.visible", default = true)]
+    #[serde(rename = "left.visible")]
+    #[amestate(default = true)]
     pub left_visible: bool,
 }
 ```
@@ -37,8 +39,8 @@ over the same place fails to build:
 ```rust
 let _ui = Ui::new_with(&store)?;
 
-let refused = Panels::new_with(&store)
-    .expect_err("`ui.panels.left.visible` is spelled by both of them");
+let refused =
+    Panels::new_with(&store).expect_err("`ui.panels.left.visible` is spelled by both of them");
 
 assert_eq!(refused.current_context(), &StorageError::Claimed);
 
@@ -80,7 +82,7 @@ Places that do not meet are left alone, however close they sit:
 ```rust
 #[amethystate(prefix = "ui.panels.right", version = 1)]
 pub struct RightPanel {
-    #[amestate(key = "visible", default = true)]
+    #[amestate(default = true)]
     pub visible: bool,
 }
 ```

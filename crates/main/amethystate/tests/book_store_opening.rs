@@ -3,6 +3,7 @@ use amethystate::store::builder::Backend;
 use amethystate::store::builder::{Layout, StoreBuilder};
 use amethystate::store::{StoreBackend, StoreLayout};
 use amethystate_core::test_utils::TempPath;
+use serial_test::serial;
 use std::error::Error;
 
 #[test]
@@ -72,26 +73,26 @@ fn an_extension_the_caller_wrote_is_left_alone() -> Result<(), Box<dyn Error + S
 }
 
 #[test]
-#[ignore = "compiled for the book; opening these for real writes into the \
-            configuration directory of whoever runs the suite"]
+#[serial(beside_the_executable)]
 fn the_three_places_a_location_can_name() -> Result<(), Box<dyn Error + Send + Sync>> {
     //@show letting the platform say where the file goes
-    let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?.build()?;
+    let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?;
 
-    let named =
-        StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?.build()?;
+    let named = StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?;
 
-    let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
+    let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?;
     //@show-end
 
-    for store in [config, named, portable] {
-        store.save_now()?;
-    }
+    let store = portable.build()?;
+    store.save_now()?;
+    store.close()?;
 
+    drop((config, named));
     Ok(())
 }
 
 #[test]
+#[serial(beside_the_executable)]
 fn a_location_is_worked_out_rather_than_spelled() -> Result<(), Box<dyn Error + Send + Sync>> {
     let store = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
 

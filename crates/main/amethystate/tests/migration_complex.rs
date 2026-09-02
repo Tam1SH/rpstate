@@ -137,7 +137,8 @@ mod ui_v1 {
         #[amestate(default = 1u16)]
         pub width_px: u16,
 
-        #[amestate(key = "panels.left.visible", default = true)]
+        #[serde(rename = "panels.left.visible")]
+        #[amestate(default = true)]
         pub left_panel_visible: bool,
     }
 }

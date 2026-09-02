@@ -22,7 +22,8 @@ match StoreBackend::files_layout(&store) {
     }) => {
         println!("values:      {}", data.display());
         println!("bookkeeping: {}", meta.display());
-        println!("kept while rewriting: {}, {}",
+        println!(
+            "kept while rewriting: {}, {}",
             data_backup.display(),
             meta_backup.display(),
         );

@@ -1,0 +1,5 @@
+error: `host` is left out of the encoded value by `#[serde(skip)]`, and this struct has no encoded value to be left out of. What a field can be here is `#[amestate(volatile)]`: no path, nothing in the schema, nothing for a migration to carry, and the declared default again on every start. That is more than `skip` asks for, so it is written rather than assumed
+ --> tests/fails/serde_skips_a_declared_field.rs:5:5
+  |
+5 |     #[serde(skip)]
+  |     ^

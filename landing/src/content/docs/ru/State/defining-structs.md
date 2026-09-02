@@ -29,7 +29,7 @@ pub struct NetworkState { ... }
 
 `prefix` занимает место, которое называет, и всё под ним. Поэтому две структуры
 над одним местом не уживутся — вторая при открытии получит отказ. Отсюда же
-растёт то, как ведут себя `prefix` и `key` с точками:
+растёт то, как ведут себя `prefix` и составное имя с точками:
 [Кто владеет каким местом](/amethystate/ru/concepts/claims/).
 
 ### Атрибуты поля
@@ -50,15 +50,21 @@ pub struct AppState {
 | Атрибут | Тип | Описание |
 |-----------|------|-------------|
 | `default` | `Expr` | Значение на первом запуске. Без него — `Default::default()`. |
-| `key` | `String` | Ключ, под которым поле лежит. По умолчанию — имя поля. |
 | `nested` | флаг | Поле само — структура `#[amethystate]`. |
 | `volatile` | флаг | Живёт только в памяти: store его не читает и не пишет, на каждом запуске оно равно изначально заданному. |
 | `on_unreadable` | вариант | Что делать со значением, которое не декодируется, — вместо того, что сказала структура. |
 | `on_delete` | вариант | Что делать, когда ключ поля удалили. |
 | `check` | `fn` | Правило, которое обязано пройти каждое значение, приходящее из store. |
 
-Список закрыт: макрос сверяет каждый атрибут и на незнакомом валит компиляцию,
-перечислив те, что знает.
+Макрос сверяет каждый атрибут и на незнакомом валит компиляцию, перечислив те,
+что знает, — так что опечатка станет ошибкой, а не молчаливо ничем.
+
+Где поле *лежит* — словарь не этот, а serde: `#[serde(rename)]` называет место,
+`#[serde(rename_all)]` говорит это один раз за всю структуру, а
+`#[serde(flatten)]` на `nested`-поле кладёт его поля на этот уровень. То, что
+serde говорит, а структура из путей выполнить не может, отвергается там, где
+написано. Всё это и то, что взамен позволено листу:
+[Что здесь значит serde](/amethystate/ru/state/serde/).
 
 ### Что происходит, когда значение испорчено
 
@@ -140,7 +146,9 @@ fn a_theme_that_is_installed(theme: &String, cx: &CheckContext) -> Result<(), In
     if installed.0.contains(&theme.as_str()) {
         Ok(())
     } else {
-        Err(Invalid::new(format!("no theme called {theme} is installed")))
+        Err(Invalid::new(format!(
+            "no theme called {theme} is installed"
+        )))
     }
 }
 
@@ -235,8 +243,7 @@ fn the_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest")
-            .at(&["min", "max"]))
+        Err(Invalid::new("the smallest window is wider than the largest").at(&["min", "max"]))
     }
 }
 
@@ -319,7 +326,9 @@ fn the_kept_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest"))
+        Err(Invalid::new(
+            "the smallest window is wider than the largest",
+        ))
     }
 }
 ```

@@ -10,7 +10,8 @@ mod keyed_v1 {
 
     #[amethystate(prefix = "keyed", version = 1)]
     pub struct Keyed {
-        #[amestate(key = "panels.left.visible", default = true)]
+        #[serde(rename = "panels.left.visible")]
+        #[amestate(default = true)]
         pub left_panel_visible: bool,
     }
 }
@@ -33,7 +34,7 @@ fn migrate_keyed_v1_to_v2(
 
 #[backends(all)]
 #[ignore = "known: migration cleanup addresses the Rust name, not the stored one - see TODO.md"]
-fn renaming_a_field_that_carries_a_key_moves_its_stored_value(backend: Backend) {
+fn renaming_a_field_stored_elsewhere_moves_its_stored_value(backend: Backend) {
     let path = TempPath::new("keyed_rename");
 
     {
@@ -81,7 +82,8 @@ mod dropped_v1 {
         #[amestate(default = 1u16)]
         pub kept: u16,
 
-        #[amestate(key = "legacy.token", default = "remove-me".to_string())]
+        #[serde(rename = "legacy.token")]
+        #[amestate(default = "remove-me".to_string())]
         pub legacy_token: String,
     }
 }
@@ -101,7 +103,7 @@ fn migrate_dropped_v1_to_v2(
 
 #[backends(all)]
 #[ignore = "known: migration cleanup addresses the Rust name, not the stored one - see TODO.md"]
-fn dropping_a_field_that_carries_a_key_removes_its_stored_value(backend: Backend) {
+fn dropping_a_field_stored_elsewhere_removes_its_stored_value(backend: Backend) {
     let path = TempPath::new("keyed_drop");
 
     {

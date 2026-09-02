@@ -215,6 +215,7 @@ pub(crate) fn settle<B: FormatRecord + ?Sized>(store: &B, engine: Backend) -> St
 }
 
 /// The same, for an engine known only by the codec it runs.
+#[cfg(feature = "text")]
 pub(crate) fn settle_for_codec<B: FormatRecord + ?Sized>(
     store: &B,
     codec: crate::store::CodecFormat,

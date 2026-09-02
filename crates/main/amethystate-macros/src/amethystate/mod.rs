@@ -1,4 +1,5 @@
 mod generate;
+mod serde_said;
 
 use amethystate_macros_core::{MacroArgs, StoreFieldEntry};
 use darling::{FromField, FromMeta, ast::NestedMeta};
@@ -56,8 +57,14 @@ pub fn amethystate_impl(
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let struct_vis = &input.vis;
-    let attrs = &input.attrs;
+    let forwarded = serde_said::without_serde(&input.attrs);
+    let attrs = &forwarded;
     let amethystate = amethystate_crate_path();
+
+    let said = match serde_said::read(&input) {
+        Ok(said) => said,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
     let named_fields = match &input.data {
         Data::Struct(DataStruct {
@@ -76,13 +83,20 @@ pub fn amethystate_impl(
 
     let mut entries = Vec::new();
     for field in named_fields {
-        let entry = match StoreFieldEntry::from_field(field) {
+        let mut entry = match StoreFieldEntry::from_field(field) {
             Ok(v) => v,
             Err(e) => return e.write_errors().into(),
         };
 
+        if let Some(ident) = &entry.ident
+            && let Some(from_serde) = said.of(ident)
+            && let Err(e) = serde_said::fold_into(from_serde, &mut entry)
+        {
+            return e.to_compile_error().into();
+        }
+
         if let Some(key) = &entry.key
-            && let Err(message) = generate::check_written_path("key", key, "")
+            && let Err(message) = generate::check_written_path("name", key, "")
         {
             return syn::Error::new(key.span(), message)
                 .to_compile_error()
@@ -120,7 +134,9 @@ pub fn amethystate_impl(
             };
 
             if let Some(message) = refusal {
-                return syn::Error::new(check.span(), message).to_compile_error().into();
+                return syn::Error::new(check.span(), message)
+                    .to_compile_error()
+                    .into();
             }
         }
 

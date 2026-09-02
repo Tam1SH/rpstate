@@ -80,12 +80,11 @@ keeps for it, and `located` works one out:
 
 <!-- shown: letting the platform say where the file goes -->
 ```rust
-let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?.build()?;
+let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?;
 
-let named = StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?
-    .build()?;
+let named = StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?;
 
-let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
+let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?;
 ```
 <!-- /shown -->
 
@@ -119,6 +118,66 @@ directory is the one the store has to match.
 **Name the layout once you have shipped.** The conventions disagree about
 enough of the tree that a store written under one is not found under the other,
 so `app_under` is what pins where someone's settings live across an upgrade.
+
+### Moving a store that is already somewhere else
+
+The closure is called once and its answer is the path. What it does before
+answering is yours - `located` hands over a `Location` and takes back a
+`PathBuf`, and everything in between is ordinary code.
+
+Moving needs more than one path, though. A path is what a store is *opened* at;
+the files it is *made of* are the engine's - an extension it added, a sidecar
+beside it, a copy kept while a rewrite is in flight. A layout names all of them,
+and a move is a walk down one:
+
+<!-- shown: moving every file a store is made of -->
+```rust
+fn relocate(from: &StoreLayout, to: &StoreLayout) -> std::io::Result<()> {
+    for (old, new) in from.names().iter().zip(to.names()) {
+        if old.exists() {
+            std::fs::rename(old, new)?;
+        }
+    }
+
+    Ok(())
+}
+```
+<!-- /shown -->
+
+**`names` is every name and not every file.** A rewrite copy is written when a
+rewrite starts and removed when it finishes, so a store sitting still has none -
+which is why the move above skips what is absent rather than failing on it. Two
+layouts of the same engine pair up name by name, so the data file lands as the
+data file and the sidecar as the sidecar; `present` is the same list with the
+missing ones dropped, for asking what is actually there.
+
+The layout itself comes from `at.files_at`, worked out from a path with nothing
+opened - which is the whole difficulty with the old place, since there is
+nothing there to ask:
+
+<!-- shown: a store found where an older release left it -->
+```rust
+let store = StoreBuilder::located(|at| {
+    let now = at.app(&app, "settings")?;
+    let was = at.files_at(at.app(&app, "settings-legacy")?, backend);
+
+    relocate(&was, &at.files_at(&now, backend)).ok();
+
+    Ok(now)
+})?
+.backend(backend)
+.build()?;
+```
+<!-- /shown -->
+
+That is the answer to shipping under one layout and wanting another. Nothing
+about it is special: move the files, copy them, ask the person first, or open
+the old place and leave it there - the library does none of it and refuses none
+of it. It is handed one path and works the rest out from that.
+
+Whether the move converges is yours too. A closure that keeps answering with
+the old path keeps both places alive forever, which is a decision rather than
+an oversight - it is written where somebody can read it.
 
 `beside_the_executable` is for a portable install, and not for an installed
 one: `Program Files` and `/usr/bin` are not writable by the person running the

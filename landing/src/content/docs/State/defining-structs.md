@@ -30,7 +30,8 @@ Structs without `prefix` are nested components, intended to be embedded in other
 A `prefix` claims the place it names and everything under it, so two structs
 cannot be declared over the same place - the second one to open is refused. That
 is a whole subject of its own, and the one that decides how a `prefix` and a
-dotted `key` interact: [Who owns which place](/amethystate/concepts/claims/).
+dotted stored name interact:
+[Who owns which place](/amethystate/concepts/claims/).
 
 ### Field attributes
 
@@ -49,14 +50,21 @@ pub struct AppState {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `default` | `Expr` | Initial value on first run. If omitted, uses `Default::default()`. |
-| `key` | `String` | Overrides the storage key. Defaults to the field name. |
 | `nested` | flag | Marks field as an embedded `#[amethystate]` struct. |
 | `volatile` | flag | In-memory only. Never read from or written to the store. Resets to default on every restart. |
 | `on_unreadable` | variant | This field's answer, overriding the struct's. |
 | `on_delete` | variant | The same for a deleted key. |
 | `check` | `fn` | A rule every value coming in from the store has to pass. |
 
-Those seven are the whole set; anything else is a compile error naming the seven.
+The macro checks what it is given and names what it accepts, so a misspelling
+is a compile error rather than an attribute that does nothing.
+
+Where a field is *stored* is serde's vocabulary rather than this one:
+`#[serde(rename)]` names the place, `#[serde(rename_all)]` says it once for a
+whole struct, and `#[serde(flatten)]` on a `nested` field puts its fields at
+this level. What serde says that a struct of paths cannot honour is refused
+where it is written. All of it, and what a leaf may say instead:
+[What serde says here](/amethystate/state/serde/).
 
 ### What a value going wrong does
 
@@ -135,7 +143,9 @@ fn a_theme_that_is_installed(theme: &String, cx: &CheckContext) -> Result<(), In
     if installed.0.contains(&theme.as_str()) {
         Ok(())
     } else {
-        Err(Invalid::new(format!("no theme called {theme} is installed")))
+        Err(Invalid::new(format!(
+            "no theme called {theme} is installed"
+        )))
     }
 }
 
@@ -231,8 +241,7 @@ fn the_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest")
-            .at(&["min", "max"]))
+        Err(Invalid::new("the smallest window is wider than the largest").at(&["min", "max"]))
     }
 }
 
@@ -317,7 +326,9 @@ fn the_kept_window_can_be_drawn(
     if window.min <= window.max {
         Ok(())
     } else {
-        Err(Invalid::new("the smallest window is wider than the largest"))
+        Err(Invalid::new(
+            "the smallest window is wider than the largest",
+        ))
     }
 }
 ```

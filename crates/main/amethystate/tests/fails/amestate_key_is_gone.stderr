@@ -1,0 +1,5 @@
+error: `key` is spelled `#[serde(rename = "..")]`, which says the same thing and lets `rename_all` say it once for a whole struct
+ --> tests/fails/amestate_key_is_gone.rs:5:16
+  |
+5 |     #[amestate(key = "listen_port", default = 8080u16)]
+  |                ^^^

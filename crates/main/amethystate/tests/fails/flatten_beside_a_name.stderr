@@ -1,0 +1,5 @@
+error: `inner` is both named and unnamed: `#[serde(rename = "net")]` says where it sits, and `#[serde(flatten)]` says it sits nowhere of its own
+  --> tests/fails/flatten_beside_a_name.rs:11:5
+   |
+11 |     #[serde(flatten, rename = "net")]
+   |     ^

@@ -1,9 +1,12 @@
 use crate::codec::CodecError;
 use crate::migration::AppliedStep;
 use crate::migration::set::MigrationSet;
+use crate::store::builder::Backend;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::{Facts, ValueBytes};
 use amethystate_core::path::{IntoStorePath, StorePath};
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use crate::store::meta::{PrefixMeta, SchemaSnapshot};
 use crate::store::{CodecFormat, Kv, StoreCallback, SubscriptionId};
@@ -31,6 +34,88 @@ pub enum StoreLayout {
         data_backup: std::path::PathBuf,
         meta_backup: std::path::PathBuf,
     },
+}
+
+impl StoreLayout {
+    /// The files a store at `path` under `backend` is made of, worked out
+    /// without opening anything.
+    ///
+    /// The same names an open store answers with. The extension is added the
+    /// way [`StoreBuilder::new`] adds it: only where the caller named none.
+    ///
+    /// [`StoreBuilder::new`]: crate::store::builder::StoreBuilder::new
+    pub fn of(path: impl AsRef<Path>, backend: Backend) -> Self {
+        let mut path = path.as_ref().to_path_buf();
+        if path.extension().is_none() {
+            path.set_extension(backend.extension());
+        }
+
+        match backend {
+            #[cfg(feature = "redb")]
+            Backend::Redb => Self::Single { data: path },
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite => Self::Single { data: path },
+            #[cfg(feature = "json")]
+            Backend::Json => Self::sidecars(path),
+            #[cfg(feature = "toml")]
+            Backend::Toml => Self::sidecars(path),
+            #[cfg(feature = "ron")]
+            Backend::Ron => Self::sidecars(path),
+        }
+    }
+
+    /// The copy an engine keeps beside a file while it rewrites it.
+    pub fn rewrite_copy_of(file: &Path) -> PathBuf {
+        match file.file_name() {
+            Some(name) => {
+                let mut name = name.to_os_string();
+                name.push(".bak");
+                file.with_file_name(name)
+            }
+            None => file.with_extension("bak"),
+        }
+    }
+
+    /// Every name this store uses, whether or not the file is there.
+    pub fn names(&self) -> Vec<PathBuf> {
+        match self {
+            Self::Single { data } => vec![data.clone()],
+            Self::Sidecars {
+                data,
+                meta,
+                data_backup,
+                meta_backup,
+            } => vec![
+                data.clone(),
+                meta.clone(),
+                data_backup.clone(),
+                meta_backup.clone(),
+            ],
+        }
+    }
+
+    /// The ones that are on disk at this moment.
+    ///
+    /// A rewrite copy is written when a rewrite starts and removed when it
+    /// finishes, so a store sitting still has none.
+    pub fn present(&self) -> Vec<PathBuf> {
+        self.names()
+            .into_iter()
+            .filter(|file| file.exists())
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    fn sidecars(data: PathBuf) -> Self {
+        let meta = data.with_extension("meta");
+
+        Self::Sidecars {
+            data_backup: Self::rewrite_copy_of(&data),
+            meta_backup: Self::rewrite_copy_of(&meta),
+            data,
+            meta,
+        }
+    }
 }
 
 /// The path a caller named, or why what they gave is not one.
@@ -384,6 +469,76 @@ pub trait StoreExt: StoreBackend {
                 .attach("the backend accepted the bytes without producing a value")
                 .attach(ValueBytes(bytes.len()))
         })
+    }
+
+    /// The same, reading through `read` rather than through `T`'s own impl.
+    ///
+    /// For a field declared `#[amestate(deserialize_with = ..)]`, whose stored
+    /// form is not the one its type reads.
+    fn decode_with<T>(&self, bytes: &[u8], read: ReadAs<T>) -> StorageResult<T> {
+        let mut out = None;
+        self.decode_erased(bytes, &mut |d| {
+            out = Some(
+                read(d)
+                    .map_err(CodecError::from)
+                    .change_context(StorageError::Codec)
+                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
+            );
+            Ok(())
+        })?;
+
+        out.ok_or_else(|| {
+            Report::new(StorageError::Codec)
+                .attach("the backend accepted the bytes without producing a value")
+                .attach(ValueBytes(bytes.len()))
+        })
+    }
+}
+
+/// How a field's value is read back, when its own type is not what reads it.
+///
+/// A `deserialize_with` written the way serde wants one, called with an erased
+/// deserializer.
+pub type ReadAs<T> =
+    for<'de> fn(&mut dyn erased_serde::Deserializer<'de>) -> Result<T, erased_serde::Error>;
+
+/// How it is written.
+///
+/// The value is wrapped in a `Serialize` that calls its `serialize_with`, and
+/// `then` is handed that.
+pub type WriteAs<T> =
+    fn(&T, &mut dyn FnMut(&dyn erased_serde::Serialize) -> StorageResult<()>) -> StorageResult<()>;
+
+/// How a field is stored, when that is not how its type would be.
+pub struct StoredAs<T> {
+    pub write: Option<WriteAs<T>>,
+    pub read: Option<ReadAs<T>>,
+}
+
+impl<T> Default for StoredAs<T> {
+    /// Stored the way the type itself would be.
+    fn default() -> Self {
+        Self {
+            write: None,
+            read: None,
+        }
+    }
+}
+
+impl<T> Clone for StoredAs<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for StoredAs<T> {}
+
+impl<T> fmt::Debug for StoredAs<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredAs")
+            .field("write", &self.write.is_some())
+            .field("read", &self.read.is_some())
+            .finish()
     }
 }
 

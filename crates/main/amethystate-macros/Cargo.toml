@@ -19,6 +19,7 @@ quote = { workspace = true }
 syn = { workspace = true }
 amethystate-macros-core.workspace = true
 proc-macro-crate.workspace = true
+serde_derive_internals.workspace = true
 
 [features]
 tauri = []

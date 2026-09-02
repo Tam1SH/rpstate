@@ -83,7 +83,8 @@ is refused:
 ```rust
 let refused = kv.namespace("network").set("port", &"8080".to_string());
 
-kv.namespace("networkish").set("port", &"8080".to_string())?;
+kv.namespace("networkish")
+    .set("port", &"8080".to_string())?;
 ```
 <!-- /shown -->
 

@@ -11,13 +11,15 @@ use std::error::Error;
 //@show two structs that want the same place
 #[amethystate(prefix = "ui", version = 1)]
 pub struct Ui {
-    #[amestate(key = "panels.left.visible", default = true)]
+    #[serde(rename = "panels.left.visible")]
+    #[amestate(default = true)]
     pub left_panel_visible: bool,
 }
 
 #[amethystate(prefix = "ui.panels", version = 1)]
 pub struct Panels {
-    #[amestate(key = "left.visible", default = true)]
+    #[serde(rename = "left.visible")]
+    #[amestate(default = true)]
     pub left_visible: bool,
 }
 //@show-end
@@ -25,7 +27,7 @@ pub struct Panels {
 //@show a struct that sits right beside one and still opens
 #[amethystate(prefix = "ui.panels.right", version = 1)]
 pub struct RightPanel {
-    #[amestate(key = "visible", default = true)]
+    #[amestate(default = true)]
     pub visible: bool,
 }
 //@show-end

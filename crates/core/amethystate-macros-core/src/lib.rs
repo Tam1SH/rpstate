@@ -28,13 +28,52 @@ pub struct StoreFieldEntry {
     pub ident: Option<Ident>,
     pub vis: Visibility,
     pub ty: Type,
+    /// Where this field is stored, when that is not its own name.
+    ///
+    /// Written as `#[serde(rename)]`, or as `rename_all` on the struct. A dot
+    /// in it is a level, so a field can be put anywhere under the prefix rather
+    /// than only renamed.
     pub key: Option<SpannedValue<String>>,
     pub default: Option<TokenStream2>,
     pub nested: bool,
     pub volatile: bool,
+    /// Whether this field's own paths sit at its holder's level rather than
+    /// under a segment named after it.
+    ///
+    /// Written as `#[serde(flatten)]`, and only on a `nested` field: a leaf is
+    /// one value at one path and has no paths of its own to merge upward.
+    pub flatten: bool,
     pub on_unreadable: Option<syn::Path>,
     pub on_delete: Option<syn::Path>,
     pub check: Option<syn::Path>,
+    /// The module holding both halves of how this field is stored, named the
+    /// way serde names one: `serialize` and `deserialize` inside it.
+    pub with: Option<syn::Path>,
+    pub serialize_with: Option<syn::Path>,
+    pub deserialize_with: Option<syn::Path>,
+}
+
+impl StoreFieldEntry {
+    /// The function that writes this field, when its own type is not what
+    /// writes it.
+    pub fn writes_with(&self) -> Option<syn::Path> {
+        self.serialize_with.clone().or_else(|| {
+            self.with.clone().map(|mut module| {
+                module.segments.push(syn::parse_quote!(serialize));
+                module
+            })
+        })
+    }
+
+    /// The function that reads it back.
+    pub fn reads_with(&self) -> Option<syn::Path> {
+        self.deserialize_with.clone().or_else(|| {
+            self.with.clone().map(|mut module| {
+                module.segments.push(syn::parse_quote!(deserialize));
+                module
+            })
+        })
+    }
 }
 
 impl StoreFieldEntry {
@@ -61,9 +100,13 @@ impl FromField for StoreFieldEntry {
             default: None,
             nested: false,
             volatile: false,
+            flatten: false,
             on_unreadable: None,
             on_delete: None,
             check: None,
+            with: None,
+            serialize_with: None,
+            deserialize_with: None,
         };
 
         for attr in &field.attrs {
@@ -117,8 +160,10 @@ fn parse_state_tokens(tokens: TokenStream2, into: &mut StoreFieldEntry) -> darli
             match name.as_str() {
                 "default" => into.default = Some(value),
                 "key" => {
-                    let lit: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
-                    into.key = Some(SpannedValue::new(lit.value(), lit.span()));
+                    return Err(darling::Error::custom(
+                        "`key` is spelled `#[serde(rename = \"..\")]`, which says the same thing and lets `rename_all` say it once for a whole struct",
+                    )
+                    .with_span(&first));
                 }
                 "on_unreadable" => {
                     into.on_unreadable = Some(syn::parse2(value).map_err(darling::Error::from)?);
@@ -129,10 +174,27 @@ fn parse_state_tokens(tokens: TokenStream2, into: &mut StoreFieldEntry) -> darli
                 "check" => {
                     into.check = Some(syn::parse2(value).map_err(darling::Error::from)?);
                 }
+                "with" => {
+                    into.with = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                }
+                "serialize_with" => {
+                    into.serialize_with = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                }
+                "deserialize_with" => {
+                    into.deserialize_with = Some(syn::parse2(value).map_err(darling::Error::from)?);
+                }
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
-                        &["default", "key", "on_unreadable", "on_delete", "check"],
+                        &[
+                            "default",
+                            "on_unreadable",
+                            "on_delete",
+                            "check",
+                            "with",
+                            "serialize_with",
+                            "deserialize_with",
+                        ],
                     ));
                 }
             }

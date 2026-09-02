@@ -12,13 +12,15 @@ sidebar:
 ```rust
 #[amethystate(prefix = "ui", version = 1)]
 pub struct Ui {
-    #[amestate(key = "panels.left.visible", default = true)]
+    #[serde(rename = "panels.left.visible")]
+    #[amestate(default = true)]
     pub left_panel_visible: bool,
 }
 
 #[amethystate(prefix = "ui.panels", version = 1)]
 pub struct Panels {
-    #[amestate(key = "left.visible", default = true)]
+    #[serde(rename = "left.visible")]
+    #[amestate(default = true)]
     pub left_visible: bool,
 }
 ```
@@ -35,8 +37,8 @@ Store держит таблицу занятого, и вторая структ
 ```rust
 let _ui = Ui::new_with(&store)?;
 
-let refused = Panels::new_with(&store)
-    .expect_err("`ui.panels.left.visible` is spelled by both of them");
+let refused =
+    Panels::new_with(&store).expect_err("`ui.panels.left.visible` is spelled by both of them");
 
 assert_eq!(refused.current_context(), &StorageError::Claimed);
 
@@ -79,7 +81,7 @@ for claim in all::<Claimed, _>(&refused) {
 ```rust
 #[amethystate(prefix = "ui.panels.right", version = 1)]
 pub struct RightPanel {
-    #[amestate(key = "visible", default = true)]
+    #[amestate(default = true)]
     pub visible: bool,
 }
 ```

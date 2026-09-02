@@ -24,6 +24,17 @@ pub struct StoredShape {
     /// person reads should not carry `"children": []` on every leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<StoredFieldEntry>,
+
+    /// Whether this node gave the paths under it a segment of its own.
+    ///
+    /// A node written as `#[serde(flatten)]` did not, so its children sit where
+    /// it sits. Recorded rather than folded away, so that a node gaining or
+    /// losing its segment reads as that one change and not as every path under
+    /// it being replaced.
+    ///
+    /// Left out of the file when false, which every leaf and most nodes are.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flattened: bool,
 }
 
 impl StoredShape {
@@ -33,6 +44,7 @@ impl StoredShape {
             role: Role::Field,
             optional: false,
             children: Vec::new(),
+            flattened: false,
         }
     }
 }
@@ -60,6 +72,7 @@ impl From<&FieldDescriptor> for StoredFieldEntry {
                 role: field.role,
                 optional: field.optional,
                 children: field.children.iter().map(Self::from).collect(),
+                flattened: field.flattened,
             },
         }
     }

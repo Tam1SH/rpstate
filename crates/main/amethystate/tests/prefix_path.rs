@@ -11,7 +11,8 @@ pub struct WindowState {
 
 #[amethystate(prefix = "net")]
 pub struct NetState {
-    #[amestate(default = 8080u16, key = "listen_port")]
+    #[serde(rename = "listen_port")]
+    #[amestate(default = 8080u16)]
     pub port: u16,
 }
 

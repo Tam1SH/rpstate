@@ -12,13 +12,15 @@ use common::shape;
 
 #[amethystate(prefix = "coll", version = 1)]
 pub struct Outer {
-    #[amestate(key = "panels.left.visible", default = true)]
+    #[serde(rename = "panels.left.visible")]
+    #[amestate(default = true)]
     pub left_panel_visible: bool,
 }
 
 #[amethystate(prefix = "coll.panels", version = 1)]
 pub struct Panels {
-    #[amestate(key = "left.visible", default = true)]
+    #[serde(rename = "left.visible")]
+    #[amestate(default = true)]
     pub left_visible: bool,
 }
 
@@ -30,13 +32,15 @@ pub struct Left {
 
 #[amethystate(prefix = "typed", version = 1)]
 pub struct TypedOuter {
-    #[amestate(key = "panels.left.visible", default = true)]
+    #[serde(rename = "panels.left.visible")]
+    #[amestate(default = true)]
     pub left_panel_visible: bool,
 }
 
 #[amethystate(prefix = "typed.panels", version = 1)]
 pub struct TypedPanels {
-    #[amestate(key = "left.visible", default = 0u32)]
+    #[serde(rename = "left.visible")]
+    #[amestate(default = 0u32)]
     pub left_visible: u32,
 }
 

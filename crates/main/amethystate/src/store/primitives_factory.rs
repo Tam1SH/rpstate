@@ -1,9 +1,11 @@
 use crate::observability::register_field;
-use crate::reactive::field::Unread;
+use crate::reactive::field::{Unread, Unreadable};
 use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::StoreSubscription;
 use crate::store::facts::{Entry, Facts, Prefix, RawKey};
+use crate::store::rules::{OnDelete, OnUnreadable, ReadRules};
+use crate::store::traits::{StoreExt as _, StoredAs};
 use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
 use crate::{ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::path::{IntoStorePath, Level, StorePath};
@@ -15,120 +17,6 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// What building a struct does about a stored value it will not accept: one
-/// that does not decode into the field's type, and one a declared check
-/// refuses.
-///
-/// The value got there somehow - a file edited by hand, a migration that left
-/// something behind, a codec that took what it cannot read back - and the two
-/// answers serve different applications.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OnUnreadable {
-    /// Construction fails, naming the path. Nothing half-built is handed out.
-    #[default]
-    Refuse,
-
-    /// The field takes its declared default and construction carries on.
-    ///
-    /// The stored value is left where it is, so a person can still fix the file
-    /// by hand, and the field says the store does not agree with what it is
-    /// reporting: [`Field::try_get`](crate::Field::try_get) answers `Err` from
-    /// the moment it is built until a change decodes.
-    UseDefault,
-}
-
-impl OnUnreadable {
-    /// Whether this failure is one [`OnUnreadable::UseDefault`] stands in for.
-    ///
-    /// A decode failure, and that alone. A store that cannot be read at all
-    /// propagates: there is no default to stand in for a file that is not
-    /// there.
-    fn covers(&self, why: &Report<StorageError>) -> bool {
-        matches!(self, OnUnreadable::UseDefault)
-            && why
-                .frames()
-                .filter_map(|frame| frame.downcast_ref::<StorageError>())
-                .any(|context| *context == StorageError::Codec)
-    }
-}
-
-/// What a field does when its key is deleted under it.
-///
-/// A deletion is somebody else's doing - another handle, a migration, a hand
-/// edited file - and the two answers disagree about what a field is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OnDelete {
-    /// The field goes on reporting the last value it held.
-    ///
-    /// A deleted key is not a value, and the declared default is a
-    /// compile-time guess - the least likely thing the person was looking at.
-    /// Keeping is also what stops a removal and an undecodable value from
-    /// being the same observable, which everything else here works to keep
-    /// apart.
-    #[default]
-    Keep,
-
-    /// The field reports its declared default again, as if it had never been
-    /// written.
-    UseDefault,
-}
-
-/// What a field does about the store disagreeing with it: a value it cannot
-/// read, a key removed under it, and a value its declared check refuses.
-///
-/// One value carries all of it, so "what did this field decide" has a single
-/// answer to hold and a single place to add to.
-pub struct ReadRules<TValue> {
-    on_unreadable: OnUnreadable,
-    on_delete: OnDelete,
-    check: Option<crate::store::Check<TValue>>,
-}
-
-impl<TValue> Default for ReadRules<TValue> {
-    fn default() -> Self {
-        Self {
-            on_unreadable: OnUnreadable::default(),
-            on_delete: OnDelete::default(),
-            check: None,
-        }
-    }
-}
-
-impl<TValue> ReadRules<TValue> {
-    /// The rules a field takes when nothing says otherwise: refuse a value
-    /// that will not decode, keep what it holds when the key is removed, and
-    /// judge nothing.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn on_unreadable(mut self, policy: OnUnreadable) -> Self {
-        self.on_unreadable = policy;
-        self
-    }
-
-    pub fn on_delete(mut self, policy: OnDelete) -> Self {
-        self.on_delete = policy;
-        self
-    }
-
-    /// The rule every value coming in from the store has to pass.
-    pub fn check(mut self, check: crate::store::Check<TValue>) -> Self {
-        self.check = Some(check);
-        self
-    }
-}
-
-/// What a declared struct wrote about reading, so the struct holding it can be
-/// checked against it while it compiles.
-///
-/// `None` is a struct that said nothing and takes whatever it is built under.
-/// The macro implements this for everything it generates; nothing else should.
-pub trait DeclaredPolicy {
-    const ON_UNREADABLE: Option<OnUnreadable>;
-    const ON_DELETE: Option<OnDelete>;
-}
 
 /// A field under `TScope`'s path, at the levels `key` names.
 pub fn field<TScope, TValue>(
@@ -210,6 +98,7 @@ where
         on_unreadable: policy,
         on_delete,
         check,
+        stored_as,
     } = rules;
 
     claim(store, &path, instance_id)?;
@@ -217,7 +106,7 @@ where
 
     let mut refused: Option<Unread> = None;
 
-    let current = match store.get::<TValue>(&path) {
+    let current = match read_stored(store, &path, stored_as) {
         Ok(Some(stored)) => match check.map(|check| check(&stored, store.context())) {
             None | Some(Ok(())) => stored,
             Some(Err(invalid)) => {
@@ -235,7 +124,7 @@ where
             }
         },
         Ok(None) => {
-            seed(store, &path, &default)?;
+            seed(store, &path, &default, stored_as)?;
             default.clone()
         }
         Err(why) if policy.covers(&why) => {
@@ -253,13 +142,16 @@ where
     let path_log = path.clone();
     let deleted = default.clone();
 
-    let unreadable = crate::reactive::field::Unreadable::new(std::sync::Mutex::new(refused));
+    let unreadable = Unreadable::new(std::sync::Mutex::new(refused));
     let unreadable_sub = unreadable.clone();
 
     let id = store.subscribe(
         SubscriptionKind::ExactPath(path.clone()),
         Arc::new(move |event| match &event.new {
-            Some(raw) => match store_clone.decode::<TValue>(raw) {
+            Some(raw) => match match stored_as.read {
+                Some(read) => store_clone.decode_with(raw, read),
+                None => store_clone.decode::<TValue>(raw),
+            } {
                 Ok(parsed) => {
                     if let Some(check) = check.filter(|_| event.is_external_edit())
                         && let Err(invalid) = check(&parsed, store_clone.context())
@@ -301,6 +193,7 @@ where
             path,
             instance_id,
             store_sub: Some(Arc::new(StoreSubscription::new(store.clone(), id))),
+            stored_as,
         }),
     })
 }
@@ -335,11 +228,43 @@ where
     reactive_map_with_path_only(store, path, defaults, instance_id)
 }
 
-fn seed<TValue>(store: &Store, path: &StorePath, default: &TValue) -> StorageResult<()>
+/// The value at `path`, read the way the field says rather than the way its
+/// type would.
+fn read_stored<TValue>(
+    store: &Store,
+    path: &StorePath,
+    stored_as: StoredAs<TValue>,
+) -> StorageResult<Option<TValue>>
 where
-    TValue: Serialize,
+    TValue: DeserializeOwned + 'static,
 {
-    match store.set(path, default) {
+    let Some(read) = stored_as.read else {
+        return store.get::<TValue>(path);
+    };
+
+    match store.get_raw(path)? {
+        Some(bytes) => store.decode_with(&bytes, read).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn seed<TValue>(
+    store: &Store,
+    path: &StorePath,
+    default: &TValue,
+    stored_as: StoredAs<TValue>,
+) -> StorageResult<()>
+where
+    TValue: Serialize + 'static,
+{
+    let written = match stored_as.write {
+        Some(write) => write(default, &mut |erased| {
+            StoreBackend::set_erased(store, path, erased, None)
+        }),
+        None => store.set(path, default),
+    };
+
+    match written {
         Err(report) if report.contains::<crate::store::Occupied>() => {
             tracing::warn!(
                 target: "amethystate",
@@ -550,7 +475,7 @@ where
                 };
 
                 let old_val =
-                    decoded_old.or_else(|| core_clone.cache.get(&k).map(|v| v.clone()));
+                    decoded_old.or_else(|| core_clone.cache.get(&k));
 
                 let change = {
                     let keys = &core_clone.cache;

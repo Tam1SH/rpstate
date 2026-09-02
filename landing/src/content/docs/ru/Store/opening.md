@@ -81,12 +81,11 @@ if report.has_drift() {
 
 <!-- shown: letting the platform say where the file goes -->
 ```rust
-let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?.build()?;
+let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?;
 
-let named = StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?
-    .build()?;
+let named = StoreBuilder::located(|at| at.app_under(Layout::App, "my-app", "settings"))?;
 
-let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
+let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?;
 ```
 <!-- /shown -->
 
@@ -121,6 +120,66 @@ let portable = StoreBuilder::located(|at| at.beside_the_executable("settings"))?
 дереву достаточно, чтобы store, записанный по одному, не нашёлся по другому.
 `app_under` как раз и закрепляет, где лежат чьи-то настройки, чтобы обновление
 их не потеряло.
+
+### Как переехать, если store уже лежит в другом месте
+
+Кложу зовут один раз, и её ответ — путь. Что она делает до того, как ответить,
+решаете вы: `located` отдаёт `Location` и забирает `PathBuf`, а между этим —
+обычный код.
+
+Только переезду одного пути мало. Путь — это то, *по чему* store открывают, а
+из чего он *состоит*, знает движок: расширение, которое он дописал, спутник
+рядом, копия, которую он держит, пока переписывает файл. Раскладка называет их
+все, и переезд — перебор по ней:
+
+<!-- shown: moving every file a store is made of -->
+```rust
+fn relocate(from: &StoreLayout, to: &StoreLayout) -> std::io::Result<()> {
+    for (old, new) in from.names().iter().zip(to.names()) {
+        if old.exists() {
+            std::fs::rename(old, new)?;
+        }
+    }
+
+    Ok(())
+}
+```
+<!-- /shown -->
+
+**`names` — это все имена, а не все файлы.** Копию на время переписывания заводят
+в начале и убирают в конце, так что у store, который лежит себе спокойно, её нет,
+— потому переезд выше и пропускает то, чего нет, а не спотыкается об это. Две
+раскладки одного движка сходятся имя к имени: файл с данными ляжет файлом с
+данными, спутник — спутником. `present` — тот же список, только без пропавших:
+им спрашивают, что на диске есть на самом деле.
+
+Саму раскладку по пути — не открывая ничего — отдаёт `at.files_at`, и старое
+место как раз тем и неудобно, что спросить у него некого:
+
+<!-- shown: a store found where an older release left it -->
+```rust
+let store = StoreBuilder::located(|at| {
+    let now = at.app(&app, "settings")?;
+    let was = at.files_at(at.app(&app, "settings-legacy")?, backend);
+
+    relocate(&was, &at.files_at(&now, backend)).ok();
+
+    Ok(now)
+})?
+.backend(backend)
+.build()?;
+```
+<!-- /shown -->
+
+Вот и весь ответ на «выпустили под одной раскладкой, хотим другую». Ничего
+особенного тут нет: перенесите файлы, скопируйте, спросите сперва человека или
+откройте старое место и оставьте как есть — библиотека не делает ничего из
+этого и ничего из этого не запрещает. Ей отдают один путь, остальное она
+соберёт сама.
+
+Сойдётся ли переезд — тоже ваше. Кложа, которая продолжает отвечать старым
+путём, оставляет оба места жить вечно. Но это решение, а не недосмотр: оно
+написано там, где его видно.
 
 `beside_the_executable` — для переносимой установки, а не для той, которую
 ставят: в `Program Files` и `/usr/bin` тому, кто запускает программу, писать

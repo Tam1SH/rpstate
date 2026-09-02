@@ -1,0 +1,5 @@
+error: `tick` would be stored as `nowhere`, and it is stored nowhere: `#[amestate(volatile)]` keeps it in memory and gives it no path. Drop one of the two
+ --> tests/fails/serde_renames_a_volatile_field.rs:5:5
+  |
+5 |     #[serde(rename = "nowhere")]
+  |     ^

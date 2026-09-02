@@ -342,6 +342,16 @@ impl<'a> MigrationContext<'a> {
         }
     }
 
+    /// The same context again, for a part whose keys sit at this level rather
+    /// than under one of its own - a node flattened into its holder.
+    pub fn here(&mut self) -> MigrationContext<'_> {
+        MigrationContext {
+            prefix: self.prefix.clone(),
+            storage: self.storage,
+            provided: self.provided,
+        }
+    }
+
     /// Reads a whole [`ReactiveMap`](crate::ReactiveMap) at `key` as a plain
     /// map, so a step can rewrite its entries.
     ///

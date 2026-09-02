@@ -101,13 +101,13 @@ error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std
   = note: for types from other crates check whether the crate offers a `serde` feature flag
   = help: the following other types implement trait `Deserialize<'de>`:
             &'a [u8]
+            &'a ron::value::raw::RawValue
             &'a std::path::Path
             &'a str
             ()
             (T,)
             (T0, T1)
             (T0, T1, T2)
-            (T0, T1, T2, T3)
           and $N others
 note: required by a bound in `next_element`
  --> $CARGO/serde_core-$VERSION/src/de/mod.rs
@@ -128,13 +128,13 @@ error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std
   = note: for types from other crates check whether the crate offers a `serde` feature flag
   = help: the following other types implement trait `Deserialize<'de>`:
             &'a [u8]
+            &'a ron::value::raw::RawValue
             &'a std::path::Path
             &'a str
             ()
             (T,)
             (T0, T1)
             (T0, T1, T2)
-            (T0, T1, T2, T3)
           and $N others
 note: required by a bound in `next_value`
  --> $CARGO/serde_core-$VERSION/src/de/mod.rs
@@ -155,13 +155,13 @@ error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std
   = note: for types from other crates check whether the crate offers a `serde` feature flag
   = help: the following other types implement trait `Deserialize<'de>`:
             &'a [u8]
+            &'a ron::value::raw::RawValue
             &'a std::path::Path
             &'a str
             ()
             (T,)
             (T0, T1)
             (T0, T1, T2)
-            (T0, T1, T2, T3)
           and $N others
 note: required by a bound in `amethystate::serde::__private228::de::missing_field`
  --> $CARGO/serde-$VERSION/src/private/de.rs
@@ -178,6 +178,24 @@ error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std
   |
 6 | #[amethystate(prefix = "aliased")]
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `amethystate::ReactiveMap<std::string::String, std::string::String>`
+
+error[E0599]: the method `get` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`, but its trait bounds were not satisfied
+ --> tests/fails/map_through_an_alias.rs:6:1
+  |
+6 | #[amethystate(prefix = "aliased")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+  |
+ ::: src/reactive/map.rs
+  |
+  | pub struct ReactiveMap<K, V> {
+  | ---------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
+  |
+  = note: the following trait bounds were not satisfied:
+          `amethystate::ReactiveMap<std::string::String, std::string::String>: Serialize`
+          which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
+          `amethystate::ReactiveMap<std::string::String, std::string::String>: Deserialize<'de>`
+          which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
+  = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std::string::String>: AmeType` is not satisfied
  --> tests/fails/map_through_an_alias.rs:9:19
@@ -213,13 +231,13 @@ error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std
   |
   = help: the following other types implement trait `Deserialize<'de>`:
             &'a [u8]
+            &'a ron::value::raw::RawValue
             &'a std::path::Path
             &'a str
             ()
             (T,)
             (T0, T1)
             (T0, T1, T2)
-            (T0, T1, T2, T3)
           and $N others
   = note: required for `amethystate::ReactiveMap<std::string::String, std::string::String>` to implement `DeserializeOwned`
 note: required by a bound in `MigrationContext::<'a>::get`
