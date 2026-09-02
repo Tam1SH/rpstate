@@ -1,8 +1,7 @@
-use crate::amethystate::generate::{parse_default, path_literal};
-use amethystate_macros_core::StoreFieldEntry;
+use crate::amethystate::generate::{delete_tokens, path_literal, unreadable_tokens};
+use crate::amethystate::model::{Field, Schema, Shape, StoredAs};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, quote_spanned};
-use syn::spanned::Spanned;
 
 /// How this field is stored, when its own type is not what stores it.
 ///
@@ -11,15 +10,8 @@ use syn::spanned::Spanned;
 /// in is never encoded. The read half needs no wrapper: an erased deserializer
 /// is a `serde::Deserializer`, so the function serde wants can be called with
 /// it directly.
-pub(crate) fn stored_as(crate_name: &TokenStream2, e: &StoreFieldEntry) -> Option<TokenStream2> {
-    let (writes, reads) = (e.writes_with(), e.reads_with());
-    if writes.is_none() && reads.is_none() {
-        return None;
-    }
-
-    let ty = &e.ty;
-
-    let write = match writes {
+pub(crate) fn stored_as(crate_name: &TokenStream2, ty: &syn::Type, how: &StoredAs) -> TokenStream2 {
+    let write = match how.write.as_ref() {
         Some(write) => quote! {
             Some({
                 fn __ame_write(
@@ -47,7 +39,7 @@ pub(crate) fn stored_as(crate_name: &TokenStream2, e: &StoreFieldEntry) -> Optio
         None => quote!(None),
     };
 
-    let read = match reads {
+    let read = match how.read.as_ref() {
         Some(read) => quote! {
             Some({
                 fn __ame_read<'de>(
@@ -62,120 +54,129 @@ pub(crate) fn stored_as(crate_name: &TokenStream2, e: &StoreFieldEntry) -> Optio
         None => quote!(None),
     };
 
-    Some(quote! {
+    quote! {
         #crate_name::store::StoredAs { write: #write, read: #read }
-    })
+    }
 }
 
-pub(crate) fn init_fields(
-    crate_name: &TokenStream2,
-    entries: &[StoreFieldEntry],
-    is_root: bool,
-    on_unreadable: Option<&str>,
-    on_delete: Option<&str>,
-) -> Vec<TokenStream2> {
-    entries
+/// What each field is built from, in the order they were declared.
+///
+/// A rule the field wrote wins over one the struct wrote; where neither said,
+/// the name of the argument the constructor takes is emitted, so the struct
+/// holding this one decides at the call.
+pub(crate) fn init_fields(crate_name: &TokenStream2, schema: &Schema) -> Vec<TokenStream2> {
+    let is_root = schema.is_root();
+    let on_unreadable = schema.rules.on_unreadable.as_ref().map(|at| at.value);
+    let on_delete = schema.rules.on_delete.as_ref().map(|at| at.value);
+
+    schema
+        .fields
         .iter()
-        .map(|e| {
-            let unreadable = match variant(e.on_unreadable.as_ref())
-                .as_deref()
+        .map(|field| {
+            let unreadable = match field
+                .rules
+                .on_unreadable
+                .as_ref()
+                .map(|at| at.value)
                 .or(on_unreadable)
             {
-                Some("UseDefault") => quote!(#crate_name::store::OnUnreadable::UseDefault),
-                Some(_) => quote!(#crate_name::store::OnUnreadable::Refuse),
+                Some(rule) => unreadable_tokens(crate_name, rule),
                 None => quote!(__ame_on_unreadable),
             };
 
-            let deleted = match variant(e.on_delete.as_ref()).as_deref().or(on_delete) {
-                Some("UseDefault") => quote!(#crate_name::store::OnDelete::UseDefault),
-                Some(_) => quote!(#crate_name::store::OnDelete::Keep),
+            let deleted = match field
+                .rules
+                .on_delete
+                .as_ref()
+                .map(|at| at.value)
+                .or(on_delete)
+            {
+                Some(rule) => delete_tokens(crate_name, rule),
                 None => quote!(__ame_on_delete),
             };
 
-            init_field(crate_name, e, is_root, &unreadable, &deleted)
+            init_field(crate_name, field, is_root, &unreadable, &deleted)
         })
         .collect::<Vec<_>>()
 }
 
-fn variant(written: Option<&syn::Path>) -> Option<String> {
-    written
-        .and_then(|path| path.segments.last())
-        .map(|segment| segment.ident.to_string())
-}
-
 fn init_field(
     crate_name: &TokenStream2,
-    e: &StoreFieldEntry,
+    field: &Field,
     is_root: bool,
     unreadable: &TokenStream2,
     deleted: &TokenStream2,
 ) -> TokenStream2 {
-    let fname = e.ident.as_ref().unwrap();
-    let ty = &e.ty;
-    let key = e.stored_name();
-    let key_path = path_literal(crate_name, &key);
+    let fname = &field.ident;
+    let ty = &field.ty;
+    let key_path = path_literal(crate_name, &field.stored.value);
 
-    if e.nested {
-        let under = match (is_root, e.flatten) {
-            (true, false) => quote!(<Self as #crate_name::StateScope>::PATH.join(&#key_path)),
-            (true, true) => quote!(<Self as #crate_name::StateScope>::PATH.clone()),
-            (false, false) => quote!(namespace.join(&#key_path)),
-            (false, true) => quote!(namespace.clone()),
-        };
-
-        quote! {
-            #fname: ::std::sync::Arc::new(#ty::new_with_id_under(
-                store,
-                #under,
-                instance_id,
-                #unreadable,
-                #deleted
-            )?)
-        }
-    } else if let Some((k, v)) = e.get_map_types() {
-        let def = e
-            .default
-            .as_ref()
-            .map(parse_default)
-            .unwrap_or_else(|| quote!(::std::collections::HashMap::new()));
-
-        let path_expr = if is_root {
-            quote! { <Self as #crate_name::StateScope>::PATH.join(&#key_path) }
-        } else {
-            quote! { namespace.join(&#key_path) }
-        };
-
-        quote! {
-            #fname: #crate_name::store::reactive_map_with_path_only::<#k, #v>(
-                store,
-                #path_expr,
-                #def,
-                instance_id
-            )?
-        }
+    let at = if is_root {
+        quote! { <Self as #crate_name::StateScope>::PATH.join(&#key_path) }
     } else {
-        let def = e
-            .default
-            .as_ref()
-            .map(parse_default)
-            .unwrap_or_else(|| quote! { <#ty as ::std::default::Default>::default() });
+        quote! { namespace.join(&#key_path) }
+    };
 
-        let path_expr = if is_root {
-            quote! { <Self as #crate_name::StateScope>::PATH.join(&#key_path) }
-        } else {
-            quote! { namespace.join(&#key_path) }
-        };
+    match &field.shape {
+        Shape::Node { flattened } => {
+            let under = match (is_root, flattened) {
+                (true, false) => at,
+                (true, true) => quote!(<Self as #crate_name::StateScope>::PATH.clone()),
+                (false, false) => at,
+                (false, true) => quote!(namespace.clone()),
+            };
 
-        if e.volatile {
-            quote! { #fname: #crate_name::Field::new_volatile_with_id(#path_expr, #def, instance_id) }
-        } else {
-            let checked = match &e.check {
-                Some(check) => quote_spanned! {check.span()=> .check(#check) },
+            quote! {
+                #fname: ::std::sync::Arc::new(#ty::new_with_id_under(
+                    store,
+                    #under,
+                    instance_id,
+                    #unreadable,
+                    #deleted
+                )?)
+            }
+        }
+
+        Shape::Map {
+            key,
+            value,
+            default,
+        } => {
+            let def = default
+                .clone()
+                .unwrap_or_else(|| quote!(::std::collections::HashMap::new()));
+
+            quote! {
+                #fname: #crate_name::store::reactive_map_with_path_only::<#key, #value>(
+                    store,
+                    #at,
+                    #def,
+                    instance_id
+                )?
+            }
+        }
+
+        Shape::Volatile { default } => {
+            quote! { #fname: #crate_name::Field::new_volatile_with_id(#at, #default, instance_id) }
+        }
+
+        Shape::Leaf {
+            default,
+            stored_as: how,
+        } => {
+            let checked = match field.rules.check.as_ref() {
+                Some(check) => {
+                    let path = &check.value;
+                    quote_spanned! {check.span=> .check(#path) }
+                }
                 None => quote! {},
             };
 
-            let stored_as = match stored_as(crate_name, e) {
-                Some(how) => quote! { .stored_as(#how) },
+            let stored_as = match how {
+                Some(how) => {
+                    let how = stored_as(crate_name, ty, how);
+                    quote! { .stored_as(#how) }
+                }
                 None => quote! {},
             };
 
@@ -187,7 +188,7 @@ fn init_field(
                     #stored_as
             };
 
-            quote! { #fname: #crate_name::store::field_with_path_under(store, #path_expr, #def, instance_id, #rules)? }
+            quote! { #fname: #crate_name::store::field_with_path_under(store, #at, #default, instance_id, #rules)? }
         }
     }
 }

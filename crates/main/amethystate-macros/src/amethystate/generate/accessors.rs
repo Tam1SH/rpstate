@@ -1,60 +1,47 @@
-use crate::amethystate::generate::path_parts;
-use amethystate_macros_core::StoreFieldEntry;
+use crate::amethystate::generate::{path_parts, unreadable_tokens};
+use crate::amethystate::model::{Field, Mode, Schema, Shape};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, quote_spanned};
-use syn::Ident;
 use syn::spanned::Spanned;
 
 /// The stored type of one field, as it appears in the reactive struct.
-pub(crate) fn field_type(crate_name: &TokenStream2, e: &StoreFieldEntry) -> TokenStream2 {
-    let ty = &e.ty;
+pub(crate) fn field_type(crate_name: &TokenStream2, field: &Field) -> TokenStream2 {
+    let ty = &field.ty;
 
-    if e.nested {
-        quote! { ::std::sync::Arc<#ty> }
-    } else if let Some((k, v)) = e.get_map_types() {
-        quote! { #crate_name::ReactiveMap<#k, #v> }
-    } else {
-        quote! { #crate_name::Field<#ty> }
+    match &field.shape {
+        Shape::Node { .. } => quote! { ::std::sync::Arc<#ty> },
+        Shape::Map { key, value, .. } => quote! { #crate_name::ReactiveMap<#key, #value> },
+        Shape::Leaf { .. } | Shape::Volatile { .. } => quote! { #crate_name::Field<#ty> },
     }
 }
 
 pub(crate) fn struct_fields<'a>(
     crate_name: &'a TokenStream2,
-    entries: &'a [StoreFieldEntry],
+    fields: &'a [Field],
 ) -> impl Iterator<Item = TokenStream2> + 'a {
-    entries.iter().map(move |e| {
-        let fname = e.ident.as_ref().unwrap();
-        let fvis = &e.vis;
-        let ty = field_type(crate_name, e);
+    fields.iter().map(move |field| {
+        let fname = &field.ident;
+        let fvis = &field.vis;
+        let ty = field_type(crate_name, field);
 
         quote! { #fvis #fname: #ty }
     })
 }
 
-pub(crate) fn methods<'a>(
-    crate_name: &'a TokenStream2,
-    entries: &'a [StoreFieldEntry],
-) -> impl Iterator<Item = TokenStream2> + 'a {
-    entries.iter().map(move |e| {
-        let fname = e.ident.as_ref().unwrap();
-        let ty = &e.ty;
+/// A getter per field, handing back a clone of what the struct holds.
+pub(crate) fn methods(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    let each = schema.fields.iter().map(|field| {
+        let fname = &field.ident;
+        let held = field_type(crate_name, field);
 
-        if e.nested {
-            quote! { pub fn #fname(&self) -> ::std::sync::Arc<#ty> { self.#fname.clone() } }
-        } else if let Some((k, v)) = e.get_map_types() {
-            quote! {
-                pub fn #fname(&self) -> #crate_name::ReactiveMap<#k, #v> {
-                    self.#fname.clone()
-                }
-            }
-        } else {
-            quote! {
-                pub fn #fname(&self) -> #crate_name::Field<#ty> {
-                    self.#fname.clone()
-                }
+        quote! {
+            pub fn #fname(&self) -> #held {
+                self.#fname.clone()
             }
         }
-    })
+    });
+
+    quote! { #(#each)* }
 }
 
 /// The types this struct's constructor always constructs in turn.
@@ -62,12 +49,12 @@ pub(crate) fn methods<'a>(
 /// A `nested` field is built unconditionally, so those are the edges a cycle
 /// can run along. Nothing else is: a map recursing through its value type
 /// decodes those values rather than constructing them.
-fn construction_edges(crate_name: &TokenStream2, entries: &[StoreFieldEntry]) -> Vec<TokenStream2> {
-    entries
+fn construction_edges(crate_name: &TokenStream2, fields: &[Field]) -> Vec<TokenStream2> {
+    fields
         .iter()
-        .filter(|e| e.nested)
-        .map(|e| {
-            let ty = &e.ty;
+        .filter(|field| matches!(field.shape, Shape::Node { .. }))
+        .map(|field| {
+            let ty = &field.ty;
             quote_spanned! {ty.span()=>
                 let _: () = <#ty as #crate_name::AmeStateNode>::CONSTRUCTION_TERMINATES;
             }
@@ -75,13 +62,13 @@ fn construction_edges(crate_name: &TokenStream2, entries: &[StoreFieldEntry]) ->
         .collect()
 }
 
-pub(crate) fn node_impl(
-    crate_name: &TokenStream2,
-    name: &Ident,
-    is_root: bool,
-    entries: &[StoreFieldEntry],
-) -> TokenStream2 {
-    let edges = construction_edges(crate_name, entries);
+pub(crate) fn node_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    if schema.mode == Mode::Persistent {
+        return quote! {};
+    }
+
+    let name = &schema.name;
+    let edges = construction_edges(crate_name, &schema.fields);
     let terminates = quote! {
         const CONSTRUCTION_TERMINATES: () = { #(#edges)* };
     };
@@ -89,7 +76,7 @@ pub(crate) fn node_impl(
         const _: () = <#name as #crate_name::AmeStateNode>::CONSTRUCTION_TERMINATES;
     };
 
-    if is_root {
+    if schema.is_root() {
         quote! {
             impl #crate_name::AmeStateNode for #name {
                 #terminates
@@ -124,21 +111,107 @@ pub(crate) fn node_impl(
     }
 }
 
-pub(crate) fn scope(
-    crate_name: &TokenStream2,
-    name: &Ident,
-    prefix: Option<String>,
-) -> Option<TokenStream2> {
-    prefix.map(|p| {
-        let (segments, joined) = path_parts(&p);
+/// Where this struct sits, as a constant on the type.
+///
+/// A struct meant to be embedded has none: it sits wherever its holder puts
+/// it, which is a value rather than a constant.
+pub(crate) fn scope(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    let Some(placement) = &schema.prefix else {
+        return quote! {};
+    };
+
+    let name = &schema.name;
+    let written = placement.path();
+    let (segments, joined) = path_parts(&written);
+
+    quote! {
+        impl #crate_name::StateScope for #name {
+            const PATH: #crate_name::store::StorePath =
+                #crate_name::store::StorePath::from_static(&[#(#segments),*], #joined);
+            const KEY: &'static str = #joined;
+        }
+    }
+}
+
+/// How a struct with a place of its own is loaded and watched by callers that
+/// know it only as a slice of the store.
+///
+/// A struct without a place has no `load_slice`: there is nowhere to load it
+/// from until something says where.
+pub(crate) fn slice_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    if !schema.is_root() {
+        return quote! {};
+    }
+
+    let name = &schema.name;
+    let mode = schema.mode;
+
+    let load = match mode {
+        Mode::Persistent => quote! { Self::load_with(store) },
+        _ => quote! { Self::new_with(store) },
+    };
+
+    let subs = if matches!(mode, Mode::Reactive | Mode::Both) {
         quote! {
-            impl #crate_name::StateScope for #name {
-                const PATH: #crate_name::store::StorePath =
-                    #crate_name::store::StorePath::from_static(&[#(#segments),*], #joined);
-                const KEY: &'static str = #joined;
+            fn subscribe_all<F>(&self, callback: F) -> #crate_name::ReactiveScope
+            where
+                F: Fn() + Send + Sync + 'static,
+            {
+                self.subscribe_all(callback)
+            }
+
+            fn subscribe_all_external<F>(&self, callback: F) -> #crate_name::ReactiveScope
+            where
+                F: Fn() + Send + Sync + 'static,
+            {
+                self.subscribe_all_external(callback)
             }
         }
-    })
+    } else {
+        quote! {
+            fn subscribe_all<F>(&self, _callback: F) -> #crate_name::ReactiveScope
+            where
+                F: Fn() + Send + Sync + 'static,
+            {
+                #crate_name::ReactiveScope::new()
+            }
+
+            fn subscribe_all_external<F>(&self, _callback: F) -> #crate_name::ReactiveScope
+            where
+                F: Fn() + Send + Sync + 'static,
+            {
+                #crate_name::ReactiveScope::new()
+            }
+        }
+    };
+
+    quote! {
+        impl #crate_name::AmeStateSlice for #name {
+            fn load_slice(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
+                #load
+            }
+
+            #subs
+        }
+    }
+}
+
+/// `new()` against the store this process installed globally.
+pub(crate) fn global_new(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    if !schema.is_root() || schema.mode == Mode::Persistent {
+        return quote! {};
+    }
+
+    let name = &schema.name;
+
+    quote! {
+        impl #name {
+            pub fn new() -> #crate_name::StorageResult<Self> {
+                let store = #crate_name::global_store();
+                Self::new_with(&store)
+            }
+        }
+    }
 }
 
 /// Marks the fields a struct's own check named, so each of them answers
@@ -147,18 +220,20 @@ pub(crate) fn scope(
 /// A nested field is marked all the way down: what failed is a relationship
 /// the holder declared, and nothing inside the nested struct can be told apart
 /// by it.
-pub(crate) fn refused_marker(entries: &[StoreFieldEntry]) -> TokenStream2 {
-    let marks = entries
+pub(crate) fn refused_marker(schema: &Schema) -> TokenStream2 {
+    let marks = schema
+        .fields
         .iter()
-        .filter(|e| e.get_map_types().is_none())
-        .map(|e| {
-            let fname = e.ident.as_ref().unwrap();
+        .filter(|field| !matches!(field.shape, Shape::Map { .. }))
+        .map(|field| {
+            let fname = &field.ident;
             let named = fname.to_string();
 
-            let mark = if e.nested {
-                quote! { self.#fname.__ame_refused(::core::option::Option::None, why); }
-            } else {
-                quote! { self.#fname.__ame_refused(why); }
+            let mark = match field.shape {
+                Shape::Node { .. } => {
+                    quote! { self.#fname.__ame_refused(::core::option::Option::None, why); }
+                }
+                _ => quote! { self.#fname.__ame_refused(why); },
             };
 
             quote! {
@@ -179,23 +254,17 @@ pub(crate) fn refused_marker(entries: &[StoreFieldEntry]) -> TokenStream2 {
 
 /// What a struct's own check does when it refuses, in the constructor that
 /// has just built every field.
-fn struct_check(
-    crate_name: &TokenStream2,
-    is_root: bool,
-    check: Option<&syn::Path>,
-    on_unreadable: Option<&str>,
-) -> TokenStream2 {
-    let Some(check) = check else {
+fn struct_check(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    let Some(check) = schema.rules.check.as_ref().map(|at| &at.value) else {
         return quote! {};
     };
 
-    let rule = match on_unreadable {
-        Some("UseDefault") => quote!(#crate_name::store::OnUnreadable::UseDefault),
-        Some(_) => quote!(#crate_name::store::OnUnreadable::Refuse),
+    let rule = match schema.rules.on_unreadable.as_ref().map(|at| at.value) {
+        Some(rule) => unreadable_tokens(crate_name, rule),
         None => quote!(__ame_on_unreadable),
     };
 
-    let where_it_is = if is_root {
+    let where_it_is = if schema.is_root() {
         quote! { &<Self as #crate_name::StateScope>::PATH }
     } else {
         quote! { &namespace }
@@ -217,15 +286,11 @@ fn struct_check(
     }
 }
 
-pub(crate) fn constructor(
-    crate_name: &TokenStream2,
-    is_root: bool,
-    init_fields: &[TokenStream2],
-    check: Option<&syn::Path>,
-    on_unreadable: Option<&str>,
-) -> TokenStream2 {
-    let checked = struct_check(crate_name, is_root, check, on_unreadable);
-    if is_root {
+pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    let checked = struct_check(crate_name, schema);
+    let init_fields = super::init::init_fields(crate_name, schema);
+
+    if schema.is_root() {
         quote! {
             pub fn new_with(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
                 Self::new_with_id(store, #crate_name::uuid::Uuid::new_v4())

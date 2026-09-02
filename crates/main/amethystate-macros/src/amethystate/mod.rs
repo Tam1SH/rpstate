@@ -1,15 +1,18 @@
+mod check;
+mod diagnostics;
 mod generate;
+mod lower;
+mod model;
 mod serde_said;
 
-use amethystate_macros_core::{MacroArgs, StoreFieldEntry};
-use darling::{FromField, FromMeta, ast::NestedMeta};
+use amethystate_macros_core::MacroArgs;
+use darling::{FromMeta, ast::NestedMeta};
 use generate::generate_code;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::Span;
 use quote::quote;
 use syn::__private::TokenStream2;
-use syn::spanned::Spanned;
-use syn::{Data, DataStruct, DeriveInput, Fields, parse_macro_input};
+use syn::{DeriveInput, parse_macro_input};
 
 pub fn amethystate_impl(
     args: proc_macro::TokenStream,
@@ -25,194 +28,25 @@ pub fn amethystate_impl(
         Err(e) => return e.write_errors().into(),
     };
 
-    let prefix = if macro_args.as_root {
-        Some(generate::ROOT.to_string())
-    } else {
-        match &macro_args.prefix {
-            Some(prefix) => {
-                if let Err(message) = generate::check_written_path(
-                    "prefix",
-                    prefix,
-                    "; write `as_root` for a struct whose fields sit at the top of the store",
-                ) {
-                    return syn::Error::new(prefix.span(), message)
-                        .to_compile_error()
-                        .into();
-                }
-                Some(prefix.as_ref().clone())
-            }
-            None => None,
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let mut found = diagnostics::Diagnostics::new();
+
+    let schema = match lower::schema(&input, &macro_args, &mut found) {
+        Ok(schema) => schema,
+        Err(e) => {
+            found.push(e);
+            return found.finish().unwrap_err().to_compile_error().into();
         }
     };
 
-    let on_struct = match generate::read_policy(macro_args.on_unreadable.as_ref()) {
-        Ok(policy) => policy,
-        Err(e) => return e.to_compile_error().into(),
-    };
+    check::schema(&schema, &mut found);
 
-    if let Err(e) = generate::delete_policy(macro_args.on_delete.as_ref()) {
+    if let Err(e) = found.finish() {
         return e.to_compile_error().into();
     }
 
-    let input = parse_macro_input!(input as DeriveInput);
-    let struct_name = &input.ident;
-    let struct_vis = &input.vis;
-    let forwarded = serde_said::without_serde(&input.attrs);
-    let attrs = &forwarded;
-    let amethystate = amethystate_crate_path();
-
-    let said = match serde_said::read(&input) {
-        Ok(said) => said,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    let named_fields = match &input.data {
-        Data::Struct(DataStruct {
-            fields: Fields::Named(f),
-            ..
-        }) => &f.named,
-        _ => {
-            return darling::Error::custom(
-                "amethystate can only be used on structs with named fields",
-            )
-            .with_span(struct_name)
-            .write_errors()
-            .into();
-        }
-    };
-
-    let mut entries = Vec::new();
-    for field in named_fields {
-        let mut entry = match StoreFieldEntry::from_field(field) {
-            Ok(v) => v,
-            Err(e) => return e.write_errors().into(),
-        };
-
-        if let Some(ident) = &entry.ident
-            && let Some(from_serde) = said.of(ident)
-            && let Err(e) = serde_said::fold_into(from_serde, &mut entry)
-        {
-            return e.to_compile_error().into();
-        }
-
-        if let Some(key) = &entry.key
-            && let Err(message) = generate::check_written_path("name", key, "")
-        {
-            return syn::Error::new(key.span(), message)
-                .to_compile_error()
-                .into();
-        }
-
-        if entry.nested && generate::names_type(&entry.ty, struct_name) {
-            return syn::Error::new(
-                entry.ty.span(),
-                format!(
-                    "`{struct_name}` would build another `{struct_name}` to build itself, and never stop. A node that holds one of its own kind has to be able to stop - `Option<Box<_>>` at `None`, a collection at empty - and neither is built the way a `nested` field is"
-                ),
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        if let Some(check) = &entry.check {
-            let named = entry.stored_name();
-
-            let refusal = if entry.volatile {
-                Some(format!(
-                    "`{named}` is volatile, so nothing arrives from the store for a check to judge. A value this process holds and never stores is the interceptor's business"
-                ))
-            } else if entry.nested {
-                Some(format!(
-                    "`{named}` is a nested struct, and a check on one belongs on the struct itself - `#[amethystate(check = ..)]` there is handed every field of it at once, which is what a rule about a struct needs"
-                ))
-            } else if entry.get_map_types().is_some() {
-                Some(format!(
-                    "`{named}` is a map, and its entries are data rather than declared paths: one bad entry is no reason to withhold the struct, so a map wants dropping and reporting rather than this"
-                ))
-            } else {
-                None
-            };
-
-            if let Some(message) = refusal {
-                return syn::Error::new(check.span(), message)
-                    .to_compile_error()
-                    .into();
-            }
-        }
-
-        if let Some(at) = entry
-            .with
-            .as_ref()
-            .or(entry.serialize_with.as_ref())
-            .or(entry.deserialize_with.as_ref())
-        {
-            let named = entry.stored_name();
-
-            let refusal = if entry.with.is_some()
-                && (entry.serialize_with.is_some() || entry.deserialize_with.is_some())
-            {
-                Some(format!(
-                    "`{named}` says how it is stored twice: `with` names a module holding both halves, and naming a half beside it leaves nothing to say which one runs. Write the module, or write the halves"
-                ))
-            } else if entry.volatile {
-                Some(format!(
-                    "`{named}` is volatile, so it is stored nowhere and there is nothing to store it as"
-                ))
-            } else if entry.nested {
-                Some(format!(
-                    "`{named}` is a nested struct, and a nested struct is not one value: its fields go to paths of their own, each stored as its own type says. What is stored one way belongs on a field that holds one value"
-                ))
-            } else if entry.get_map_types().is_some() {
-                Some(format!(
-                    "`{named}` is a map, and the map is not what is stored - its entries are, one value per key. Put this on the entry type"
-                ))
-            } else {
-                None
-            };
-
-            if let Some(message) = refusal {
-                return syn::Error::new(at.span(), message)
-                    .to_compile_error()
-                    .into();
-            }
-        }
-
-        let on_field = match generate::read_policy(entry.on_unreadable.as_ref()) {
-            Ok(policy) => policy,
-            Err(e) => return e.to_compile_error().into(),
-        };
-
-        if let Err(e) = generate::delete_policy(entry.on_delete.as_ref()) {
-            return e.to_compile_error().into();
-        }
-
-        if on_struct.as_deref() == Some("Refuse")
-            && on_field.as_deref() == Some("UseDefault")
-            && let Some(written) = &entry.on_unreadable
-        {
-            let named = entry.stored_name();
-            return syn::Error::new(
-                written.span(),
-                format!(
-                    "`{struct_name}` declares `on_unreadable = Refuse`, so `{named}` cannot ask for `UseDefault`. A field may demand more than the struct promised and never less: drop this to inherit the struct's rule, or move `UseDefault` up to the struct and write `Refuse` on the fields that must be readable"
-                ),
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        entries.push(entry);
-    }
-
-    let expanded = generate_code(
-        amethystate,
-        struct_vis,
-        struct_name,
-        attrs,
-        prefix,
-        &entries,
-        macro_args,
-    );
+    let expanded = generate_code(amethystate_crate_path(), &schema);
 
     proc_macro::TokenStream::from(expanded)
 }

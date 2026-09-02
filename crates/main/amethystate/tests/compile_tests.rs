@@ -45,4 +45,10 @@ fn test_macro_expansion_compilation() {
     t.compile_fail("tests/fails/flatten_beside_a_name.rs");
     t.compile_fail("tests/fails/two_flattened_children_meet.rs");
     t.compile_fail("tests/fails/a_flattened_child_meets_a_field.rs");
+    t.compile_fail("tests/fails/volatile_and_nested.rs");
+    t.compile_fail("tests/fails/volatile_map.rs");
+    t.compile_fail("tests/fails/unreadable_rule_misspelt.rs");
+    t.compile_fail("tests/fails/wasm_asked_to_persist.rs");
+    t.compile_fail("tests/fails/serde_defaults_the_whole_struct.rs");
+    t.compile_fail("tests/fails/serde_points_at_its_own_crate.rs");
 }

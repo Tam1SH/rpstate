@@ -1,0 +1,5 @@
+error: `#[serde(default)]` fills in the fields an encoded value left out, from one `Default` for the whole struct. Here there is no encoded value to leave anything out of: each field is its own path, present or absent on its own. Say it where it applies - `#[serde(default)]` or `#[amestate(default = ..)]` on the field
+ --> tests/fails/serde_defaults_the_whole_struct.rs:6:1
+  |
+6 | #[serde(default)]
+  | ^

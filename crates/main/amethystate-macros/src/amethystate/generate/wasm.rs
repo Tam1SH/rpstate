@@ -1,79 +1,82 @@
-use crate::amethystate::MacroArgs;
-use crate::amethystate::generate::parse_default;
-use amethystate_macros_core::StoreFieldEntry;
+//! Everything a declaration becomes when it runs in a browser, against a
+//! store on the other side of a Tauri command.
+//!
+//! Nothing here reaches the store: a value arrives with the initial scan and
+//! goes back through a command, so what is generated is the same struct with
+//! a different thing behind every field.
+
+use crate::amethystate::model::{Field, Placement, Schema, Shape};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Ident, Visibility};
 
-pub fn generate_wasm_code(
-    crate_name: TokenStream2,
-    vis: &Visibility,
-    name: &Ident,
-    attrs: &[syn::Attribute],
-    prefix: Option<String>,
-    entries: &[StoreFieldEntry],
-    _macro_args: MacroArgs,
-) -> TokenStream2 {
-    let is_root = prefix.is_some();
-    let prefix_str = prefix.unwrap_or_default();
+pub(crate) fn generate(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
+    let (vis, name, attrs) = (&schema.vis, &schema.name, &schema.forwarded);
+    let fields = &schema.fields;
+    let is_root = schema.is_root();
+    let prefix_str = schema
+        .prefix
+        .as_ref()
+        .map(Placement::path)
+        .unwrap_or_default();
 
     let backend_ty = quote! { ::amethystate::tauri::TauriBackend };
 
-    let struct_fields = entries.iter().map(|e| {
-        let fname = e.ident.as_ref().unwrap();
-        let fvis = &e.vis;
-        let ty = &e.ty;
-
-        if e.nested {
-            let nested_type = get_type_ident(ty);
-            quote! { #fvis #fname: #nested_type }
-        } else if let Some((k, v)) = e.get_map_types() {
-            quote! { #fvis #fname: #crate_name::client::ReactiveMap<#k, #v, #backend_ty> }
-        } else {
-            quote! { #fvis #fname: #crate_name::client::Field<#ty, #backend_ty> }
+    let held = |field: &Field| {
+        let ty = &field.ty;
+        match &field.shape {
+            Shape::Node { .. } => {
+                let nested_type = get_type_ident(ty);
+                quote! { #nested_type }
+            }
+            Shape::Map { key, value, .. } => {
+                quote! { #crate_name::client::ReactiveMap<#key, #value, #backend_ty> }
+            }
+            Shape::Leaf { .. } | Shape::Volatile { .. } => {
+                quote! { #crate_name::client::Field<#ty, #backend_ty> }
+            }
         }
+    };
+
+    let struct_fields = fields.iter().map(|field| {
+        let fname = &field.ident;
+        let fvis = &field.vis;
+        let ty = held(field);
+
+        quote! { #fvis #fname: #ty }
     });
 
-    let methods = entries.iter().map(|e| {
-        let fname = e.ident.as_ref().unwrap();
-        let ty = &e.ty;
+    let methods = fields.iter().map(|field| {
+        let fname = &field.ident;
+        let ty = held(field);
 
-        if e.nested {
-            let nested_type = get_type_ident(ty);
-            quote! { pub fn #fname(&self) -> #nested_type { self.#fname.clone() } }
-        } else if let Some((k, v)) = e.get_map_types() {
-            quote! { pub fn #fname(&self) -> #crate_name::client::ReactiveMap<#k, #v, #backend_ty> { self.#fname.clone() } }
-        } else {
-            quote! { pub fn #fname(&self) -> #crate_name::client::Field<#ty, #backend_ty> { self.#fname.clone() } }
-        }
+        quote! { pub fn #fname(&self) -> #ty { self.#fname.clone() } }
     });
 
-    let init_fields = entries.iter().map(|e| {
-        let fname = e.ident.as_ref().unwrap();
-        let key_suffix = e.stored_name();
+    let init_fields = fields.iter().map(|field| {
+        let fname = &field.ident;
+        let key_suffix = &field.stored.value;
 
         let full_key = if prefix_str == "." {
-            key_suffix
+            key_suffix.clone()
         } else {
             format!("{prefix_str}.{key_suffix}")
         };
 
+        let ty = &field.ty;
 
-        let ty = &e.ty;
-        let fallback = e.default.as_ref().map(parse_default).unwrap_or_else(|| quote! { ::std::default::Default::default() });
-
-        if e.nested {
-            let nested_type = get_type_ident(ty);
-            quote! { #fname: #nested_type::new_with_id(#full_key, &initial, store, instance_id) }
-        } else if let Some((k, v)) = e.get_map_types() {
-            quote! {
+        match &field.shape {
+            Shape::Node { .. } => {
+                let nested_type = get_type_ident(ty);
+                quote! { #fname: #nested_type::new_with_id(#full_key, &initial, store, instance_id) }
+            }
+            Shape::Map { key, value, .. } => quote! {
                 #fname: {
                     let mut map_init = ::std::collections::HashMap::new();
                     let map_prefix = format!("{}.", #full_key);
                     for (k, v) in initial {
                         if let Some(sub_key) = k.strip_prefix(&map_prefix) {
-                            if let Ok(parsed_k) = <#k as ::std::str::FromStr>::from_str(sub_key) {
-                                if let Ok(parsed_v) = store.decode::<#v>(v) {
+                            if let Ok(parsed_k) = <#key as ::std::str::FromStr>::from_str(sub_key) {
+                                if let Ok(parsed_v) = store.decode::<#value>(v) {
                                     map_init.insert(parsed_k, parsed_v);
                                 }
                             }
@@ -81,16 +84,15 @@ pub fn generate_wasm_code(
                     }
                     #crate_name::client::ReactiveMap::new_with_backend_and_id(#full_key, map_init, store.clone(), instance_id)
                 }
-            }
-        } else {
-            quote! {
+            },
+            Shape::Leaf { default, .. } | Shape::Volatile { default } => quote! {
                 #fname: {
                     let val = initial.get(#full_key)
                         .and_then(|v| store.decode::<#ty>(v).ok())
-                        .unwrap_or_else(|| #fallback);
+                        .unwrap_or_else(|| #default);
                     #crate_name::client::Field::new_with_backend_and_id(#full_key, val, store.clone(), instance_id)
                 }
-            }
+            },
         }
     });
 
@@ -123,24 +125,24 @@ pub fn generate_wasm_code(
             }
         }
     } else {
-        let nested_init_fields = entries.iter().map(|e| {
-            let fname = e.ident.as_ref().unwrap();
-            let key_str = e.stored_name();
-            let ty = &e.ty;
-            let fallback = e.default.as_ref().map(parse_default).unwrap_or_else(|| quote! { ::std::default::Default::default() });
+        let nested_init_fields = fields.iter().map(|field| {
+            let fname = &field.ident;
+            let key_str = &field.stored.value;
+            let ty = &field.ty;
 
-            if e.nested {
-                let nested_type = get_type_ident(ty);
-                quote! { #fname: #nested_type::new_with_id(&format!("{}.{}", prefix, #key_str), initial, store, instance_id) }
-            } else if let Some((k, v)) = e.get_map_types() {
-                quote! {
+            match &field.shape {
+                Shape::Node { .. } => {
+                    let nested_type = get_type_ident(ty);
+                    quote! { #fname: #nested_type::new_with_id(&format!("{}.{}", prefix, #key_str), initial, store, instance_id) }
+                }
+                Shape::Map { key, value, .. } => quote! {
                     #fname: {
                         let mut map_init = ::std::collections::HashMap::new();
                         let map_prefix = if prefix == "." { format!("{}.", #key_str) } else { format!("{}.{}.", prefix, #key_str) };
                         for (k, v) in initial {
                             if let Some(sub_key) = k.strip_prefix(&map_prefix) {
-                                if let Ok(parsed_k) = <#k as ::std::str::FromStr>::from_str(sub_key) {
-                                    if let Ok(parsed_v) = store.decode::<#v>(v) {
+                                if let Ok(parsed_k) = <#key as ::std::str::FromStr>::from_str(sub_key) {
+                                    if let Ok(parsed_v) = store.decode::<#value>(v) {
                                         map_init.insert(parsed_k, parsed_v);
                                     }
                                 }
@@ -149,17 +151,16 @@ pub fn generate_wasm_code(
                         let map_key = if prefix == "." { #key_str.to_string() } else { format!("{}.{}", prefix, #key_str) };
                         #crate_name::client::ReactiveMap::new_with_backend_and_id(map_key, map_init, store.clone(), instance_id)
                     }
-                }
-            } else {
-                quote! {
+                },
+                Shape::Leaf { default, .. } | Shape::Volatile { default } => quote! {
                     #fname: {
                         let full_key = if prefix == "." { #key_str.to_string() } else { format!("{}.{}", prefix, #key_str) };
                         let val = initial.get(&full_key)
                             .and_then(|v| store.decode::<#ty>(v).ok())
-                            .unwrap_or_else(|| #fallback);
+                            .unwrap_or_else(|| #default);
                         #crate_name::client::Field::new_with_backend_and_id(full_key, val, store.clone(), instance_id)
                     }
-                }
+                },
             }
         });
 
@@ -180,8 +181,8 @@ pub fn generate_wasm_code(
         }
     };
 
-    let fork_fields = entries.iter().map(|e| {
-        let fname = e.ident.as_ref().unwrap();
+    let fork_fields = fields.iter().map(|field| {
+        let fname = &field.ident;
         quote! { #fname: self.#fname.fork_with_id(new_id) }
     });
 

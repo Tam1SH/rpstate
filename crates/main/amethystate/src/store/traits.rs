@@ -475,14 +475,15 @@ pub trait StoreExt: StoreBackend {
     ///
     /// For a field declared `#[amestate(deserialize_with = ..)]`, whose stored
     /// form is not the one its type reads.
-    fn decode_with<T>(&self, bytes: &[u8], read: ReadAs<T>) -> StorageResult<T> {
+    fn decode_with<T>(&self, at: &StorePath, bytes: &[u8], read: ReadAs<T>) -> StorageResult<T> {
         let mut out = None;
         self.decode_erased(bytes, &mut |d| {
             out = Some(
                 read(d)
                     .map_err(CodecError::from)
                     .change_context(StorageError::Codec)
-                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
+                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))
+                    .attach_key(at)?,
             );
             Ok(())
         })?;

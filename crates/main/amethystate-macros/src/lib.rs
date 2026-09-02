@@ -310,7 +310,10 @@ pub fn ame_type_derive(input: TokenStream) -> TokenStream {
             .map(|f| {
                 let field_name = f.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
                 let ty = &f.ty;
-                (field_name, quote::quote!(#ty))
+                (
+                    field_name,
+                    quote::quote!(<#ty as #crate_name::migration::types::AmeType>::TYPE_HASH),
+                )
             })
             .collect::<Vec<_>>()
     } else {

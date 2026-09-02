@@ -30,6 +30,15 @@ pub struct SerdeSaid {
 }
 
 impl SerdeSaid {
+    /// Nothing was said, which is what a struct serde refused looks like from
+    /// here: the refusal is already recorded, and lowering carries on so the
+    /// rest of the struct can be checked too.
+    pub fn none() -> Self {
+        Self {
+            fields: HashMap::new(),
+        }
+    }
+
     pub fn of(&self, field: &Ident) -> Option<&FieldSaid> {
         self.fields.get(field)
     }
@@ -82,6 +91,22 @@ pub fn read(input: &DeriveInput) -> Result<SerdeSaid, Error> {
         TagType::None => {
             return Err(refuse(at, "untagged", TAGGING));
         }
+    }
+
+    if !matches!(attrs.default(), SerdeDefault::None) {
+        return Err(refuse(
+            at,
+            "default",
+            "fills in the fields an encoded value left out, from one `Default` for the whole struct. Here there is no encoded value to leave anything out of: each field is its own path, present or absent on its own. Say it where it applies - `#[serde(default)]` or `#[amestate(default = ..)]` on the field",
+        ));
+    }
+
+    if attrs.custom_serde_path().is_some() {
+        return Err(refuse(
+            at,
+            "crate = ..",
+            "tells the derive where serde itself lives, for a crate that re-exports it. No serde impl is written for this struct, so there is nothing here to point at serde",
+        ));
     }
 
     if attrs.transparent() {

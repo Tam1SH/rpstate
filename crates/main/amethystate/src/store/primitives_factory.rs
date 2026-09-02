@@ -27,7 +27,7 @@ pub fn field<TScope, TValue>(
 ) -> StorageResult<Field<TValue>>
 where
     TScope: StateScope,
-    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
     let path = TScope::PATH.join(&crate::store::to_path(key)?);
     field_with_path(store, path, default, instance_id)
@@ -54,7 +54,7 @@ pub fn field_with_path<TValue>(
     instance_id: Uuid,
 ) -> StorageResult<Field<TValue>>
 where
-    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
     field_with_path_under(store, path, default, instance_id, ReadRules::new())
 }
@@ -70,7 +70,7 @@ pub fn field_with_path_where<TValue>(
     on_delete: OnDelete,
 ) -> StorageResult<Field<TValue>>
 where
-    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
     field_with_path_under(
         store,
@@ -91,7 +91,7 @@ pub fn field_with_path_under<TValue>(
     rules: ReadRules<TValue>,
 ) -> StorageResult<Field<TValue>>
 where
-    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
     let path = crate::store::to_path(path)?;
     let ReadRules {
@@ -151,7 +151,7 @@ where
         SubscriptionKind::ExactPath(path.clone()),
         Arc::new(move |event| match &event.new {
             Some(raw) => match match stored_as.read {
-                Some(read) => store_clone.decode_with(raw, read),
+                Some(read) => store_clone.decode_with(&event.path, raw, read),
                 None => store_clone.decode::<TValue>(raw),
             } {
                 Ok(parsed) => {
@@ -253,7 +253,7 @@ where
     };
 
     match store.get_raw(path)? {
-        Some(bytes) => store.decode_with(&bytes, read).map(Some),
+        Some(bytes) => store.decode_with(path, &bytes, read).map(Some),
         None => Ok(None),
     }
 }
