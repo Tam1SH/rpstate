@@ -5,6 +5,7 @@ use crate::migration::set::MigrationSet;
 use crate::store::backend::sqlite::migration::SqliteMigrationBackend;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
+use crate::store::backend::utils::refuse_closing_from_a_flush;
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
 use crate::store::debouncer::Debouncer;
@@ -198,6 +199,7 @@ impl SqliteStoreInner {
     /// Closing twice is fine: the second call finds the thread stopped and
     /// returns, so `Drop` after an explicit close does nothing.
     pub fn close(&self) -> StorageResult<()> {
+        refuse_closing_from_a_flush()?;
         {
             let _buffering = self.pending.lock();
             if !self.debouncer.stop_accepting() {
@@ -419,9 +421,9 @@ impl SqliteStoreInner {
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(vec),
-                source,
+                source: source.into(),
             },
-        );
+        )?;
 
         self.debouncer.schedule();
         Ok(())
@@ -557,9 +559,9 @@ impl SqliteStoreInner {
                 op: StoreOp::Delete,
                 old: Some(old_bytes),
                 new: None,
-                source,
+                source: source.into(),
             },
-        );
+        )?;
 
         self.debouncer.schedule();
         Ok(())
@@ -587,9 +589,9 @@ impl SqliteStoreInner {
                 op: StoreOp::DeletePrefix,
                 old: None,
                 new: None,
-                source,
+                source: source.into(),
             },
-        );
+        )?;
 
         self.debouncer.schedule();
         Ok(())

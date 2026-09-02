@@ -140,6 +140,43 @@ pub fn amethystate_impl(
             }
         }
 
+        if let Some(at) = entry
+            .with
+            .as_ref()
+            .or(entry.serialize_with.as_ref())
+            .or(entry.deserialize_with.as_ref())
+        {
+            let named = entry.stored_name();
+
+            let refusal = if entry.with.is_some()
+                && (entry.serialize_with.is_some() || entry.deserialize_with.is_some())
+            {
+                Some(format!(
+                    "`{named}` says how it is stored twice: `with` names a module holding both halves, and naming a half beside it leaves nothing to say which one runs. Write the module, or write the halves"
+                ))
+            } else if entry.volatile {
+                Some(format!(
+                    "`{named}` is volatile, so it is stored nowhere and there is nothing to store it as"
+                ))
+            } else if entry.nested {
+                Some(format!(
+                    "`{named}` is a nested struct, and a nested struct is not one value: its fields go to paths of their own, each stored as its own type says. What is stored one way belongs on a field that holds one value"
+                ))
+            } else if entry.get_map_types().is_some() {
+                Some(format!(
+                    "`{named}` is a map, and the map is not what is stored - its entries are, one value per key. Put this on the entry type"
+                ))
+            } else {
+                None
+            };
+
+            if let Some(message) = refusal {
+                return syn::Error::new(at.span(), message)
+                    .to_compile_error()
+                    .into();
+            }
+        }
+
         let on_field = match generate::read_policy(entry.on_unreadable.as_ref()) {
             Ok(policy) => policy,
             Err(e) => return e.to_compile_error().into(),

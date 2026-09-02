@@ -93,6 +93,7 @@ fn an_external_edit_notifies_a_subscriber() {
         SubscriptionKind::ExactPath(StorePath::from_segments(["cfg", "note"])),
         Arc::new(move |_event| {
             seen.fetch_add(1, Ordering::Relaxed);
+            Ok(())
         }),
     );
 

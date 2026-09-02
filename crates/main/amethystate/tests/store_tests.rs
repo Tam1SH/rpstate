@@ -38,6 +38,7 @@ fn test_local_reactivity() {
         Arc::new(move |_| {
             let mut guard = hit_inner.lock();
             *guard = true;
+            Ok(())
         }),
     );
 

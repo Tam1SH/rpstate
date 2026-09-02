@@ -922,7 +922,10 @@ fn a_subscription_hears_what_its_kind_asked_for(backend: Backend) {
         let sink = Arc::clone(&seen);
         store.subscribe(
             kind,
-            Arc::new(move |event| sink.lock().unwrap().push(event.path.to_string())),
+            Arc::new(move |event| {
+                sink.lock().unwrap().push(event.path.to_string());
+                Ok(())
+            }),
         );
         seen
     };
@@ -961,7 +964,10 @@ fn a_dropped_subscription_stops_hearing(backend: Backend) {
     let sink = Arc::clone(&seen);
     let id = store.subscribe(
         SubscriptionKind::Any,
-        Arc::new(move |event| sink.lock().unwrap().push(event.path.to_string())),
+        Arc::new(move |event| {
+            sink.lock().unwrap().push(event.path.to_string());
+            Ok(())
+        }),
     );
 
     store.set(["ui", "theme"], &"dark".to_string()).unwrap();
@@ -977,7 +983,10 @@ fn events(store: &Store) -> Arc<Mutex<Vec<StoreEvent>>> {
     let sink = Arc::clone(&seen);
     store.subscribe(
         SubscriptionKind::Any,
-        Arc::new(move |event| sink.lock().unwrap().push(event.clone())),
+        Arc::new(move |event| {
+            sink.lock().unwrap().push(event.clone());
+            Ok(())
+        }),
     );
     seen
 }

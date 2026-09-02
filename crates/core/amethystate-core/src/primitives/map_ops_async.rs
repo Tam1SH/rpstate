@@ -103,7 +103,7 @@ where
 
     let change = MapChange::Update {
         key,
-        old_value,
+        old_value: Some(old_value),
         new_value: value.clone(),
         source,
     };
@@ -129,7 +129,7 @@ where
     let change = if let Some(old_value) = old_value {
         MapChange::Update {
             key,
-            old_value,
+            old_value: Some(old_value),
             new_value: value.clone(),
             source,
         }
@@ -166,7 +166,7 @@ where
     if let Some(old_value) = old_value {
         let change = MapChange::Remove {
             key,
-            old_value: old_value.clone(),
+            old_value: Some(old_value.clone()),
             source,
         };
         map_apply_change_async(backend, core, path, change).await?;

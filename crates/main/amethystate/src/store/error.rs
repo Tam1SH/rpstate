@@ -61,6 +61,21 @@ pub enum StorageError {
     /// backup, a rename - and it stays theirs, so every later read, write,
     /// scan and delete answers with this.
     Closed,
+
+    /// The change was stored, and somebody subscribed to it could not take it.
+    ///
+    /// The write landed: this is about what happened while telling people. A
+    /// field that cannot read back what was just written to its path answers
+    /// with this, which is how the writer finds out that what it stored is not
+    /// what that field holds.
+    Notify,
+
+    /// Asked for from inside something the store is already doing, where doing
+    /// it would mean waiting for the caller to finish.
+    ///
+    /// Closing from `on_persist_failure` is the one that reaches here: that
+    /// callback runs on the thread a close has to wait for.
+    Reentrant,
 }
 
 impl fmt::Display for StorageError {
@@ -80,6 +95,10 @@ impl fmt::Display for StorageError {
             StorageError::CommitFailed => "the flush this commit was waiting on did not complete",
             StorageError::Claimed => "two schemas claim the same stored path",
             StorageError::Closed => "the store was closed and has let go of its file",
+            StorageError::Notify => "the change was stored, and a subscriber could not take it",
+            StorageError::Reentrant => {
+                "the store cannot do this from inside what it is already doing"
+            }
         })
     }
 }

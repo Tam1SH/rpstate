@@ -134,6 +134,8 @@ pub async fn amethystate_subscribe<R: Runtime>(
             {
                 let _ = app_handle.emit(&event_name, val);
             }
+
+            Ok(())
         }),
     );
 

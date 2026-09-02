@@ -202,7 +202,7 @@ pub fn read(input: &DeriveInput) -> Result<SerdeSaid, Error> {
             return Err(Error::new(
                 span,
                 format!(
-                    "`{ident}` would encode differently from how its own type encodes, and the store keeps one value per path with nothing beside it to say which of the two is there. A type is stored the way it serialises, so a second form of it is a second type - a newtype whose own `Serialize` does this, which is also the answer for a type from another crate you cannot write one for"
+                    "`{ident}` is transformed on its way through serde, and serde only runs that inside the struct holding the field - which this one never is, its fields going to paths of their own. Say it to this macro instead: `#[amestate(with = ..)]`, or one half of it, taking the same functions"
                 ),
             ));
         }

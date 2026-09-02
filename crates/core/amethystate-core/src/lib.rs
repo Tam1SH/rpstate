@@ -32,7 +32,7 @@ pub use scheme::*;
 #[cfg(feature = "async")]
 pub use state::*;
 
-pub use change::{Change, MapChange};
+pub use change::{Change, MapChange, Source};
 pub use primitives::field_core::FieldCore;
 pub use primitives::field_ops::*;
 pub use primitives::intercept::{InterceptDisposer, InterceptGuard};

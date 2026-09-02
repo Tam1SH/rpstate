@@ -322,3 +322,50 @@ fn one_check_serves_both_constructors(backend: Backend) {
     assert!(EitherWindow::new_with(&store).is_err());
     assert!(EitherWindow::load_with(&store).is_err());
 }
+
+fn the_renamed_window_can_be_drawn(
+    window: &AmeData<RenamedWindow>,
+    _cx: &CheckContext,
+) -> Result<(), Invalid> {
+    if window.min_width <= window.max_width {
+        Ok(())
+    } else {
+        Err(
+            Invalid::new("the smallest window is wider than the largest")
+                .at(&["min_width", "max_width"]),
+        )
+    }
+}
+
+#[amethystate(
+    prefix = "window_renamed",
+    on_unreadable = UseDefault,
+    check = the_renamed_window_can_be_drawn
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedWindow {
+    #[amestate(default = 400u32)]
+    pub min_width: u32,
+
+    #[amestate(default = 1600u32)]
+    pub max_width: u32,
+}
+
+#[backends(all)]
+fn a_complaint_reaches_a_field_stored_under_another_name(backend: Backend) {
+    let path = TempPath::new("struct_check_renamed");
+    let store = StoreBuilder::new(path.path())
+        .backend(backend)
+        .build()
+        .unwrap();
+
+    store.set(["window_renamed", "minWidth"], &2000u32).unwrap();
+
+    let window = RenamedWindow::new_with(&store).unwrap();
+
+    assert!(
+        window.min_width().try_get().is_err(),
+        "the check named `min_width`, and the field is stored as `minWidth`"
+    );
+    assert!(window.max_width().try_get().is_err());
+}

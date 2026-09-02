@@ -66,6 +66,13 @@ pub(crate) enum Unread {
 
     /// The bytes would not read as the field's type.
     Undecodable(Arc<str>),
+
+    /// The field never got to write its default, because the store already
+    /// held something at its path that seeding would have destroyed.
+    ///
+    /// So the field reports what it was declared with and the store holds
+    /// something else, from the first moment it exists.
+    Occupied(Arc<str>),
 }
 
 pub struct Field<TValue> {
@@ -258,6 +265,12 @@ where
             Some(Unread::Undecodable(why)) => Err(Report::new(FieldError::Storage)
                 .attach(Key(self.inner.path.clone()))
                 .attach(format!("the stored value could not be read: {why}"))),
+            Some(Unread::Occupied(what)) => Err(Report::new(FieldError::Storage)
+                .attach(Key(self.inner.path.clone()))
+                .attach(format!(
+                    "this field holds the default it was declared with and the store holds \
+                     something else: its default was never written, because {what}"
+                ))),
         }
     }
 
@@ -932,6 +945,7 @@ mod tests {
                 SubscriptionKind::Prefix(StorePath::from_segments(["test", "field"])),
                 Arc::new(move |_| {
                     cap.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
                 }),
             );
 

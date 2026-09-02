@@ -5,8 +5,10 @@ use crate::errors::StorageError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
 use crate::store::backend::text::migration::TextMigrationBackend;
+use crate::store::backend::text::watching;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
+use crate::store::backend::utils::refuse_closing_from_a_flush;
 use crate::store::config::{FileWritePolicy, StoreConfig};
 use crate::store::debouncer::Debouncer;
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
@@ -15,9 +17,10 @@ use crate::store::format::{self, StorageFactSet};
 use crate::store::screening::{Noticed, Screening};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use crate::store::{
-    EXTERNAL_EDIT, InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback,
-    StoreEvent, StoreOp, SubscriptionEntry, SubscriptionId, SubscriptionKind,
+    InitState, SchemaAwareStore, StorageResult, StoreBackend, StoreCallback, StoreEvent, StoreOp,
+    SubscriptionEntry, SubscriptionId, SubscriptionKind,
 };
+use amethystate_core::Source;
 use amethystate_core::path::StorePath;
 use error_stack::ResultExt;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -254,7 +257,6 @@ pub(crate) struct TextStoreInner<D: TextDocument> {
     /// What this store may spend on a path and its value together, worked out
     /// once from the codec's own ceiling and whatever the caller promised.
     pub(crate) budget: Screening,
-    watch_debouncer: Arc<Debouncer>,
     _watcher: RecommendedWatcher,
 }
 
@@ -378,8 +380,18 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
         let persisted_watch = persisted.clone();
         let meta_path = files.meta.path.clone();
 
-        let watch_debouncer = Arc::new(Debouncer::new(config.watch_debounce, move || {
-            sync_external_changes::<D>(
+        let settling = watching::Coalescing::new(config.watch_debounce);
+        let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+            let Ok(event) = res else { return };
+
+            let is_modify = matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_));
+            if !is_modify {
+                return;
+            }
+
+            settling.settle();
+
+            watching::take_outside_edit::<D>(
                 &files_watch.data,
                 &watch_subs,
                 &writes_watch,
@@ -399,18 +411,6 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
                     );
                 }
             }
-        }));
-
-        let watch_debouncer_trigger = watch_debouncer.clone();
-        let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            let Ok(event) = res else { return };
-
-            let is_modify = matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_));
-            if !is_modify {
-                return;
-            }
-
-            watch_debouncer_trigger.schedule();
         })
         .map_err(|e| TextStoreError::Watch(e.to_string()))
         .change_context(StorageError::Open)
@@ -435,7 +435,6 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
             writes,
             persisted,
             budget: Screening::for_codec(&config.limits, D::format()),
-            watch_debouncer,
             _watcher: watcher,
         });
 
@@ -552,6 +551,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     /// Closing twice is fine: the second call finds the thread stopped and
     /// returns, so `Drop` after an explicit close does nothing.
     pub(crate) fn close(&self) -> StorageResult<()> {
+        refuse_closing_from_a_flush()?;
         {
             let _data = self.files.data.doc.write();
             let _meta = self.files.meta.doc.write();
@@ -561,7 +561,6 @@ impl<D: TextDocument> TextStoreInner<D> {
         }
 
         self.debouncer.shutdown();
-        self.watch_debouncer.shutdown();
         self.save_now()
             .attach("rendering the document before close")
     }
@@ -589,7 +588,7 @@ impl<D: TextDocument> TextStoreInner<D> {
     /// Picks up an edit made to the file outside the process before writing our
     /// own, unless we have unsaved changes of our own to lose.
     pub(crate) fn pull_external_changes(&self) {
-        sync_external_changes::<D>(
+        watching::take_outside_edit::<D>(
             &self.files.data,
             &self.subscriptions,
             &self.writes,
@@ -647,9 +646,9 @@ impl<D: TextDocument> TextStoreInner<D> {
                 op: StoreOp::Delete,
                 old: Some(old_bytes),
                 new: None,
-                source,
+                source: source.into(),
             },
-        );
+        )?;
 
         self.debouncer.schedule();
         Ok(())
@@ -678,9 +677,9 @@ impl<D: TextDocument> TextStoreInner<D> {
                 op: StoreOp::DeletePrefix,
                 old: None,
                 new: None,
-                source,
+                source: source.into(),
             },
-        );
+        )?;
 
         self.debouncer.schedule();
         Ok(())
@@ -823,7 +822,7 @@ impl<D: TextDocument> TextStoreInner<D> {
                 op: StoreOp::Set,
                 old: old_bytes,
                 new: Some(new),
-                source,
+                source: source.into(),
             },
             None => {
                 let Some(old) = old_bytes else {
@@ -835,12 +834,12 @@ impl<D: TextDocument> TextStoreInner<D> {
                     op: StoreOp::Delete,
                     old: Some(old),
                     new: None,
-                    source,
+                    source: source.into(),
                 }
             }
         };
 
-        utils::emit_events(&self.subscriptions, event);
+        utils::emit_events(&self.subscriptions, event)?;
 
         self.debouncer.schedule();
         Ok(())
@@ -1130,70 +1129,7 @@ pub(super) fn scan_prefix_recursive<D: TextDocument>(
     Ok(())
 }
 
-/// Takes an edit made to the file outside the process, unless doing so would
-/// throw away a write of our own.
-///
-/// The file is read before the document is locked, so what came back can be a
-/// version behind by the time the decision is made: a flush landing in that gap
-/// leaves the reader holding a document older than the one on disk, and
-/// installing it drops every write the flush had just saved. Which write
-/// counter the flush had reached is therefore read before the file and checked
-/// again under the lock, and a value that moved means the content is stale.
-///
-/// The other half of the guarantee is that a write raises `writes` while it
-/// still holds the document lock. Raised after, there is a window where the
-/// change is in the document and the store still looks saved, and a reader
-/// arriving inside it is entitled to overwrite it.
-fn sync_external_changes<D: TextDocument>(
-    file: &StoreFile<D>,
-    subscriptions: &Arc<RwLock<Vec<SubscriptionEntry>>>,
-    writes: &AtomicU64,
-    persisted: &AtomicU64,
-) {
-    let read_after = persisted.load(Ordering::Acquire);
-
-    let Ok(content) = std::fs::read_to_string(&file.path) else {
-        return;
-    };
-    let Ok(on_disk) = D::parse(&content) else {
-        return;
-    };
-
-    let events = {
-        let mut guard = file.doc.write();
-
-        let written = writes.load(Ordering::Acquire);
-        let saved = persisted.load(Ordering::Acquire);
-
-        if written != saved || saved != read_after {
-            return;
-        }
-
-        let old_serialized = guard.serialize().unwrap_or_default();
-        let new_serialized = on_disk.serialize().unwrap_or_default();
-        if old_serialized == new_serialized {
-            Vec::new()
-        } else {
-            let old = guard.clone();
-            *guard = on_disk;
-            info!("external store change detected");
-            match diff_documents::<D>(&old, &*guard) {
-                Ok(events) => events,
-                Err(e) => {
-                    tracing::error!(
-                        "an external edit could not be read, so nobody was told about it: {e:?}"
-                    );
-                    return;
-                }
-            }
-        }
-    };
-    for event in events {
-        utils::emit_events(subscriptions, event);
-    }
-}
-
-fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreEvent>> {
+pub(super) fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreEvent>> {
     let mut old_nodes = Vec::new();
     scan_prefix_recursive(old, &[], "", &mut old_nodes, None)
         .attach("reading the document as it was before the edit")?;
@@ -1223,7 +1159,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                         op: StoreOp::Set,
                         old: old_bytes,
                         new: new_bytes,
-                        source: Some(EXTERNAL_EDIT),
+                        source: Source::Disk,
                     });
                 }
             }
@@ -1234,7 +1170,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                     op: StoreOp::Delete,
                     old: old_bytes,
                     new: None,
-                    source: Some(EXTERNAL_EDIT),
+                    source: Source::Disk,
                 });
             }
             (None, Some(n)) => {
@@ -1244,7 +1180,7 @@ fn diff_documents<D: TextDocument>(old: &D, new: &D) -> StorageResult<Vec<StoreE
                     op: StoreOp::Set,
                     old: None,
                     new: new_bytes,
-                    source: Some(EXTERNAL_EDIT),
+                    source: Source::Disk,
                 });
             }
             (None, None) => {}

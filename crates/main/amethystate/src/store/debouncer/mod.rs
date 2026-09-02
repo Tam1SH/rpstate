@@ -187,6 +187,14 @@ impl Debouncer {
 
         let handle = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(handle) = handle {
+            assert_ne!(
+                handle.thread().id(),
+                thread::current().id(),
+                "this thread is the one being waited for, so waiting would never end. \
+                 Closing a store from the thread that saves it is what reaches here, and the \
+                 only way onto that thread is `on_persist_failure`: report the failure from \
+                 there and close from wherever the store is held"
+            );
             let _ = handle.join();
         }
     }
@@ -212,6 +220,37 @@ enum Streak {
     GaveUp,
 }
 
+thread_local! {
+    static SAVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks this thread as the one a flush is running on, for as long as it is
+/// held.
+///
+/// Set around `on_persist_failure`, which is the only code the caller wrote
+/// that runs here. What it buys is [`Saving::here`]: a close asked for from
+/// inside that callback can be turned down with a sentence instead of waiting
+/// for the thread it is running on.
+pub(crate) struct Saving;
+
+impl Saving {
+    fn entered() -> Self {
+        SAVING.with(|flag| flag.set(true));
+        Self
+    }
+
+    /// Whether this thread is inside a flush.
+    pub(crate) fn here() -> bool {
+        SAVING.with(std::cell::Cell::get)
+    }
+}
+
+impl Drop for Saving {
+    fn drop(&mut self) {
+        SAVING.with(|flag| flag.set(false));
+    }
+}
+
 fn give_up(
     reason: &Arc<error_stack::Report<crate::store::StorageError>>,
     elapsed: Duration,
@@ -222,7 +261,10 @@ fn give_up(
     let decision = policy
         .on_giveup
         .as_ref()
-        .map_or(AfterGivingUp::Fail, |callback| callback(reason));
+        .map_or(AfterGivingUp::Fail, |callback| {
+            let _saving = Saving::entered();
+            callback(reason)
+        });
 
     error!(
         target: "amethystate",
@@ -333,6 +375,30 @@ fn run_with_retry(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn shutting_down_from_the_thread_being_waited_for_says_so() {
+        use std::sync::OnceLock;
+
+        let itself: Arc<OnceLock<Arc<Debouncer>>> = Arc::new(OnceLock::new());
+        let from_inside = itself.clone();
+
+        let d = Arc::new(Debouncer::new(Duration::from_millis(1), move || {
+            if let Some(d) = from_inside.get() {
+                d.shutdown();
+            }
+        }));
+
+        let _ = itself.set(d.clone());
+        d.schedule();
+        d.wait_dead();
+
+        assert!(
+            d.is_poisoned(),
+            "the thread should have gone down naming what it could not do, \
+             rather than waiting for itself"
+        );
+    }
 
     #[test]
     fn test_poison_on_op_panic() {

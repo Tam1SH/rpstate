@@ -77,6 +77,7 @@ fn the_store_itself_deduplicates() -> Result<(), Box<dyn Error + Send + Sync>> {
         )),
         Arc::new(move |_| {
             count.fetch_add(1, Ordering::Release);
+            Ok(())
         }),
     );
 

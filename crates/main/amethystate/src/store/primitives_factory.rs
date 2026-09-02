@@ -3,7 +3,7 @@ use crate::reactive::field::{Unread, Unreadable};
 use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::StoreSubscription;
-use crate::store::facts::{Entry, Facts, Prefix, RawKey};
+use crate::store::facts::{Entry, Facts, Key, Prefix, RawKey, Refused};
 use crate::store::rules::{OnDelete, OnUnreadable, ReadRules};
 use crate::store::traits::{StoreExt as _, StoredAs};
 use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
@@ -124,7 +124,9 @@ where
             }
         },
         Ok(None) => {
-            seed(store, &path, &default, stored_as)?;
+            if let Some(in_the_way) = seed(store, &path, &default, stored_as)? {
+                refused = Some(Unread::Occupied(in_the_way));
+            }
             default.clone()
         }
         Err(why) if policy.covers(&why) => {
@@ -156,33 +158,41 @@ where
                     if let Some(check) = check.filter(|_| event.is_external_edit())
                         && let Err(invalid) = check(&parsed, store_clone.context())
                     {
-                        tracing::error!(
-                            path = %path_log,
-                            reason = %invalid,
-                            "a declared check refused an edit from outside, so the field kept what it had"
-                        );
                         if let Ok(mut held) = unreadable_sub.lock() {
                             *held = Some(Unread::Refused(Arc::from(invalid.reason())));
                         }
-                        return;
+
+                        return Err(Report::new(StorageError::Notify)
+                            .attach(Key(path_log.clone()))
+                            .attach(Refused(invalid.reason().to_string()))
+                            .attach("the field kept what it had"));
                     }
 
                     if let Ok(mut held) = unreadable_sub.lock() {
                         *held = None;
                     }
-                    sig_clone.set_forwarded(parsed, event.source)
+                    sig_clone.set_forwarded(parsed, event.source.handle());
+                    Ok(())
                 }
                 Err(e) => {
-                    tracing::error!(path = %path_log, error = %e, "decode failed");
                     if let Ok(mut held) = unreadable_sub.lock() {
                         *held = Some(Unread::Undecodable(Arc::from(e.to_string().as_str())));
                     }
+
+                    Err(e
+                        .change_context(StorageError::Notify)
+                        .attach(Key(path_log.clone())))
                 }
             },
-            None => match on_delete {
-                OnDelete::UseDefault => sig_clone.set_forwarded(deleted.clone(), event.source),
-                OnDelete::Keep => {}
-            },
+            None => {
+                match on_delete {
+                    OnDelete::UseDefault => {
+                        sig_clone.set_forwarded(deleted.clone(), event.source.handle())
+                    }
+                    OnDelete::Keep => {}
+                }
+                Ok(())
+            }
         }),
     );
 
@@ -248,12 +258,18 @@ where
     }
 }
 
+/// Writes the field's declared default, and says so if it could not.
+///
+/// `Some` is what stood in the way. Building carries on - the field takes the
+/// default it was declared with - but it is now reporting something the store
+/// does not hold, so what came back here goes to [`Unread::Occupied`] and out
+/// through [`Field::try_get`](crate::Field::try_get).
 fn seed<TValue>(
     store: &Store,
     path: &StorePath,
     default: &TValue,
     stored_as: StoredAs<TValue>,
-) -> StorageResult<()>
+) -> StorageResult<Option<Arc<str>>>
 where
     TValue: Serialize + 'static,
 {
@@ -266,16 +282,10 @@ where
 
     match written {
         Err(report) if report.contains::<crate::store::Occupied>() => {
-            tracing::warn!(
-                target: "amethystate",
-                path = %path,
-                error = %crate::store::one_line(&report),
-                "the field starts on its default: the store already holds something in the way, \
-                 and seeding over it would destroy it",
-            );
-            Ok(())
+            Ok(Some(Arc::from(crate::store::one_line(&report).as_str())))
         }
-        other => other,
+        Err(other) => Err(other),
+        Ok(()) => Ok(None),
     }
 }
 
@@ -423,59 +433,52 @@ where
             if event.op == StoreOp::DeletePrefix && event.path == map_path {
                 core_clone.cache.clear();
                 core_clone.notify(&MapChange::Clear {
-                    source: event.source,
+                    source: event.source.handle(),
                 });
-                return;
+                return Ok(());
             }
 
             let Some(key_str) = path_for_keys.entry_name(&event.path) else {
-                tracing::error!(
-                    path = %event.path,
-                    map = %path_for_keys,
-                    "a key under this map is not a path this library could have written, so the change was not applied"
-                );
-                return;
+                return Err(Report::new(StorageError::Notify)
+                    .attach(Key(event.path.clone()))
+                    .attach(Prefix(path_for_keys.clone()))
+                    .attach("not a path this library could have written, so the map did not take it"));
             };
 
             let Ok(k) = K::from_str(&key_str) else {
-                tracing::error!(
-                    path = %event.path,
-                    map = %path_for_keys,
-                    key_type = std::any::type_name::<K>(),
-                    "a key under this map does not parse as its key type, so the change was not applied"
-                );
-                return;
+                return Err(Report::new(StorageError::Notify)
+                    .attach(Key(event.path.clone()))
+                    .attach(Prefix(path_for_keys.clone()))
+                    .attach(format!("does not parse as {}", std::any::type_name::<K>())));
             };
 
             {
-                let source = event.source;
+                let source = event.source.handle();
 
                 let new_val = match event.new.as_ref().map(|b| store_clone.decode::<V>(b)) {
                     Some(Ok(value)) => Some(value),
                     Some(Err(e)) => {
-                        tracing::error!(
-                            path = %event.path,
-                            "a map entry cannot be read as this map's value type, so the map kept what it had: {e:?}"
-                        );
-                        return;
+                        return Err(e
+                            .change_context(StorageError::Notify)
+                            .attach(Key(event.path.clone()))
+                            .attach("the map kept what it had"));
                     }
                     None => None,
                 };
 
-                let decoded_old = match event.old.as_ref().map(|b| store_clone.decode::<V>(b)) {
+                let stored_old = match event.old.as_ref().map(|b| store_clone.decode::<V>(b)) {
                     Some(Ok(value)) => Some(value),
                     Some(Err(e)) => {
                         tracing::warn!(
                             path = %event.path,
-                            "the value being replaced could not be read, so subscribers are told what this map had: {e:?}"
+                            "the value being replaced would not read as this map's value type, so what this map last held is what subscribers are told: {e:?}"
                         );
                         None
                     }
                     None => None,
                 };
 
-                let old_val =
-                    decoded_old.or_else(|| core_clone.cache.get(&k));
+                let old_val = stored_old.or_else(|| core_clone.cache.get(&k));
 
                 let change = {
                     let keys = &core_clone.cache;
@@ -483,15 +486,13 @@ where
                     match event.op {
                         StoreOp::Set => {
                             let Some(new_value) = new_val else {
-                                tracing::error!(
-                                    path = %event.path,
-                                    "a set carried no value, so the map kept what it had"
-                                );
-                                return;
+                                return Err(Report::new(StorageError::Notify)
+                                    .attach(Key(event.path.clone()))
+                                    .attach("a set carried no value, so the map kept what it had"));
                             };
 
                             if keys.contains_key(&k) {
-                                let old_value = old_val.unwrap_or_default();
+                                let old_value = old_val;
                                 keys.insert(k.clone(), new_value.clone());
                                 MapChange::Update {
                                     key: k.clone(),
@@ -512,7 +513,7 @@ where
                             keys.remove(&k);
                             MapChange::Remove {
                                 key: k.clone(),
-                                old_value: old_val.unwrap_or_default(),
+                                old_value: old_val,
                                 source,
                             }
                         }
@@ -521,6 +522,8 @@ where
 
                 core_clone.notify(&change);
             }
+
+            Ok(())
         }),
     );
 

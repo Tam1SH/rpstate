@@ -153,7 +153,7 @@ pub(crate) fn refused_marker(entries: &[StoreFieldEntry]) -> TokenStream2 {
         .filter(|e| e.get_map_types().is_none())
         .map(|e| {
             let fname = e.ident.as_ref().unwrap();
-            let named = e.stored_name();
+            let named = fname.to_string();
 
             let mark = if e.nested {
                 quote! { self.#fname.__ame_refused(::core::option::Option::None, why); }

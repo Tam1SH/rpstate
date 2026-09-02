@@ -9,6 +9,7 @@ pub mod ron;
 pub mod store;
 #[cfg(feature = "toml")]
 pub mod toml;
+mod watching;
 
 pub use document::TextDocument;
 pub use error::TextStoreError;
@@ -67,6 +68,7 @@ macro_rules! define_store_test_suite {
                     SubscriptionKind::ExactPath(StorePath::from_segments(["ui", "theme", "dark"])),
                     Arc::new(move |evt| {
                         let _ = tx.send(evt.clone());
+                        Ok(())
                     }),
                 );
 
@@ -95,6 +97,7 @@ macro_rules! define_store_test_suite {
                     SubscriptionKind::ExactPath(StorePath::from_segments(["ui", "theme", "dark"])),
                     Arc::new(move |evt| {
                         let _ = tx.send(evt.clone());
+                        Ok(())
                     }),
                 );
 

@@ -1,9 +1,16 @@
+use amethystate_core::Source;
 use amethystate_core::path::StorePath;
 use std::sync::Arc;
-use uuid::Uuid;
 
 pub type SubscriptionId = u64;
-pub type StoreCallback = Arc<dyn Fn(&StoreEvent) + Send + Sync + 'static>;
+
+/// What a subscriber does with a change, and what it says about it.
+///
+/// The answer travels back to whoever made the change: a subscriber runs on
+/// that thread, so a value nobody could read back is something the writer can
+/// be told rather than something only the log knows.
+pub type StoreCallback =
+    Arc<dyn Fn(&StoreEvent) -> crate::store::StorageResult<()> + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreOp {
@@ -15,27 +22,19 @@ pub enum StoreOp {
     DeletePrefix,
 }
 
-/// The writer of a change that arrived from the file rather than from a handle
-/// in this process.
-///
-/// Its bytes are `amethystate_disk` in ASCII, so it reads as itself in a log
-/// and cannot collide with a generated id: the version and variant bits are
-/// not a v4's.
-pub const EXTERNAL_EDIT: Uuid = Uuid::from_u128(0x616d_6574_6879_7374_6174_655f_6469_736b);
-
 #[derive(Debug, Clone)]
 pub struct StoreEvent {
     pub path: StorePath,
     pub op: StoreOp,
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
-    pub source: Option<Uuid>,
+    pub source: Source,
 }
 
 impl StoreEvent {
     /// Whether this change came off the disk.
     pub fn is_external_edit(&self) -> bool {
-        self.source == Some(EXTERNAL_EDIT)
+        matches!(self.source, Source::Disk)
     }
 }
 

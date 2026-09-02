@@ -1,0 +1,204 @@
+use super::document::TextDocument;
+use super::store::{StoreFile, diff_documents};
+use crate::store::StoreEvent;
+use crate::store::SubscriptionEntry;
+use crate::store::backend::utils;
+use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tracing::{info, warn};
+
+/// Where the document stands against the file, for the one question that
+/// matters when an outside edit arrives: may it be taken.
+///
+/// Two counters answer it, and neither answers it alone. `writes` rises with
+/// every mutation while the document lock is held; `persisted` rises to meet it
+/// when a flush lands. The third number is the one read *before* the file was,
+/// which is what separates "we have unsaved work" from "a flush landed while we
+/// were reading".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Standing {
+    /// Document and file agree. What the file says may replace what is held.
+    Settled,
+
+    /// The document holds writes the file was never given. The file is behind,
+    /// and what it says is not an edit but an older copy of our own work.
+    Unsaved,
+
+    /// A flush landed between reading the file and taking the lock, so what
+    /// came back is a version behind. Reading again settles it.
+    Raced,
+}
+
+pub(super) fn standing(writes: &AtomicU64, persisted: &AtomicU64, read_after: u64) -> Standing {
+    let written = writes.load(Ordering::Acquire);
+    let saved = persisted.load(Ordering::Acquire);
+
+    if written != saved {
+        Standing::Unsaved
+    } else if saved != read_after {
+        Standing::Raced
+    } else {
+        Standing::Settled
+    }
+}
+
+/// What came of one look at the file.
+#[derive(Debug)]
+pub(super) enum Taken {
+    /// The document now holds what the file said, and these are the changes.
+    Applied(Vec<StoreEvent>),
+
+    /// The file says what the document already says.
+    Same,
+
+    /// Not taken, and why.
+    Held(Standing),
+
+    /// The file could not be read or would not parse. A half-written file
+    /// looks like this, and the write that finishes it brings another event.
+    Unreadable,
+}
+
+/// One look: read the file, decide whether it may be taken, and take it.
+///
+/// The file is read before the lock, so what came back can be a version behind
+/// by the time the decision is made. That is what [`Standing::Raced`] is, and
+/// it is the caller's to retry - dropping it would throw away somebody's edit
+/// because a flush of ours happened to land in the gap.
+pub(super) fn look<D: TextDocument>(
+    file: &StoreFile<D>,
+    writes: &AtomicU64,
+    persisted: &AtomicU64,
+) -> Taken {
+    let read_after = persisted.load(Ordering::Acquire);
+
+    let Ok(content) = std::fs::read_to_string(&file.path) else {
+        return Taken::Unreadable;
+    };
+    let Ok(on_disk) = D::parse(&content) else {
+        return Taken::Unreadable;
+    };
+
+    let mut guard = file.doc.write();
+
+    match standing(writes, persisted, read_after) {
+        Standing::Settled => {}
+        held => return Taken::Held(held),
+    }
+
+    let held = guard.serialize().unwrap_or_default();
+    let found = on_disk.serialize().unwrap_or_default();
+    if held == found {
+        return Taken::Same;
+    }
+
+    let before = guard.clone();
+    *guard = on_disk;
+    info!("external store change detected");
+
+    match diff_documents::<D>(&before, &guard) {
+        Ok(events) => Taken::Applied(events),
+        Err(e) => {
+            warn!("an external edit could not be read, so nobody was told about it: {e:?}");
+            Taken::Applied(Vec::new())
+        }
+    }
+}
+
+/// How many times a look that lost a race is worth taking again.
+///
+/// A race needs a flush to land in the gap between reading the file and taking
+/// the lock. Two in a row means writes are arriving faster than the file can be
+/// read, and the next file event will bring the edit round again anyway.
+const RETRIES: usize = 3;
+
+/// Takes what the file says, retrying a look that lost a race, and tells
+/// whoever is subscribed.
+///
+/// Runs on the thread that noticed the file change - which is the thread the
+/// change came from, the same rule a write follows. Nothing here is joined by
+/// [`close`](super::store::TextStoreInner::close), so a subscriber may close the
+/// store from inside its own callback.
+pub(super) fn take_outside_edit<D: TextDocument>(
+    file: &StoreFile<D>,
+    subscriptions: &RwLock<Vec<SubscriptionEntry>>,
+    writes: &AtomicU64,
+    persisted: &AtomicU64,
+) {
+    for _ in 0..RETRIES {
+        match look(file, writes, persisted) {
+            Taken::Applied(events) => {
+                for event in events {
+                    if let Err(refused) = utils::emit_events(subscriptions, event) {
+                        warn!(
+                            file = %file.path.display(),
+                            "an outside edit was taken and somebody could not read it back, and \
+                             there is nobody to tell: the edit came from the file, not from a \
+                             caller. {refused:?}"
+                        );
+                    }
+                }
+                return;
+            }
+            Taken::Same | Taken::Unreadable => return,
+            Taken::Held(Standing::Raced) => continue,
+            Taken::Held(Standing::Unsaved) => {
+                warn!(
+                    file = %file.path.display(),
+                    "the file was edited outside while this store held writes it had not saved, \
+                     so the edit was left where it is: the next save writes the document whole"
+                );
+                return;
+            }
+            Taken::Held(Standing::Settled) => return,
+        }
+    }
+
+    warn!(
+        file = %file.path.display(),
+        "an outside edit lost the race with this store's own saving three times over, so it was \
+         not taken; the next change to the file brings it round again"
+    );
+}
+
+/// Waits out a quiet period before looking, so a burst of file events becomes
+/// one look rather than one each.
+///
+/// The notifier calls its handler one at a time, so waiting here holds the next
+/// event rather than losing it. A look that happens anyway costs a file read
+/// and finds nothing: what is emitted comes from comparing documents, not from
+/// counting events.
+pub(super) struct Coalescing {
+    quiet: Duration,
+    until: Mutex<Instant>,
+}
+
+impl Coalescing {
+    pub(super) fn new(quiet: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            quiet,
+            until: Mutex::new(Instant::now()),
+        })
+    }
+
+    /// Blocks until the file has been quiet for the period this was built with.
+    pub(super) fn settle(&self) {
+        let mut deadline = Instant::now() + self.quiet;
+        {
+            let mut until = self.until.lock().unwrap_or_else(|e| e.into_inner());
+            *until = deadline;
+        }
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return;
+            }
+            std::thread::sleep(deadline - now);
+
+            deadline = *self.until.lock().unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}

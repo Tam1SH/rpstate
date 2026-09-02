@@ -312,7 +312,7 @@ enum MapChangeHelper<K, V> {
     Update {
         key: K,
         #[serde(rename = "oldValue")]
-        old_value: V,
+        old_value: Option<V>,
         #[serde(rename = "newValue")]
         new_value: V,
         source: Option<Uuid>,
@@ -320,7 +320,7 @@ enum MapChangeHelper<K, V> {
     Remove {
         key: K,
         #[serde(rename = "oldValue")]
-        old_value: V,
+        old_value: Option<V>,
         source: Option<Uuid>,
     },
     Clear {

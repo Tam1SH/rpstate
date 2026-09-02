@@ -42,7 +42,7 @@ fn an_update_reports_the_value_that_was_there_before(backend: Backend) {
 
     assert_eq!(
         *seen.lock().unwrap(),
-        vec![(5, 7)],
+        vec![(Some(5), 7)],
         "the flushed value is still the old one"
     );
 }
@@ -69,7 +69,7 @@ fn an_unflushed_write_is_the_old_value_for_the_next_one(backend: Backend) {
 
     assert_eq!(
         *seen.lock().unwrap(),
-        vec![1],
+        vec![Some(1)],
         "the buffer holds the newer value and wins over the database"
     );
 }
@@ -95,5 +95,5 @@ fn a_removal_reports_the_flushed_value(backend: Backend) {
 
     cfg.items().remove("k").unwrap();
 
-    assert_eq!(*seen.lock().unwrap(), vec![42]);
+    assert_eq!(*seen.lock().unwrap(), vec![Some(42)]);
 }

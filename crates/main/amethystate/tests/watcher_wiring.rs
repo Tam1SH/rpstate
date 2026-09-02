@@ -37,6 +37,7 @@ fn an_edit_from_outside_reaches_a_subscriber() {
         SubscriptionKind::ExactPath(key.clone()),
         Arc::new(move |event| {
             let _ = tx.send(event.source);
+            Ok(())
         }),
     );
 
@@ -49,7 +50,7 @@ fn an_edit_from_outside_reaches_a_subscriber() {
 
     assert_eq!(
         source,
-        Some(amethystate::store::EXTERNAL_EDIT),
+        amethystate_core::Source::Disk,
         "a change that came off the disk has to say so"
     );
     assert_eq!(store.get::<String>(&key).unwrap().as_deref(), Some("light"));

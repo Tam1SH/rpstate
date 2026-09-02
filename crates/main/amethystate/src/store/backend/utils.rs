@@ -5,7 +5,7 @@ use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::Facts;
 use crate::store::{StoreEvent, SubscriptionEntry};
 use amethystate_core::path::StorePath;
-use error_stack::ResultExt;
+use error_stack::{Report, ResultExt};
 use parking_lot::RwLock;
 use std::path::Path;
 
@@ -133,7 +133,32 @@ pub fn init_key(namespace: &str) -> String {
     format!("init::{namespace}")
 }
 
-pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent) {
+/// Turns down a close asked for from inside `on_persist_failure`.
+///
+/// That callback runs on the thread a close waits for, so going ahead would
+/// wait for the caller to return - which it cannot do until the close it is
+/// waiting on comes back.
+pub fn refuse_closing_from_a_flush() -> StorageResult<()> {
+    if crate::store::debouncer::Saving::here() {
+        return Err(Report::new(StorageError::Reentrant).attach(
+            "`on_persist_failure` runs on the thread that saves, and closing waits for that \
+             thread. Report the failure from the callback and close the store from wherever it \
+             is held",
+        ));
+    }
+    Ok(())
+}
+
+/// Tells everyone subscribed to `event`, and hands back what they said.
+///
+/// Every subscriber is told, whatever the ones before it answered: they are
+/// separate readers of the same change, and stopping at the first would leave
+/// the rest holding a value nobody replaced. What comes back is the first
+/// refusal, carrying how many there were.
+pub fn emit_events(
+    subs_lock: &RwLock<Vec<SubscriptionEntry>>,
+    event: StoreEvent,
+) -> StorageResult<()> {
     let callbacks = {
         let guard = subs_lock.read();
         guard
@@ -142,8 +167,23 @@ pub fn emit_events(subs_lock: &RwLock<Vec<SubscriptionEntry>>, event: StoreEvent
             .map(|s| s.callback.clone())
             .collect::<Vec<_>>()
     };
+
+    let mut refused: Option<Report<StorageError>> = None;
+    let mut also = 0usize;
+
     for cb in callbacks {
-        cb(&event);
+        if let Err(why) = cb(&event) {
+            match &refused {
+                None => refused = Some(why),
+                Some(_) => also += 1,
+            }
+        }
+    }
+
+    match refused {
+        None => Ok(()),
+        Some(first) if also == 0 => Err(first),
+        Some(first) => Err(first.attach(format!("{also} other subscribers refused it too"))),
     }
 }
 
@@ -157,12 +197,10 @@ fn matches_kind(kind: &SubscriptionKind, path: &StorePath) -> bool {
 
 #[cfg(any(feature = "redb", feature = "sqlite"))]
 mod buffered {
-    use super::{SubscriptionEntry, emit_events};
-    use crate::store::StoreEvent;
+    use crate::StorageResult;
     use crate::store::debouncer::Debouncer;
-    use crate::{StorageResult, StoreOp};
     use amethystate_core::path::StorePath;
-    use parking_lot::{Mutex, RwLock};
+    use parking_lot::Mutex;
 
     /// One buffered write, waiting for the next flush.
     ///
@@ -230,31 +268,22 @@ mod buffered {
         }
     }
 
+    /// Buffers a write made through the inspector, which is how a migration
+    /// step writes.
+    ///
+    /// Nobody is told. A migration runs inside `open`, before the reactive
+    /// layer exists, so the subscriber list it would be told through is empty
+    /// by construction.
     pub fn set_raw_pending(
         pending: &Mutex<Pending>,
-        subscriptions: &RwLock<Vec<SubscriptionEntry>>,
         debouncer: &Debouncer,
         key: &StorePath,
         value: &[u8],
     ) -> StorageResult<()> {
-        let old_bytes = {
-            let lock = pending.lock();
-            lock.get(key).and_then(|op| op.value().map(Vec::from))
-        };
         {
             let mut lock = pending.lock();
             lock.insert(key.clone(), PendingOp::Set(value.to_vec()));
         }
-        emit_events(
-            subscriptions,
-            StoreEvent {
-                path: key.clone(),
-                op: StoreOp::Set,
-                old: old_bytes,
-                new: Some(value.to_vec()),
-                source: None,
-            },
-        );
         debouncer.schedule();
         Ok(())
     }
