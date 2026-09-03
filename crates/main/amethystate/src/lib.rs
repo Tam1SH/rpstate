@@ -47,6 +47,8 @@ pub use store::{
 pub use migration::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
 
 pub use amethystate_macros::{AmeType, amethystate, migrate};
+
+pub mod prelude;
 pub use global::*;
 
 #[cfg(any(feature = "tauri", feature = "json"))]

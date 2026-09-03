@@ -7,6 +7,17 @@ sidebar:
 The shortest path from nothing to a running store, with a pointer at each step
 to the section that covers it properly.
 
+Every import below is in the prelude, and an ordinary program takes it whole:
+
+```rust
+use amethystate::prelude::*;
+```
+
+It carries what declaring, opening, reading and writing need — including
+`StoreExt` and `StoreBackend`, which are traits, and without which a store
+looks like it has no `get` and no `save_now`. The imports are spelled out in the
+snippets that follow so each one says where its pieces come from.
+
 ## Declare the state
 
 One attribute turns a struct's fields into persisted reactive ones. `prefix`
