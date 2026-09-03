@@ -41,15 +41,17 @@ pub(crate) fn generate(crate_name: &TokenStream2, schema: &Schema) -> TokenStrea
         let fname = &field.ident;
         let fvis = &field.vis;
         let ty = held(field);
+        let carried = &field.forwarded;
 
-        quote! { #fvis #fname: #ty }
+        quote! { #(#carried)* #fvis #fname: #ty }
     });
 
     let methods = fields.iter().map(|field| {
         let fname = &field.ident;
         let ty = held(field);
+        let carried = &field.forwarded;
 
-        quote! { pub fn #fname(&self) -> #ty { self.#fname.clone() } }
+        quote! { #(#carried)* pub fn #fname(&self) -> #ty { self.#fname.clone() } }
     });
 
     let init_fields = fields.iter().map(|field| {
@@ -61,7 +63,6 @@ pub(crate) fn generate(crate_name: &TokenStream2, schema: &Schema) -> TokenStrea
         } else {
             format!("{prefix_str}.{key_suffix}")
         };
-
         let ty = &field.ty;
 
         match &field.shape {

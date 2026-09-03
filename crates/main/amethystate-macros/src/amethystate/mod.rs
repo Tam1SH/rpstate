@@ -3,7 +3,7 @@ mod diagnostics;
 mod generate;
 mod lower;
 mod model;
-mod serde_said;
+mod naming;
 
 use amethystate_macros_core::MacroArgs;
 use darling::{FromMeta, ast::NestedMeta};

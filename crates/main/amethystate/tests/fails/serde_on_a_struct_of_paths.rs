@@ -1,9 +1,10 @@
 use amethystate_macros::amethystate;
 
 #[amethystate(prefix = "ui")]
+#[serde(deny_unknown_fields)]
 pub struct UiState {
-    #[amestate(path = "window..width", default = 1280)]
-    pub width: u32,
+    #[amestate(default = 8080u16)]
+    pub port: u16,
 }
 
 fn main() {}

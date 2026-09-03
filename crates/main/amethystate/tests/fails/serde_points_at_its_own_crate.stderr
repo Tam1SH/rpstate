@@ -1,5 +1,0 @@
-error: `#[serde(crate = ..)]` tells the derive where serde itself lives, for a crate that re-exports it. No serde impl is written for this struct, so there is nothing here to point at serde
- --> tests/fails/serde_points_at_its_own_crate.rs:4:1
-  |
-4 | #[serde(crate = "other::serde")]
-  | ^

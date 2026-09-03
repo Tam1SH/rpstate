@@ -15,6 +15,10 @@ pub struct MacroArgs {
     pub target: Option<String>,
     #[darling(default)]
     pub as_root: bool,
+    /// How every field's own name is spelled where it is stored, said once for
+    /// the whole struct. A field with `path` of its own is not touched by it.
+    #[darling(default)]
+    pub rename_all: Option<SpannedValue<String>>,
     #[darling(default)]
     pub on_unreadable: Option<syn::Path>,
     #[darling(default)]
@@ -30,9 +34,8 @@ pub struct StoreFieldEntry {
     pub ty: Type,
     /// Where this field is stored, when that is not its own name.
     ///
-    /// Written as `#[serde(rename)]`, or as `rename_all` on the struct. A dot
-    /// in it is a level, so a field can be put anywhere under the prefix rather
-    /// than only renamed.
+    /// Written as `path`. A dot in it is a level, so a field can be put
+    /// anywhere under the prefix rather than only renamed.
     pub key: Option<SpannedValue<String>>,
     pub default: Option<TokenStream2>,
     pub nested: bool,
@@ -40,8 +43,8 @@ pub struct StoreFieldEntry {
     /// Whether this field's own paths sit at its holder's level rather than
     /// under a segment named after it.
     ///
-    /// Written as `#[serde(flatten)]`, and only on a `nested` field: a leaf is
-    /// one value at one path and has no paths of its own to merge upward.
+    /// Written as `flatten`, and only on a `nested` field: a leaf is one value
+    /// at one path and has no paths of its own to merge upward.
     pub flatten: bool,
     pub on_unreadable: Option<syn::Path>,
     pub on_delete: Option<syn::Path>,
@@ -77,7 +80,7 @@ impl StoreFieldEntry {
 }
 
 impl StoreFieldEntry {
-    /// The name this field is stored under: what `key` says, or the field's own.
+    /// The name this field is stored under: what `path` says, or the field's own.
     pub fn stored_name(&self) -> String {
         match &self.key {
             Some(key) => key.as_ref().clone(),
@@ -157,11 +160,35 @@ fn parse_state_tokens(tokens: TokenStream2, into: &mut StoreFieldEntry) -> darli
             iter.next();
             let value: TokenStream2 = iter.collect();
 
+            let already = match name.as_str() {
+                "default" => into.default.is_some(),
+                "path" => into.key.is_some(),
+                "on_unreadable" => into.on_unreadable.is_some(),
+                "on_delete" => into.on_delete.is_some(),
+                "check" => into.check.is_some(),
+                "with" => into.with.is_some(),
+                "serialize_with" => into.serialize_with.is_some(),
+                "deserialize_with" => into.deserialize_with.is_some(),
+                _ => false,
+            };
+
+            if already {
+                return Err(darling::Error::custom(format!(
+                    "`{name}` is said twice. The second would win and the first would look like it \
+                     had been read, so write one"
+                ))
+                .with_span(&first));
+            }
+
             match name.as_str() {
                 "default" => into.default = Some(value),
+                "path" => {
+                    let written: syn::LitStr = syn::parse2(value).map_err(darling::Error::from)?;
+                    into.key = Some(SpannedValue::new(written.value(), written.span()));
+                }
                 "key" => {
                     return Err(darling::Error::custom(
-                        "`key` is spelled `#[serde(rename = \"..\")]`, which says the same thing and lets `rename_all` say it once for a whole struct",
+                        "`key` is spelled `path` now: a dot in it is a level, so what it names is where the field sits and not a key it sits under",
                     )
                     .with_span(&first));
                 }
@@ -187,6 +214,7 @@ fn parse_state_tokens(tokens: TokenStream2, into: &mut StoreFieldEntry) -> darli
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
                         &[
+                            "path",
                             "default",
                             "on_unreadable",
                             "on_delete",
@@ -202,10 +230,11 @@ fn parse_state_tokens(tokens: TokenStream2, into: &mut StoreFieldEntry) -> darli
             match name.as_str() {
                 "volatile" => into.volatile = true,
                 "nested" => into.nested = true,
+                "flatten" => into.flatten = true,
                 other => {
                     return Err(darling::Error::unknown_field_with_alts(
                         other,
-                        &["volatile", "nested"],
+                        &["volatile", "nested", "flatten"],
                     ));
                 }
             }

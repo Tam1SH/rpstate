@@ -2,8 +2,9 @@ use amethystate_macros::amethystate;
 
 #[amethystate(prefix = "ui")]
 pub struct UiState {
-    #[amestate(path = "window..width", default = 1280)]
-    pub width: u32,
+    #[serde(rename = "listen_port")]
+    #[amestate(default = 8080u16)]
+    pub port: u16,
 }
 
 fn main() {}

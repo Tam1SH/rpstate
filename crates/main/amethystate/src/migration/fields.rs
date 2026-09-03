@@ -60,7 +60,15 @@ impl TryFrom<String> for Role {
 
 #[derive(Clone)]
 pub struct FieldDescriptor {
+    /// Where it is stored, which is its own name unless `path` or `rename_all`
+    /// said otherwise. A dot in it is a level.
     pub name: &'static str,
+
+    /// The name in the source, which is what the code calls it. Told apart
+    /// from [`name`](FieldDescriptor::name) because a person editing the file
+    /// and a person reading the code are looking at different words.
+    pub declared: &'static str,
+
     pub type_hash: u32,
     pub type_name: &'static str,
 
@@ -97,6 +105,7 @@ impl FieldDescriptor {
     pub const fn leaf(name: &'static str, type_hash: u32, type_name: &'static str) -> Self {
         Self {
             name,
+            declared: name,
             type_hash,
             type_name,
             role: Role::Field,

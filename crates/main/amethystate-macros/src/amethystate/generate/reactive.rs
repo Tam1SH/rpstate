@@ -25,6 +25,10 @@ pub(crate) fn declaration(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
         #[derive(Clone)]
         #(#attrs)* #vis struct #name {
             __amethystate_instance_id: ::std::sync::Arc<#crate_name::observability::InstanceGuard>,
+            /// Where this struct's fields hang, kept so it can say so: a root
+            /// knows it from `StateScope`, and one that is embedded is only
+            /// told at the call that built it.
+            __amethystate_at: #crate_name::store::StorePath,
             #(#fields,)*
         }
     }
@@ -164,6 +168,7 @@ pub(crate) fn fork(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
                     new_id,
                     ::std::any::type_name::<Self>(),
                 ),
+                __amethystate_at: self.__amethystate_at.clone(),
                 #(#each,)*
             }
         }
@@ -176,7 +181,7 @@ pub(crate) fn fork(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
 /// struct to lose its own: the two traits below pick the real one where there
 /// is one and `<opaque>` where there is not, by the trick that an inherent
 /// method on `&T` is reached only when the one on `T` does not apply.
-pub(crate) fn debug(schema: &Schema) -> TokenStream2 {
+pub(crate) fn debug(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
     if !schema.mode.watches() {
         return quote! {};
     }
@@ -184,35 +189,33 @@ pub(crate) fn debug(schema: &Schema) -> TokenStream2 {
     let name = &schema.name;
     let each = schema.fields.iter().map(|field| {
         let fname = &field.ident;
-        quote! { .field(stringify!(#fname), (&__AmeW(&self.#fname)).__ame()) }
+        let shown = shown_value(crate_name, quote! { &self.#fname });
+        quote! { .field(stringify!(#fname), #shown) }
     });
 
     quote! {
         impl ::std::fmt::Debug for #name {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                struct __AmeOpaque;
-                impl ::std::fmt::Debug for __AmeOpaque {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        f.write_str("<opaque>")
-                    }
-                }
-                struct __AmeW<'a, T>(&'a T);
-                trait __AmeViaDebug {
-                    fn __ame(&self) -> &dyn ::std::fmt::Debug;
-                }
-                impl<'a, T: ::std::fmt::Debug> __AmeViaDebug for __AmeW<'a, T> {
-                    fn __ame(&self) -> &dyn ::std::fmt::Debug { self.0 }
-                }
-                trait __AmeViaFallback {
-                    fn __ame(&self) -> &dyn ::std::fmt::Debug;
-                }
-                impl<'a, T> __AmeViaFallback for &__AmeW<'a, T> {
-                    fn __ame(&self) -> &dyn ::std::fmt::Debug { &__AmeOpaque }
-                }
+                use #crate_name::observability::{ShownAsOpaque, ShownByDebug};
+
                 f.debug_struct(stringify!(#name))
                     #(#each)*
                     .finish()
             }
         }
+    }
+}
+
+/// A borrowed value as something printable, whether or not its type is.
+///
+/// `held` is a reference expression, and what comes back borrows from it - so
+/// it has to name something that outlives the printing, not a local made on
+/// the way.
+///
+/// Both traits have to be in scope where this lands: the inherent pick between
+/// them is what stands in for a bound nobody can write.
+pub(crate) fn shown_value(crate_name: &TokenStream2, held: TokenStream2) -> TokenStream2 {
+    quote! {
+        (&#crate_name::observability::Shown(#held)).shown()
     }
 }

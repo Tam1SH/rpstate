@@ -14,12 +14,10 @@ pub struct Sidebar {
 
 #[amethystate(prefix = "ui")]
 pub struct Ui {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub window: Window,
 
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub sidebar: Sidebar,
 }
 

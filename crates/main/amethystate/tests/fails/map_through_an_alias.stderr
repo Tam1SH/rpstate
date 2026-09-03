@@ -274,3 +274,39 @@ note: required by a bound in `MigrationContext::<'a>::set`
   |     pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> StorageResult<()> {
   |                   ^^^^^^^^^ required by this bound in `MigrationContext::<'a>::set`
   = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `path` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`, but its trait bounds were not satisfied
+ --> tests/fails/map_through_an_alias.rs:6:1
+  |
+6 | #[amethystate(prefix = "aliased")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+  |
+ ::: src/reactive/map.rs
+  |
+  | pub struct ReactiveMap<K, V> {
+  | ---------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
+  |
+  = note: the following trait bounds were not satisfied:
+          `amethystate::ReactiveMap<std::string::String, std::string::String>: amethystate::serde::Serialize`
+          which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
+          `amethystate::ReactiveMap<std::string::String, std::string::String>: Deserialize<'de>`
+          which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
+  = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `__ame_disagreement` exists for struct `amethystate::Field<amethystate::ReactiveMap<std::string::String, std::string::String>>`, but its trait bounds were not satisfied
+ --> tests/fails/map_through_an_alias.rs:6:1
+  |
+6 | #[amethystate(prefix = "aliased")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+  |
+ ::: src/reactive/map.rs
+  |
+  | pub struct ReactiveMap<K, V> {
+  | ---------------------------- doesn't satisfy `_: Deserialize<'de>`, `_: FieldValue` or `_: Serialize`
+  |
+  = note: the following trait bounds were not satisfied:
+          `amethystate::ReactiveMap<std::string::String, std::string::String>: amethystate::serde::Serialize`
+          which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
+          `amethystate::ReactiveMap<std::string::String, std::string::String>: Deserialize<'de>`
+          which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
+  = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)

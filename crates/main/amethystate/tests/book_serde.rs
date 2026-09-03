@@ -27,14 +27,12 @@ fn a_field_with_no_annotation_takes_its_types_default() -> Result<(), Box<dyn Er
 }
 
 //@show a struct that says where its fields go
-#[amethystate(prefix = "net")]
-#[serde(rename_all = "camelCase")]
+#[amethystate(prefix = "net", rename_all = "camelCase")]
 pub struct NetState {
     #[amestate(default = 8080u16)]
     pub listen_port: u16,
 
-    #[serde(rename = "tls.enabled")]
-    #[amestate(default = false)]
+    #[amestate(path = "tls.enabled", default = false)]
     pub tls: bool,
 }
 //@show-end
@@ -62,8 +60,7 @@ pub struct Window {
 //@show a nested struct whose fields sit at their holder's level
 #[amethystate(prefix = "editor")]
 pub struct Editor {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub window: Window,
 }
 //@show-end

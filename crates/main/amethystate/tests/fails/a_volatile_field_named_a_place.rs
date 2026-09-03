@@ -2,9 +2,8 @@ use amethystate::amethystate;
 
 #[amethystate(prefix = "cfg")]
 pub struct Cfg {
-    #[serde(skip)]
-    #[amestate(default = "localhost".to_string())]
-    pub host: String,
+    #[amestate(volatile, path = "nowhere", default = 1u32)]
+    pub tick: u32,
 }
 
 fn main() {}

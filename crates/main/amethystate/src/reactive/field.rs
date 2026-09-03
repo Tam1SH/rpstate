@@ -245,6 +245,34 @@ where
     /// sentence. All of them carry [`Key`]; a check's verdict adds
     /// [`Refused`], and a store that has let go of its file answers
     /// [`WriteError::Closed`](crate::errors::WriteError::Closed).
+    /// What this field and the store disagree about, if anything.
+    ///
+    /// The same state [`try_get`](Field::try_get) answers with, said as a fact
+    /// rather than as an error - for a walk over every field that wants a list
+    /// rather than a decision.
+    #[doc(hidden)]
+    pub fn __ame_disagreement(&self) -> Option<crate::observability::Disagreement> {
+        use crate::observability::{Disagreement, Reason};
+
+        let held = self
+            .inner
+            .unreadable
+            .lock()
+            .ok()
+            .and_then(|it| it.clone())?;
+
+        let reason = match held {
+            Unread::Refused(why) => Reason::Refused(why),
+            Unread::Undecodable(why) => Reason::WillNotRead(why),
+            Unread::Occupied(why) => Reason::Occupied(why),
+        };
+
+        Some(Disagreement {
+            at: self.inner.path.clone(),
+            reason,
+        })
+    }
+
     pub fn try_get(&self) -> ReactiveFieldResult<TValue> {
         if self.store_has_closed() {
             return Err(Report::new(FieldError::Closed).attach(Key(self.inner.path.clone())));

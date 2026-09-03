@@ -8,12 +8,12 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use super::{accessors, data, export, policy, reactive};
+use super::{accessors, data, export, introspect, policy, reactive};
 use crate::amethystate::model::Schema;
 
 pub(crate) fn generate(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
     let declaration = reactive::declaration(crate_name, schema);
-    let debug = reactive::debug(schema);
+    let debug = reactive::debug(crate_name, schema);
     let inherent = reactive::inherent(crate_name, schema);
 
     let scope = accessors::scope(crate_name, schema);
@@ -24,6 +24,7 @@ pub(crate) fn generate(crate_name: &TokenStream2, schema: &Schema) -> TokenStrea
     let data = data::data_impl(crate_name, schema);
     let declared_policy = policy::declared(crate_name, schema);
     let exported = export::entries(crate_name, schema);
+    let inspecting = introspect::inspect(crate_name, schema);
 
     quote! {
         #declaration
@@ -36,5 +37,6 @@ pub(crate) fn generate(crate_name: &TokenStream2, schema: &Schema) -> TokenStrea
         #exported
         #slice
         #declared_policy
+        #inspecting
     }
 }

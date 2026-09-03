@@ -24,8 +24,7 @@ pub struct Recorded {
 
     /// A field whose path is not its Rust name, so the snapshot and the data
     /// have somewhere to disagree.
-    #[serde(rename = "listen_addr")]
-    #[amestate(default = "0.0.0.0".to_string())]
+    #[amestate(path = "listen_addr", default = "0.0.0.0".to_string())]
     pub bind: String,
 
     #[amestate(default = None)]
@@ -129,7 +128,7 @@ fn the_snapshot_records_what_each_path_is(backend: Backend) {
 
 /// The snapshot names the path the value is at, not the field it came from.
 ///
-/// `#[serde(rename = "..")]` moves where a value goes, and everything that
+/// `#[amestate(path = "..")]` moves where a value goes, and everything that
 /// reads or writes it uses that name. The descriptor was built from the Rust
 /// identifier instead, so the file said `bind` while the data sat at
 /// `listen_addr` - and anything planning a migration off the snapshot was

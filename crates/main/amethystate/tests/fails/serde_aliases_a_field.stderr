@@ -1,5 +1,0 @@
-error: `port` names another spelling to read, and nothing here reads it: a path is written under one name and looked for under that name. A store written before a rename is moved by a `#[migrate]` step with `#[rename(old => new)]`, which runs at the open and converges - an alias would have to be kept for good instead
- --> tests/fails/serde_aliases_a_field.rs:5:5
-  |
-5 |     #[serde(alias = "listen_port")]
-  |     ^

@@ -1,6 +1,12 @@
 mod inspector_trait;
+mod introspect;
+mod laid_out;
 mod scheme;
+mod shown;
 pub use inspector_trait::*;
+pub use introspect::*;
+pub use laid_out::*;
+pub use shown::*;
 
 pub use scheme::*;
 

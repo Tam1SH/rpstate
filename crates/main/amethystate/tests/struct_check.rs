@@ -339,10 +339,10 @@ fn the_renamed_window_can_be_drawn(
 
 #[amethystate(
     prefix = "window_renamed",
+    rename_all = "camelCase",
     on_unreadable = UseDefault,
     check = the_renamed_window_can_be_drawn
 )]
-#[serde(rename_all = "camelCase")]
 pub struct RenamedWindow {
     #[amestate(default = 400u32)]
     pub min_width: u32,

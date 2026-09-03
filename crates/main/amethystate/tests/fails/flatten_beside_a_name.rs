@@ -8,8 +8,7 @@ pub struct Inner {
 
 #[amethystate(prefix = "cfg")]
 pub struct Cfg {
-    #[serde(flatten, rename = "net")]
-    #[amestate(nested)]
+    #[amestate(nested, flatten, path = "net")]
     pub inner: Inner,
 }
 

@@ -117,6 +117,21 @@ pub(crate) struct Field {
     pub vis: Visibility,
     pub ty: Type,
 
+    /// The attributes written on this field that are not this macro's own.
+    ///
+    /// Carried onto the field the generated struct declares, so a doc comment
+    /// arrives where it was aimed and an attribute nobody here understands is
+    /// judged by whoever does - rather than vanishing because the field is
+    /// written out again from scratch.
+    pub forwarded: Vec<Attribute>,
+
+    /// The doc comment written on this field, its lines joined.
+    ///
+    /// A description for whoever reads the code or a dump of it, and not a
+    /// label: it is in one language and fixed at compile time, which is what a
+    /// catalogue exists to avoid.
+    pub described: String,
+
     /// The name this field is stored under, which is its own unless something
     /// said otherwise. A dot in it is a level.
     pub stored: At<String>,

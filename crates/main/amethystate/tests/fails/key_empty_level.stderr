@@ -1,5 +1,5 @@
 error: the name has two `.` in a row, with no level between them
- --> tests/fails/key_empty_level.rs:5:5
+ --> tests/fails/key_empty_level.rs:5:23
   |
-5 |     #[serde(rename = "window..width")]
-  |     ^
+5 |     #[amestate(path = "window..width", default = 1280)]
+  |                       ^^^^^^^^^^^^^^^

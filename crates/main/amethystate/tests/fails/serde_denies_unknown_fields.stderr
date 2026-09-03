@@ -1,5 +1,0 @@
-error: `#[serde(deny_unknown_fields)]` describes one encoded value, and this struct is not one: its fields are separate paths, and a path nobody declared is not a key inside anything. What answers here is `on_unreadable`, per field
- --> tests/fails/serde_denies_unknown_fields.rs:4:1
-  |
-4 | #[serde(deny_unknown_fields)]
-  | ^

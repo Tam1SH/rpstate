@@ -6,14 +6,12 @@ pub struct Window {
     pub width: u32,
 }
 
-#[amethystate(prefix = "editor")]
-#[serde(rename_all = "camelCase")]
+#[amethystate(prefix = "editor", rename_all = "camelCase")]
 pub struct Editor {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub window: Window,
 
-    #[serde(default = "fourteen")]
+    #[amestate(default = fourteen())]
     pub font_size: u32,
 }
 

@@ -44,19 +44,23 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
     let data_fields = p_fields.iter().map(|field| {
         let fname = &field.ident;
         let ty = &field.ty;
-        match &field.shape {
-            Shape::Node { .. } => quote! { pub #fname: <#ty as #crate_name::AmeState>::Data },
+        let held = match &field.shape {
+            Shape::Node { .. } => quote! { <#ty as #crate_name::AmeState>::Data },
             Shape::Map { key, value, .. } => {
-                quote! { pub #fname: #crate_name::indexmap::IndexMap<#key, #value> }
+                quote! { #crate_name::indexmap::IndexMap<#key, #value> }
             }
-            _ => quote! { pub #fname: #ty },
-        }
+            _ => quote! { #ty },
+        };
+        let carried = &field.forwarded;
+
+        quote! { #(#carried)* pub #fname: #held }
     });
 
     let version_val = schema.version;
 
     let field_descriptors = p_fields.iter().map(|field| {
         let fname_str = &field.stored.value;
+        let declared = field.ident.to_string();
         let ty = &field.ty;
         let type_name = quote!(#ty).to_string().replace(" ", "");
 
@@ -64,6 +68,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             Shape::Node { flattened } => quote! {
                 #crate_name::migration::fields::FieldDescriptor {
                     name: #fname_str,
+                    declared: #declared,
                     type_hash: 0xDEADBEEF ^ < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
                     role: #crate_name::migration::fields::Role::Node,
@@ -75,6 +80,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             Shape::Map { key, value, .. } => quote! {
                 #crate_name::migration::fields::FieldDescriptor {
                     name: #fname_str,
+                    declared: #declared,
                     type_hash: <::std::collections::HashMap<#key, #value> as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
                     role: <#crate_name::shape::Probe<#ty>>::ROLE,
@@ -88,6 +94,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 quote! {
                     #crate_name::migration::fields::FieldDescriptor {
                         name: #fname_str,
+                    declared: #declared,
                         type_hash: #hash,
                         type_name: #type_name,
                         role: <#crate_name::shape::Probe<#ty>>::ROLE,

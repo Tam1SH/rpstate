@@ -17,7 +17,8 @@ use super::diagnostics::Diagnostics;
 use super::model::{
     At, Field, Mode, OnDelete, OnUnreadable, Placement, Rules, Schema, Shape, StoredAs, Target,
 };
-use super::serde_said::{self, SerdeSaid};
+use super::naming;
+use darling::util::SpannedValue;
 
 /// Builds the model, adding what it finds wrong to `found` rather than
 /// stopping.
@@ -30,13 +31,16 @@ pub(crate) fn schema(
     args: &MacroArgs,
     found: &mut Diagnostics,
 ) -> Result<Schema, syn::Error> {
-    let said = match serde_said::read(input) {
-        Ok(said) => said,
-        Err(e) => {
-            found.push(e);
-            SerdeSaid::none()
-        }
-    };
+    if let Some(rule) = &args.rename_all
+        && naming::apply(rule.as_ref(), "a_field").is_none()
+    {
+        let written = rule.as_ref();
+        let known = naming::RULES.join("`, `");
+        found.at(
+            rule.span(),
+            format!("`{written}` is not a naming rule. These are: `{known}`"),
+        );
+    }
 
     let Data::Struct(DataStruct {
         fields: Fields::Named(named),
@@ -56,7 +60,7 @@ pub(crate) fn schema(
 
     let mut fields = Vec::with_capacity(named.named.len());
     for field in &named.named {
-        if let Some(lowered) = lower_field(field, &said, found) {
+        if let Some(lowered) = lower_field(field, args.rename_all.as_ref(), found) {
             fields.push(lowered);
         }
     }
@@ -74,7 +78,7 @@ pub(crate) fn schema(
     let schema = Schema {
         name: input.ident.clone(),
         vis: input.vis.clone(),
-        forwarded: serde_said::without_serde(&input.attrs),
+        forwarded: input.attrs.clone(),
         prefix,
         version: args.version.unwrap_or(0),
         mode,
@@ -84,6 +88,69 @@ pub(crate) fn schema(
     };
 
     Ok(schema)
+}
+
+/// The attributes on a field that are not this macro's own, to be carried onto
+/// the field it generates.
+///
+/// Everything is carried, understood or not: what this macro does not read is
+/// somebody else's to judge, and a field written out from scratch would drop it
+/// without a word.
+///
+/// `cfg` is the exception. It says the field may not exist, and a field appears
+/// in a dozen places here - the struct, the constructor, the snapshot, the
+/// schema on disk - which would have to agree. Carried only to some of them it
+/// would build a struct without the field and a schema with it, so it is
+/// refused until every place agrees.
+fn forwarded_from(field: &syn::Field, found: &mut Diagnostics) -> Vec<syn::Attribute> {
+    let mut carried = Vec::new();
+
+    for attr in &field.attrs {
+        if attr.path().is_ident("amestate") {
+            continue;
+        }
+
+        if attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr") {
+            found.at(
+                attr.span(),
+                "a field that may not exist is not carried through here yet: the struct, its \
+                 constructor and the schema written to disk would have to agree about it, and \
+                 they are built apart. Put the whole struct behind the `cfg`, or keep the field \
+                 and decide at runtime what it holds",
+            );
+            continue;
+        }
+
+        carried.push(attr.clone());
+    }
+
+    carried
+}
+
+/// The doc comment on a field, as one string.
+///
+/// `///` is `#[doc = ".."]` by the time this sees it, one attribute per line,
+/// each with the leading space rustdoc puts there. Joined with newlines, so a
+/// paragraph stays a paragraph.
+fn described_by(field: &syn::Field) -> String {
+    let lines: Vec<String> = field
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .filter_map(|attr| match &attr.meta {
+            syn::Meta::NameValue(named) => Some(&named.value),
+            _ => None,
+        })
+        .filter_map(|value| match value {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(text),
+                ..
+            }) => Some(text.value().trim().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    lines.join("\n")
 }
 
 fn spanned_path(path: Option<&syn::Path>) -> Option<At<syn::Path>> {
@@ -213,8 +280,12 @@ fn target_of(args: &MacroArgs, found: &mut Diagnostics) -> Target {
     }
 }
 
-fn lower_field(field: &syn::Field, said: &SerdeSaid, found: &mut Diagnostics) -> Option<Field> {
-    let mut entry = match StoreFieldEntry::from_field(field) {
+fn lower_field(
+    field: &syn::Field,
+    naming: Option<&SpannedValue<String>>,
+    found: &mut Diagnostics,
+) -> Option<Field> {
+    let entry = match StoreFieldEntry::from_field(field) {
         Ok(entry) => entry,
         Err(e) => {
             found.push(e.into());
@@ -223,21 +294,9 @@ fn lower_field(field: &syn::Field, said: &SerdeSaid, found: &mut Diagnostics) ->
     };
 
     let ident = entry.ident.clone()?;
-
-    if let Some(from_serde) = said.of(&ident)
-        && let Err(e) = serde_said::fold_into(from_serde, &mut entry)
-    {
-        found.push(e);
-        return None;
-    }
-
-    let stored = At::new(
-        entry.stored_name(),
-        entry
-            .key
-            .as_ref()
-            .map_or_else(|| ident.span(), darling::util::SpannedValue::span),
-    );
+    let stored = stored_name(&entry, &ident, naming);
+    let forwarded = forwarded_from(field, found);
+    let described = described_by(field);
 
     let rules = rules_of(
         entry.on_unreadable.as_ref(),
@@ -253,9 +312,36 @@ fn lower_field(field: &syn::Field, said: &SerdeSaid, found: &mut Diagnostics) ->
         ty: entry.ty.clone(),
         ident,
         stored,
+        forwarded,
+        described,
     };
 
     Some(lowered)
+}
+
+/// Where this field is stored: what `path` says, or its own name under the
+/// struct's `rename_all`, or its own name.
+///
+/// A field that named its place is not touched by `rename_all`: naming it was
+/// the more specific thing to say.
+fn stored_name(
+    entry: &StoreFieldEntry,
+    ident: &syn::Ident,
+    naming: Option<&SpannedValue<String>>,
+) -> At<String> {
+    if let Some(written) = &entry.key {
+        return At::new(written.as_ref().clone(), written.span());
+    }
+
+    let named = ident.to_string();
+
+    match naming {
+        Some(rule) => At::new(
+            naming::apply(rule.as_ref(), &named).unwrap_or(named),
+            ident.span(),
+        ),
+        None => At::new(named, ident.span()),
+    }
 }
 
 /// Which of the four kinds this field is.
@@ -264,11 +350,44 @@ fn lower_field(field: &syn::Field, said: &SerdeSaid, found: &mut Diagnostics) ->
 fn shape_of(entry: &StoreFieldEntry, found: &mut Diagnostics) -> Shape {
     let default = entry.default.as_ref().map(super::generate::parse_default);
 
+    let named = entry
+        .ident
+        .as_ref()
+        .map_or_else(|| entry.stored_name(), syn::Ident::to_string);
+
+    if entry.flatten {
+        if !entry.nested {
+            found.at(
+                entry.ty.span(),
+                format!(
+                    "`{named}` is one value at one path, and `flatten` puts a field's own paths at \
+                     the level above. This one has none of its own: the store hands the value to \
+                     the codec whole and never looks inside. Flatten belongs on a `nested` field"
+                ),
+            );
+        }
+
+        if let Some(written) = &entry.key {
+            found.at(
+                written.span(),
+                format!(
+                    "`{named}` is both placed and not: `path` says where it sits, and `flatten` \
+                     says its fields sit at this level with no segment of its own"
+                ),
+            );
+        }
+    }
+
     if entry.volatile {
-        let named = entry
-            .ident
-            .as_ref()
-            .map_or_else(|| entry.stored_name(), syn::Ident::to_string);
+        if let Some(written) = &entry.key {
+            found.at(
+                written.span(),
+                format!(
+                    "`{named}` names where it is stored, and it is stored nowhere: `volatile` \
+                     keeps it in memory and gives it no path. Drop one of the two"
+                ),
+            );
+        }
 
         if entry.nested {
             found.at(

@@ -17,8 +17,7 @@ pub struct Fonts {
 
 #[amethystate(prefix = "editor")]
 pub struct Editor {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub window: Window,
 
     #[amestate(nested)]
@@ -52,15 +51,13 @@ fn a_flattened_child_gives_up_its_segment(backend: Backend) {
 
 #[amethystate(prefix = "deep")]
 pub struct Outer {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub middle: Middle,
 }
 
 #[amethystate]
 pub struct Middle {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub window: Window,
 }
 

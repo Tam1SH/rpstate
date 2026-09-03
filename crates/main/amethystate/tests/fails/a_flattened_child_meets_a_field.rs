@@ -8,8 +8,7 @@ pub struct Window {
 
 #[amethystate(prefix = "ui")]
 pub struct Ui {
-    #[serde(flatten)]
-    #[amestate(nested)]
+    #[amestate(nested, flatten)]
     pub window: Window,
 
     #[amestate(default = 0u32)]

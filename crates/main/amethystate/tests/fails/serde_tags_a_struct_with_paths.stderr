@@ -1,5 +1,0 @@
-error: `#[serde(tag = ..)]` says how a variant names itself inside one encoded value. This struct's fields are separate paths, so there is no value for a tag to sit in
- --> tests/fails/serde_tags_a_struct_with_paths.rs:4:1
-  |
-4 | #[serde(tag = "kind")]
-  | ^

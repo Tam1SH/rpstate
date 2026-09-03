@@ -23,8 +23,9 @@ pub(crate) fn struct_fields<'a>(
         let fname = &field.ident;
         let fvis = &field.vis;
         let ty = field_type(crate_name, field);
+        let carried = &field.forwarded;
 
-        quote! { #fvis #fname: #ty }
+        quote! { #(#carried)* #fvis #fname: #ty }
     })
 }
 
@@ -33,8 +34,10 @@ pub(crate) fn methods(crate_name: &TokenStream2, schema: &Schema) -> TokenStream
     let each = schema.fields.iter().map(|field| {
         let fname = &field.ident;
         let held = field_type(crate_name, field);
+        let carried = &field.forwarded;
 
         quote! {
+            #(#carried)*
             pub fn #fname(&self) -> #held {
                 self.#fname.clone()
             }
@@ -297,11 +300,12 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
             }
 
             pub fn new_with_id(store: &#crate_name::Store, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                let __ame_fallbacks = store.fallbacks();
                 Self::new_with_id_under(
                     store,
                     instance_id,
-                    ::std::default::Default::default(),
-                    ::std::default::Default::default(),
+                    __ame_fallbacks.on_unreadable,
+                    __ame_fallbacks.on_delete,
                 )
             }
 
@@ -321,7 +325,11 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                     instance_id,
                     ::std::any::type_name::<Self>(),
                 );
-                let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
+                let result = Self {
+                    __amethystate_instance_id: __amethystate_guard,
+                    __amethystate_at: <Self as #crate_name::StateScope>::PATH.clone(),
+                    #(#init_fields,)*
+                };
                 #checked
                 store.mark_initialized(&<Self as #crate_name::StateScope>::PATH)?;
                 Ok(result)
@@ -341,12 +349,13 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                 namespace: impl #crate_name::store::IntoStorePath,
                 instance_id: #crate_name::uuid::Uuid,
             ) -> #crate_name::StorageResult<Self> {
+                let __ame_fallbacks = store.fallbacks();
                 Self::new_with_id_under(
                     store,
                     namespace,
                     instance_id,
-                    ::std::default::Default::default(),
-                    ::std::default::Default::default(),
+                    __ame_fallbacks.on_unreadable,
+                    __ame_fallbacks.on_delete,
                 )
             }
 
@@ -368,7 +377,11 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                     instance_id,
                     ::std::any::type_name::<Self>(),
                 );
-                let result = Self { __amethystate_instance_id: __amethystate_guard, #(#init_fields,)* };
+                let result = Self {
+                    __amethystate_instance_id: __amethystate_guard,
+                    __amethystate_at: namespace.clone(),
+                    #(#init_fields,)*
+                };
                 #checked
                 store.mark_initialized(&namespace)?;
                 Ok(result)

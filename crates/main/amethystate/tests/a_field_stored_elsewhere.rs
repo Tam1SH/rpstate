@@ -10,7 +10,7 @@ mod keyed_v1 {
 
     #[amethystate(prefix = "keyed", version = 1)]
     pub struct Keyed {
-        #[serde(rename = "panels.left.visible")]
+        #[amestate(path = "panels.left.visible")]
         #[amestate(default = true)]
         pub left_panel_visible: bool,
     }
@@ -82,7 +82,7 @@ mod dropped_v1 {
         #[amestate(default = 1u16)]
         pub kept: u16,
 
-        #[serde(rename = "legacy.token")]
+        #[amestate(path = "legacy.token")]
         #[amestate(default = "remove-me".to_string())]
         pub legacy_token: String,
     }

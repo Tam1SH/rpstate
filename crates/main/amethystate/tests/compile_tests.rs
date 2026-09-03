@@ -33,13 +33,9 @@ fn test_macro_expansion_compilation() {
     t.compile_fail("tests/fails/static_path_empty_segment.rs");
     t.compile_fail("tests/fails/static_path_halves_disagree.rs");
 
-    t.compile_fail("tests/fails/serde_denies_unknown_fields.rs");
-    t.compile_fail("tests/fails/serde_tags_a_struct_with_paths.rs");
-    t.compile_fail("tests/fails/serde_renames_the_type.rs");
-    t.compile_fail("tests/fails/serde_renames_a_volatile_field.rs");
-    t.compile_fail("tests/fails/serde_skips_a_declared_field.rs");
-    t.compile_fail("tests/fails/serde_skips_a_write_conditionally.rs");
-    t.compile_fail("tests/fails/serde_aliases_a_field.rs");
+    t.compile_fail("tests/fails/serde_on_a_struct_of_paths.rs");
+    t.compile_fail("tests/fails/serde_renames_a_field.rs");
+    t.compile_fail("tests/fails/a_volatile_field_named_a_place.rs");
     t.compile_fail("tests/fails/amestate_key_is_gone.rs");
     t.compile_fail("tests/fails/flatten_on_a_leaf.rs");
     t.compile_fail("tests/fails/flatten_beside_a_name.rs");
@@ -49,6 +45,6 @@ fn test_macro_expansion_compilation() {
     t.compile_fail("tests/fails/volatile_map.rs");
     t.compile_fail("tests/fails/unreadable_rule_misspelt.rs");
     t.compile_fail("tests/fails/wasm_asked_to_persist.rs");
-    t.compile_fail("tests/fails/serde_defaults_the_whole_struct.rs");
-    t.compile_fail("tests/fails/serde_points_at_its_own_crate.rs");
+    t.compile_fail("tests/fails/a_modifier_said_twice.rs");
+    t.compile_fail("tests/fails/a_field_behind_a_cfg.rs");
 }
