@@ -40,6 +40,34 @@ impl OnUnreadable {
     }
 }
 
+/// What a field falls back to when neither it nor the struct holding it said.
+///
+/// The last word in a chain that starts at the field: a field's own rule wins
+/// over its struct's, and a struct's over this. So an application can say what
+/// it wants of everything that did not care, without touching a declaration -
+/// and nothing that did care is quietly overruled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Fallbacks {
+    pub on_unreadable: OnUnreadable,
+    pub on_delete: OnDelete,
+}
+
+impl Fallbacks {
+    /// What a field does about a value it cannot read, where neither it nor
+    /// the struct holding it said. Without this, [`OnUnreadable::Refuse`].
+    pub fn on_unreadable(mut self, rule: OnUnreadable) -> Self {
+        self.on_unreadable = rule;
+        self
+    }
+
+    /// What a field reports once the key behind it is gone, where neither it
+    /// nor the struct holding it said. Without this, [`OnDelete::Keep`].
+    pub fn on_delete(mut self, rule: OnDelete) -> Self {
+        self.on_delete = rule;
+        self
+    }
+}
+
 /// What a field does when its key is deleted under it.
 ///
 /// A deletion is somebody else's doing - another handle, a migration, a hand

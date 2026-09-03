@@ -48,6 +48,7 @@ pub struct Store {
     backend: Arc<dyn StoreBackend>,
     owners: Arc<crate::store::owners::Owners>,
     context: Arc<crate::store::CheckContext>,
+    fallbacks: crate::store::Fallbacks,
 }
 
 impl Store {
@@ -60,7 +61,19 @@ impl Store {
             backend: inner,
             owners: Arc::new(crate::store::owners::Owners::default()),
             context: Arc::new(crate::store::CheckContext::default()),
+            fallbacks: crate::store::Fallbacks::default(),
         }
+    }
+
+    /// What a field falls back to here when neither it nor its struct said,
+    /// put there by [`StoreBuilder::rules`](crate::StoreBuilder::rules).
+    pub fn fallbacks(&self) -> crate::store::Fallbacks {
+        self.fallbacks
+    }
+
+    pub(crate) fn with_fallbacks(mut self, fallbacks: crate::store::Fallbacks) -> Self {
+        self.fallbacks = fallbacks;
+        self
     }
 
     /// What the application handed this store for its declared checks, put

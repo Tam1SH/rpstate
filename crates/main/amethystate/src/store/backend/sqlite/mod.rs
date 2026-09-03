@@ -8,7 +8,7 @@ use crate::store::backend::utils::Attempted;
 use crate::store::backend::utils::refuse_closing_from_a_flush;
 use crate::store::builder::Backend;
 use crate::store::config::StoreConfig;
-use crate::store::debouncer::Debouncer;
+use crate::store::debouncer::{Debouncer, FlushPolicy};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::facts::{Facts, Key, StoreFile};
@@ -773,7 +773,7 @@ impl SqliteStore {
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
-            crate::store::debouncer::FlushPolicy {
+            FlushPolicy {
                 retry: config.retry_policy.clone(),
                 commits: commits.clone(),
                 health: health.clone(),

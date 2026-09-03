@@ -27,7 +27,7 @@ use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::backend::utils::refuse_closing_from_a_flush;
-use crate::store::debouncer::Debouncer;
+use crate::store::debouncer::{Debouncer, FlushPolicy};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use parking_lot::{Mutex, RwLock};
@@ -355,7 +355,7 @@ impl RedbStore {
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
-            crate::store::debouncer::FlushPolicy {
+            FlushPolicy {
                 retry: config.retry_policy.clone(),
                 commits: commits.clone(),
                 health: health.clone(),

@@ -329,6 +329,7 @@ pub struct StoreBuilder {
     config: StoreConfig,
     migration_builder: MigrationBuilder,
     check_context: crate::store::CheckContext,
+    fallbacks: crate::store::Fallbacks,
     /// Whether the extension on the path was spelled by the caller.
     ///
     /// An extension this crate chose belongs to whichever engine is going to
@@ -523,6 +524,7 @@ impl StoreBuilder {
             config: StoreConfig::new(path),
             migration_builder: MigrationBuilder::default(),
             check_context: crate::store::CheckContext::default(),
+            fallbacks: crate::store::Fallbacks::default(),
             caller_named_extension,
         }
     }
@@ -740,6 +742,36 @@ impl StoreBuilder {
         self
     }
 
+    /// What this store answers for the declarations that did not say.
+    ///
+    /// A field's own rule wins over its struct's, and a struct's over this. So
+    /// an application says here what it wants of everything that had no
+    /// opinion, and nothing that had one is overruled: a declaration is a
+    /// promise its author made, and this is the last word in the chain rather
+    /// than a word over it.
+    ///
+    /// ```
+    /// use amethystate::StoreBuilder;
+    /// use amethystate::store::OnUnreadable;
+    ///
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// // A store used as a cache: nothing in it is worth failing to start over.
+    /// let store = StoreBuilder::new(&*path)
+    ///     .rules(|r| r.on_unreadable(OnUnreadable::UseDefault))
+    ///     .build()?;
+    /// # Ok::<(), error_stack::Report<amethystate::store::StorageError>>(())
+    /// ```
+    ///
+    /// Without this a value that will not decode refuses the open, and a field
+    /// whose key is removed goes on reporting what it last held.
+    pub fn rules(
+        mut self,
+        configure: impl FnOnce(crate::store::Fallbacks) -> crate::store::Fallbacks,
+    ) -> Self {
+        self.fallbacks = configure(self.fallbacks);
+        self
+    }
+
     /// Picks the engine explicitly. Without this the store uses
     /// [`default_backend`].
     ///
@@ -774,10 +806,11 @@ impl StoreBuilder {
     /// ```
     pub fn build(self) -> StorageResult<Store> {
         let context = Arc::new(self.check_context);
+        let fallbacks = self.fallbacks;
         let migration_set = self.migration_builder.into_set();
         let (store, _) = self.backend.open_public(self.config, migration_set)?;
 
-        Ok(store.with_context(context))
+        Ok(store.with_context(context).with_fallbacks(fallbacks))
     }
 
     /// Opens the store and returns what the migration pass did.
@@ -788,10 +821,14 @@ impl StoreBuilder {
     pub fn build_with_migration(mut self) -> StorageResult<(Store, MigrationReport)> {
         self.migration_builder.collect_codegen();
         let context = Arc::new(self.check_context);
+        let fallbacks = self.fallbacks;
         let migration_set = self.migration_builder.into_set();
         let (store, report) = self.backend.open_public(self.config, migration_set)?;
         report.log_to_tracing();
-        Ok((store.with_context(context), report))
+        Ok((
+            store.with_context(context).with_fallbacks(fallbacks),
+            report,
+        ))
     }
 }
 

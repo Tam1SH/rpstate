@@ -10,7 +10,7 @@ use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::backend::utils::refuse_closing_from_a_flush;
 use crate::store::config::{FileWritePolicy, StoreConfig};
-use crate::store::debouncer::Debouncer;
+use crate::store::debouncer::{Debouncer, FlushPolicy};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::facts::{Facts, Key, StoreFile as StoreFileFact};
 use crate::store::format::{self, StorageFactSet};
@@ -360,7 +360,7 @@ impl<D: TextDocument + Send + 'static> TextStore<D> {
 
         let debouncer = Debouncer::new_with_retry(
             config.save_debounce,
-            crate::store::debouncer::FlushPolicy {
+            FlushPolicy {
                 retry: config.retry_policy.clone(),
                 commits: commits.clone(),
                 health: health.clone(),
