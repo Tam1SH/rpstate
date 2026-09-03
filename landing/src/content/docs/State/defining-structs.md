@@ -11,16 +11,17 @@ The `#[amethystate]` macro transforms a plain Rust struct into a persistent stat
 ### Struct attributes
 
 ```rust
-#[amethystate(prefix = "network", version = 1, mode = "reactive", as_root)]
+#[amethystate(prefix = "network", version = 1, mode = "reactive")]
 pub struct NetworkState { ... }
 ```
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `prefix` | `String` | Namespace path in the store. Required for root structs. |
+| `prefix` | `String` | The place in the store these fields hang under. A root struct needs this or `as_root`. |
 | `version` | `u32` | Schema version for migrations. Defaults to `0`. |
+| `rename_all` | `&str` | How every field's own name is spelled where it is stored: `camelCase`, `kebab-case`, `PascalCase`, and the rest serde knows. A field with a `path` of its own is not touched by it. |
 | `mode` | `String` | Code generation mode: `"reactive"` (default), `"persistent"`, or `"both"`. |
-|`as_root`| `flag` | If specified, fields are written directly to the store root without a namespace. |
+|`as_root`| `flag` | Fields sit at the top of the store, with no name above them. Written **instead of** `prefix` — the two say different things about the same place, so writing both is a compile error. |
 | `on_unreadable` | variant | What opening does about a stored value that will not decode. `Refuse` (the default) or `UseDefault`. |
 | `on_delete` | variant | What a field does when its key is deleted under it. `Keep` (the default) or `UseDefault`. |
 | `check` | `fn` | A rule about the whole struct, run once every field is built. |
@@ -49,15 +50,115 @@ pub struct AppState {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
+| `path` | `&str` | Where the field is stored, when that is not its own name. A dot in it is a level, so a field can be put anywhere under the prefix and not only renamed. |
 | `default` | `Expr` | Initial value on first run. If omitted, uses `Default::default()`. |
 | `nested` | flag | Marks field as an embedded `#[amethystate]` struct. |
+| `flatten` | flag | On a `nested` field: its fields sit at this level, with no segment named after it. |
 | `volatile` | flag | In-memory only. Never read from or written to the store. Resets to default on every restart. |
+| `with`, `serialize_with`, `deserialize_with` | path | The functions this field is written and read through, when its own type is not what writes it. |
 | `on_unreadable` | variant | This field's answer, overriding the struct's. |
 | `on_delete` | variant | The same for a deleted key. |
 | `check` | `fn` | A rule every value coming in from the store has to pass. |
 
+They can be written in one `#[amestate(..)]` or spread over several, whichever
+reads better:
+
+```rust
+#[amestate(path = "panels.left.visible")]
+#[amestate(default = true, on_delete = Keep)]
+pub left_panel_visible: bool,
+```
+
+Saying one of them twice is a compile error naming it: the second would win and
+the first would look like it had been read.
+
+#### Where a field goes
+
+`path` names the place a field is stored at, and `rename_all` on the struct says
+it once for all of them. A dot in a `path` is a level, so a field can be put
+anywhere under the prefix and not only renamed:
+
+<!-- shown: a struct that says where its fields go -->
+```rust
+#[amethystate(prefix = "net", rename_all = "camelCase")]
+pub struct NetState {
+    #[amestate(default = 8080u16)]
+    pub listen_port: u16,
+
+    #[amestate(path = "tls.enabled", default = false)]
+    pub tls: bool,
+}
+```
+<!-- /shown -->
+
+That writes `net.listenPort` and `net.tls.enabled`.
+
+#### A field whose paths sit at its holder's level
+
+`flatten` on a `nested` field says its fields are stored here, without a segment
+named after it:
+
+<!-- shown: a nested struct whose fields sit at their holder's level -->
+```rust
+#[amethystate(prefix = "editor")]
+pub struct Editor {
+    #[amestate(nested, flatten)]
+    pub window: Window,
+}
+```
+<!-- /shown -->
+
+That writes `editor.width`, not `editor.window.width`.
+
+Two flattened children that spell a field the same way are a compile error
+naming both, since each stores its fields at this level and the two would write
+over each other. So is a flattened child whose field is spelled the same as one
+written beside it.
+
+**Both `path` and `flatten` decide where data lands, so changing either on
+something already shipped is a migration.** The data stays where the old build
+wrote it while the new build looks somewhere else, and what a person sees is
+their settings gone back to defaults.
+
+#### A field stored some other way
+
+When a type's own encoding is not the one you want on disk, the field is written
+and read through a pair of functions of your own:
+
+```rust
+#[amestate(with = since_the_epoch)]
+pub opened: SystemTime,
+```
+
+`with = m` is `m::serialize`, which writes, and `m::deserialize`, which reads.
+Either half can be named on its own, as `serialize_with` or `deserialize_with`.
+Then the type does the other half, and the value goes to disk one way and comes
+back another. That is usually a mistake, so write both unless you want exactly
+that difference.
+
+Nothing else touches the value. What lies at the path is what the first function
+wrote, and only the second turns it back. So the type needs no encoding of its
+own — and a field can hold a type from another crate, which has none to give.
+
 The macro checks what it is given and names what it accepts, so a misspelling
 is a compile error rather than an attribute that does nothing.
+
+#### Attributes that are not this macro's
+
+Everything else written on a field is carried onto the field the macro
+generates, and onto its getter. A doc comment arrives where it was aimed;
+`#[allow]` and `#[deprecated]` do what they say; and an attribute nobody here
+understands is judged by whoever does — which is how `#[serde(..)]` becomes
+rustc's own error about an attribute that is not in scope, rather than something
+this macro has an opinion about.
+
+`#[cfg]` is the exception, and it is refused. A field appears in a dozen places
+in what is generated — the struct, its constructor, the snapshot, the schema
+written to disk — and some of those are `const` arrays, where an element cannot
+be conditional. Carried to the places that allow it and not the rest, a field
+compiled out would be missing from the struct and present in the schema, and
+nothing would say so. Put the whole struct behind the `cfg`, or keep the field
+and decide at runtime what it holds.
 
 Where a field is *stored* is serde's vocabulary rather than this one:
 `#[serde(rename)]` names the place, `#[serde(rename_all)]` says it once for a
@@ -95,6 +196,12 @@ broken `port`, and a `licence` that will not read stops the whole thing.
 `Refuse` on the struct with `UseDefault` on a field is a compile error naming
 the field. A `nested` struct inherits its holder's answer, tightens it the same
 way, and is checked against the holder while it compiles.
+
+**Where nothing said, the store does.** A field's rule wins over its struct's,
+and a struct's over the one the store was opened with — so an application says
+once what it wants of everything that had no opinion, and every declaration
+above stands untouched:
+[Opening a store](/amethystate/store/opening/).
 
 **A key deleted under a live field.** The field goes on reporting what it last
 held: that is what was on screen a moment ago, and the declared default is a

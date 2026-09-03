@@ -12,15 +12,13 @@ reaches as deep as a dotted prefix does:
 ```rust
 #[amethystate(prefix = "ui", version = 1)]
 pub struct Ui {
-    #[serde(rename = "panels.left.visible")]
-    #[amestate(default = true)]
+    #[amestate(path = "panels.left.visible", default = true)]
     pub left_panel_visible: bool,
 }
 
 #[amethystate(prefix = "ui.panels", version = 1)]
 pub struct Panels {
-    #[serde(rename = "left.visible")]
-    #[amestate(default = true)]
+    #[amestate(path = "left.visible", default = true)]
     pub left_visible: bool,
 }
 ```

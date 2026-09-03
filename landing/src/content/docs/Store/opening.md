@@ -216,6 +216,59 @@ is set, since the extension is re-derived at that point.
 Which engines exist and what each writes:
 [Installation](/amethystate/getting-started/installation/).
 
+## What to do when a value will not read, or its key is gone
+
+Two decisions, and there is no opening without them. What is on disk does not
+parse into the type it was declared as — fail, or take the declared default?
+The key under a field was removed — go on reporting what was last there, or the
+declared default again?
+
+Left alone, the open refuses and names the path, and a field whose key was
+removed goes on reporting the value it held before. To say otherwise:
+
+```rust
+use amethystate::store::OnUnreadable;
+
+let store = StoreBuilder::new(path)
+    .rules(|r| r.on_unreadable(OnUnreadable::UseDefault))
+    .build()?;
+```
+
+What is said here is the weakest of three. The same thing is written as an
+attribute on a struct, and more precisely still on one field; whichever is
+closest to the data wins. So `Refuse` written on a struct stays `Refuse`
+whatever the store was told: nothing is overruled from out here, only handed to
+whoever promised nothing.
+
+That is what makes this safe to reach for. Say an application keeps generated
+thumbnails in the store and a licence beside them. Nothing about the thumbnails
+is worth failing to start over — but the licence is:
+
+<!-- shown: one process, two answers about the same store -->
+```rust
+#[amethystate(prefix = "thumbnails")]
+pub struct Thumbnails {
+    #[amestate(default = 0u32)]
+    pub generated: u32,
+}
+
+#[amethystate(prefix = "licence", on_unreadable = Refuse)]
+pub struct Licence {
+    #[amestate(default = "".to_string())]
+    pub holder: String,
+}
+```
+<!-- /shown -->
+
+Opened with `UseDefault`, a thumbnail count that will not read is replaced by
+its declared default and the application starts. A licence that will not read
+still stops it, because `Licence` said so for itself. One store, one process,
+and the struct that cared is the one that decides.
+
+Left alone, a value that will not decode refuses the open, and a field whose key
+was removed goes on reporting what it last held. Which is which, and why:
+[Defining structs](/amethystate/state/defining-structs/).
+
 ## Which migrations run
 
 `build` runs the steps handed to the builder and no others.

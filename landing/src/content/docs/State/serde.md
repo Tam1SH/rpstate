@@ -5,146 +5,57 @@ sidebar:
 ---
 
 The library stores whatever serde will carry, so a stored type is written in two
-vocabularies at once. This page is about where they meet: which serde attributes
-this library reads as its own, which it refuses, and which are none of its
-business.
+vocabularies at once. This page is about where the line between them falls, and
+it falls in one place: whether the type is serialized at all.
 
-The split that decides everything is not which attribute but which kind of type
-it is on.
+**A struct whose fields are paths** - one with `#[amethystate]`, or embedded
+with `nested` - is not serialized, ever. Not "nothing gets round to it": no
+`Serialize` is written for it. It is not a value, it is a description of where
+other values live, and each of its fields goes to the store on its own, at its
+own path, when its own turn comes.
 
-**A struct whose fields are paths** - one with `#[amethystate]`, or embedded with
-`nested` - never goes through serde whole. Its fields are stored one at a time,
-each at a path, and the struct itself is encoded nowhere. So an attribute here
-is read as a statement about paths, or refused.
+So a `#[serde(..)]` written on it, or on one of its fields, is a compile error -
+and rustc's own, not ours:
+
+```
+error: cannot find attribute `serde` in this scope
+  = note: `serde` is an attribute that can be used by the derive macros
+          `Deserialize` and `Serialize`, you might be missing a `derive` attribute
+```
+
+Which is the whole of it. The macro does not read serde, refuse it clause by
+clause, or explain it away: it carries every attribute it does not understand
+onto the field it generates, and the attribute is judged by whoever understands
+it. Where there is no derive, there is no attribute.
 
 **A leaf** - anything stored as one value at one path - is the opposite. The
-store hands it to the codec and takes back bytes, and never looks inside.
+store hands it to the codec and takes back bytes, and never looks inside. Every
+serde attribute means there exactly what it means anywhere else.
 
-## On a struct whose fields are paths
+## What says it instead
 
-### Where a field goes
+Four things people reach for serde to say have somewhere to be said here. The
+spellings are kept apart because the operations are not the same one:
 
-`rename` names the place a field is stored at, and `rename_all` on the struct
-says it once for all of them. A dot in that name is a level, so a field can be
-put anywhere under the prefix rather than only renamed:
-
-<!-- shown: a struct that says where its fields go -->
-```rust
-#[amethystate(prefix = "net")]
-#[serde(rename_all = "camelCase")]
-pub struct NetState {
-    #[amestate(default = 8080u16)]
-    pub listen_port: u16,
-
-    #[serde(rename = "tls.enabled")]
-    #[amestate(default = false)]
-    pub tls: bool,
-}
-```
-<!-- /shown -->
-
-That writes `net.listenPort` and `net.tls.enabled`.
-
-The dot is worth pausing on. To serde, `"tls.enabled"` would be one field name
-that happens to contain a dot; here it is two levels. Nothing is ambiguous,
-because this struct never reaches serde - but somebody reading the attribute
-with only serde in mind will read it the other way.
-
-### A field whose paths sit at its holder's level
-
-`flatten` on a `nested` field says its fields are stored here, without a segment
-named after it:
-
-<!-- shown: a nested struct whose fields sit at their holder's level -->
-```rust
-#[amethystate(prefix = "editor")]
-pub struct Editor {
-    #[serde(flatten)]
-    #[amestate(nested)]
-    pub window: Window,
-}
-```
-<!-- /shown -->
-
-That writes `editor.width`, not `editor.window.width`.
-
-Two flattened children that spell a field the same way are a compile error
-naming both, since each stores its fields at this level and the two would write
-over each other. So is a flattened child whose field is spelled the same as one
-written beside it.
-
-**Flatten moves paths, so adding it to something already shipped is a
-migration.** The data stays where the old build wrote it while the new build
-reads a level up, and what a person sees is their settings gone back to
-defaults. Same for `rename`, and for `rename_all`, which does it to every field
-at once.
-
-### Defaults
-
-`#[serde(default)]` and `#[serde(default = "some_fn")]` are read as
-`#[amestate(default = ..)]`: both are the value for an absence. Writing both is
-a compile error naming both, because the two could disagree and nothing would
-say which won.
-
-`amestate` takes an expression where serde takes the path to a function, which
-is the only reason it is still here:
-
-```rust
-#[amestate(default = 8080)]
-pub port: u16,
-```
-
-says what serde needs a `fn default_port() -> u16 { 8080 }` to say.
-
-Written on the struct rather than the field, `#[serde(default)]` is refused. It
-fills in what one encoded value left out, from one `Default` for the whole
-struct — and here there is no encoded value to leave anything out of. Each field
-is present or absent on its own, so the default belongs on each of them.
-
-### A field stored some other way
-
-`serialize_with`, `deserialize_with` and `with` are serde's answer to a type
-whose own encoding is not the one you want on disk. Serde runs them from inside
-the struct holding the field, and this struct is never encoded — so the same
-thing is said to this macro instead, taking the same functions:
-
-```rust
-#[amestate(with = since_the_epoch)]
-pub opened: SystemTime,
-```
-
-`with = m` is `m::serialize` and `m::deserialize`, and either half can be named
-alone as `serialize_with` or `deserialize_with`. Write one half and the other
-stays the type's own — which is how a value gets written one way and read back
-another, so it is worth writing both unless you mean exactly that.
-
-The pair is the only thing between the value and the path: what lands there is
-what the write half produced, and nothing else reads it back. So the type never
-needs an encoding of its own, and a type from another crate can be a leaf.
-
-### What is refused
-
-Each of these is a compile error where it is written, in a sentence saying what
-to write instead.
-
-| written | why not, and what instead |
+| in serde | here |
 | --- | --- |
-| `deny_unknown_fields` | describes one encoded value, and there is none. A path nobody declared is not a key inside anything; `on_unreadable` is the per-field answer |
-| `tag`, `tag` + `content`, `untagged` | say how a variant names itself inside one encoded value, and there is none |
-| `transparent` | makes a struct encode as its one field, and this struct encodes as nothing |
-| `from`, `into`, `try_from` | convert the whole struct on its way through serde, and it never goes through whole. A conversion of one value belongs on that field's type |
-| `remote` | writes the serde impls for a type from another crate; this one is yours |
-| `skip`, `skip_serializing`, `skip_deserializing` | ask to be left out of an encoded value that does not exist. `#[amestate(volatile)]` is what a field can be here - and it says more: no path, nothing in the schema, nothing for a migration to carry |
-| `skip_serializing_if` | would mean the path is not written, so whatever is already there stays - and setting the field to the very thing the rule names would fail to clear it |
-| `alias` | names a second spelling to read, and a path is looked for under one name. A `#[migrate]` step with `#[rename(old => new)]` moves the data once at the open and is done |
-| `getter` | reads through a function, which serde does for a type it does not own |
-| `borrow` | borrows from the input, and a value comes back from the engine owned, one path at a time |
-| `serialize_with`, `deserialize_with`, `with` | are run by serde from inside the struct holding the field, and this one is never encoded. Say the same to this macro: `#[amestate(with = ..)]`, or one half of it, taking the same functions |
-| `default` on the struct | fills in what one encoded value left out, and there is none. Each field is absent on its own, so the default goes on the field |
-| `crate` | tells the derive where serde itself lives; no serde impl is written for this struct |
+| `rename = ".."` | `#[amestate(path = "..")]` - and a dot in it is a level, where serde's is one name with a dot in it |
+| `rename_all = ".."` | `rename_all` on the `#[amethystate(..)]` above |
+| `default` on a field | `#[amestate(default = ..)]`, taking an expression rather than the path to a function |
+| `flatten` | `#[amestate(flatten)]` on a `nested` field - and it moves segments on disk, where serde's merges a map into the map holding it |
+| `with`, `serialize_with`, `deserialize_with` | `#[amestate(with = ..)]` and its halves, taking the same functions |
 
-The attributes are read with serde's own parser, so what serde itself calls a
-contradiction comes back in serde's words.
+The rest of serde's vocabulary has nothing to be here. `deny_unknown_fields`,
+`tag`, `untagged`, `transparent`, `from`, `remote`, `skip`, `alias`, `getter`,
+`borrow` all describe one encoded value, and there is none: the fields are
+separate paths, present or absent on their own. What answers a path that will
+not read is `on_unreadable`; what a field kept out of the store entirely is, is
+`#[amestate(volatile)]`; what moves data written under an older name is a
+`#[migrate]` step with `#[rename(old => new)]`, which runs once at the open and
+converges, where an alias would be kept for good.
+
+All of it is written up where the vocabulary lives:
+[Defining structs](/amethystate/state/defining-structs/).
 
 ## Inside a leaf
 
