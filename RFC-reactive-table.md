@@ -1,5 +1,37 @@
 # RFC: `ReactiveTable`
 
+> **Withdrawn.** What is below stands as written and is worth keeping for the
+> parts of it that turned out to be about something else - the on-disk contract
+> the three keyed views share, and the argument that residency belongs to the
+> backing. The proposal itself is not going ahead, and the reason is short
+> enough to state here.
+>
+> **The order is lexicographic by construction.** `cmp_names` compares the
+> escaped form and nothing else, `scan_keys` returns keys already in that order
+> without decoding a value, and the row ids this document proposes are UUIDv7 -
+> which is lexicographically ordered by time. So the row order was always the
+> key order, and the way to get the order you want is to design the key.
+>
+> Under that rule the table's headline features fall out of a keyed collection
+> and one sorted scan. Rendering rows 7 through 34 is `scan_keys`, a slice, and
+> twenty-eight reads. Knowing which position moved is a `binary_search` in the
+> same sorted list. Neither needs a primitive.
+>
+> What is left is re-sorting the same rows by a column at runtime, and a table
+> does not answer that either: sorting by a column means reading the column. The
+> persistent answer is a secondary index - keys under another prefix ordering
+> the same rows - which is a map again.
+>
+> And by this document's own account the table writes nothing a map does not:
+> *"byte for byte the layout `ReactiveMap` already writes"*, the same
+> `Role::Map`, interchangeable in both directions with no migration. A thing
+> that owns no bytes is a view, not a primitive, and most of the length below is
+> about a disk layout that already exists.
+>
+> Superseded by [RFC: reaching a declared map without
+> holding it](RFC-reaching-a-declared-map.md), which covers the size pressure
+> this document opened with.
+
 A table is the one shape this library does not cover. `Field` holds a value,
 `ReactiveMap` holds a keyed set, `ReactiveCell` and `entry_cell` are views onto
 one of those, and `Kv` addresses any of them by path. None of them has an order,
