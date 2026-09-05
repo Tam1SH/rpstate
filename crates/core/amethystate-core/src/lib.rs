@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod change;
 pub mod facts;
+pub mod failure;
 
 #[cfg(feature = "async")]
 pub mod async_impl;

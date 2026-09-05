@@ -175,10 +175,10 @@ impl<R: ResultExt> Facts for R {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitives::error::WriteError;
+    use crate::failure::StorageError;
 
-    fn failing() -> Result<(), Report<WriteError>> {
-        Err(Report::new(WriteError::Storage))
+    fn failing() -> Result<(), Report<StorageError>> {
+        Err(Report::new(StorageError::Write))
     }
 
     #[test]
