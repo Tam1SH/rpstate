@@ -10,11 +10,13 @@ pub mod node;
 pub mod provided;
 pub mod registry;
 pub mod set;
+pub mod step;
 
 use crate::store::moved::Moved;
-use crate::store::{StorageError, StorageResult, meta, one_line};
+use crate::store::{StorageError, meta, one_line};
 pub use context::MigrationContext;
 pub use error::MigrationError;
+pub use step::{RunStep, StepResult};
 
 /// Which declared paths a store holds that the code does not, and the other way
 /// round.
@@ -143,7 +145,7 @@ pub trait Migration: Send + Sync {
     fn description(&self) -> Option<&str> {
         None
     }
-    fn run(&self, ctx: &mut MigrationContext) -> StorageResult<()>;
+    fn run(&self, ctx: &mut MigrationContext) -> StepResult<()>;
 }
 
 pub struct MigrationPlan {
@@ -163,7 +165,7 @@ impl MigrationPlan {
     /// the prefix currently records.
     pub fn step<F>(mut self, version: u32, description: &str, f: F) -> Self
     where
-        F: Fn(&mut MigrationContext) -> StorageResult<()> + Send + Sync + 'static,
+        F: Fn(&mut MigrationContext) -> StepResult<()> + Send + Sync + 'static,
     {
         struct ClosureMigration<F> {
             v: u32,
@@ -172,7 +174,7 @@ impl MigrationPlan {
         }
         impl<F> Migration for ClosureMigration<F>
         where
-            F: Fn(&mut MigrationContext) -> StorageResult<()> + Send + Sync + 'static,
+            F: Fn(&mut MigrationContext) -> StepResult<()> + Send + Sync + 'static,
         {
             fn target_version(&self) -> u32 {
                 self.v
@@ -180,7 +182,7 @@ impl MigrationPlan {
             fn description(&self) -> Option<&str> {
                 Some(&self.d)
             }
-            fn run(&self, ctx: &mut MigrationContext) -> StorageResult<()> {
+            fn run(&self, ctx: &mut MigrationContext) -> StepResult<()> {
                 (self.f)(ctx)
             }
         }

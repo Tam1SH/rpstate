@@ -6,7 +6,7 @@
 
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::reactive_map_with_path_only;
-use amethystate::store::{OpenStruct, StorageError, StoreBackend, WriteValue};
+use amethystate::store::{LoadMap, StorageError, StoreBackend, WriteValue};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
@@ -59,15 +59,12 @@ fn a_map_entry_of_the_wrong_type_does_not_read_back_as_a_default(backend: Backen
     )
     .unwrap_err();
 
-    let OpenStruct::Store(err) = err else {
+    let LoadMap::EntryWillNotRead { at, why } = err else {
         panic!("{err}")
     };
 
-    assert_eq!(err.current_context(), &StorageError::Codec, "got {err:?}");
-    assert!(
-        format!("{err:?}").contains("cpu"),
-        "the report names the entry it could not read: {err:?}"
-    );
+    assert_eq!(at.as_str(), "cols.cpu");
+    assert_eq!(why.current_context(), &StorageError::Codec, "got {why:?}");
 }
 
 /// A default whose key cannot name a level fails the map rather than being
@@ -85,7 +82,7 @@ fn a_map_default_whose_key_is_empty_fails_rather_than_vanishing(backend: Backend
         reactive_map_with_path_only::<String, u32>(&store, ["sizes"], defaults, Uuid::new_v4())
             .unwrap_err();
 
-    let OpenStruct::Store(err) = err else {
+    let LoadMap::Store(err) = err else {
         panic!("{err}")
     };
 

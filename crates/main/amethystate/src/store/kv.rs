@@ -299,13 +299,13 @@ impl Kv {
     /// let columns = kv.namespace("columns");
     /// assert_eq!(columns.get::<u64>("cpu").unwrap(), Some(120));
     /// ```
-    pub fn map<K, V>(&self, name: &str) -> Result<ReactiveMap<K, V>, OpenStruct>
+    pub fn map<K, V>(&self, name: &str) -> crate::store::LoadMapResult<ReactiveMap<K, V>>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
         let path = self.resolve_path(name)?;
-        self.refuse_open(&path)?;
+        self.refuse_load(&path)?;
 
         reactive_map_with_path_only(&self.store, path, HashMap::new(), self.instance_id)
     }
@@ -341,15 +341,23 @@ impl Kv {
             })
     }
 
-    fn refuse_open(&self, at: &StorePath) -> Result<(), OpenStruct> {
+    fn taken_by_a_schema(&self, at: &StorePath) -> Result<(), Box<Taken>> {
         self.guard(at).map_err(|(held_at, held_by)| {
-            OpenStruct::Claimed(Box::new(Taken {
+            Box::new(Taken {
                 at: at.clone(),
                 wanted_by: "a kv handle",
                 held_at,
                 held_by,
-            }))
+            })
         })
+    }
+
+    fn refuse_open(&self, at: &StorePath) -> Result<(), OpenStruct> {
+        Ok(self.taken_by_a_schema(at)?)
+    }
+
+    fn refuse_load(&self, at: &StorePath) -> crate::store::LoadMapResult<()> {
+        Ok(self.taken_by_a_schema(at)?)
     }
 
     /// Drops everything under this handle that no schema declared.

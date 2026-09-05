@@ -1289,18 +1289,17 @@ mod tests {
         )
         .unwrap_err();
 
-        let crate::store::OpenStruct::Store(err) = err else {
-            panic!("{err}")
-        };
-
-        assert_eq!(
-            err.current_context(),
-            &StorageError::Codec,
+        assert!(
+            matches!(
+                err,
+                crate::store::LoadMap::KeyWillNotRead { .. }
+                    | crate::store::LoadMap::EntryWillNotRead { .. }
+            ),
             "a key that is not an `i32` and a value that is not one are both the \
-             codec's refusal, not a read or an open failure"
+             codec's refusal, not a read or an open failure: {err}"
         );
 
-        let report = format!("{err:?}");
+        let report = format!("{:?}", error_stack::Report::<StorageError>::from(err));
         assert!(
             report.contains("entry: 123") || report.contains("entry: not_int_key"),
             "the report names the entry it could not read: {report}"

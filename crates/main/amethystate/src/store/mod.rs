@@ -38,7 +38,7 @@ pub use inspector::InspectorBackend;
 pub use kv::{Cleared, Kv};
 pub use opening::{OpenStore, OpenStruct};
 pub use primitives_factory::*;
-pub use reading::{ReadResult, ReadValue, ScanKeys, ScanResult};
+pub use reading::{LoadMap, LoadMapResult, ReadResult, ReadValue, ScanKeys, ScanResult};
 pub use rules::*;
 pub use state_slice::*;
 pub use traits::*;

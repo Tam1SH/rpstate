@@ -1,6 +1,6 @@
 # RFC: what a call can fail with, said by its type
 
-**Status: built, except the migration sets.**
+**Status: built.**
 
 An error today names the *verb* and puts the *nouns* in a bag. A caller that
 wanted to tell one refused open from another used to write this:
@@ -175,7 +175,8 @@ the sets appear at ten public boundaries, where the report is wrapped.
 3. **`ReadValue`, `ScanKeys`, `Flush` and `OpenStore`. Done.** Driven by
    rewriting every test to `anyhow::Result`, which turns the whole suite into
    the checklist: a call still on `Report<StorageError>` does not compile there.
-   `RunStep`, `OpenStoreMigrating` and `LoadMap` are what is left.
+4. **`LoadMap` and `RunStep`. Done.** `OpenStoreMigrating` is not built, and
+   should not be - see below.
 
 Each step is finished when a test does `?` into both `anyhow` and
 `Box<dyn Error + Send + Sync>` and a `match` with no `_` arm compiles.
@@ -258,3 +259,33 @@ type says `Read` on top and `Codec` below, so `ReadValue::from_store` asks
 exhaustive matches, and one function that opens, writes, flushes, reads and
 closes through `anyhow::Result` and again through `Box<dyn Error + Send +
 Sync>`.
+
+### What step 4 changed on the way
+
+**`OpenStoreMigrating` is not built, and the rule this RFC set is why.** A set
+is split off when a variant one caller can never see would otherwise be a
+variant every caller reads past. `StoreBuilder::build` runs hand-declared
+`#[migrate]` steps too, so it can reach a migration failure exactly as
+`build_with_migration` can. There is no caller the variant is dead for, so
+there is nothing to split: `OpenStore::Migrating` serves both.
+
+**`LoadMap` and `RunStep` are earned, and by the same rule.** A map is opened
+over what is already under it, so it meets two failures nothing else does - a
+stored key that is not one of its entries, and an entry whose *name* will not
+read as the key type. A step meets one nothing else does either: the difference
+between a record that is not what it expected, which it can often skip, and a
+disk that broke under it, which it cannot. `RunStep::Refused` is the step's own
+verdict, kept out of `Store` for the same reason.
+
+The public alias a step author already writes, `MigrationResult<T>`, now points
+at `StepResult<T>`, so the whole migration surface moved without a rename at any
+call site: `MigrateFrom::migrate`, `AmeStateFields::load_struct`/`save_struct`,
+the `Migration` trait and both `step` builders.
+
+`tests/what_a_step_can_fail_with.rs` is the finishing test for this step.
+
+## What is left
+
+Nothing of this RFC. `Report<StorageError>` now lives under the boundary, in
+`StoreBackend` and the engines, and reaches a caller only inside a variant that
+kept it.

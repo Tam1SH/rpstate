@@ -1,7 +1,7 @@
 use crate::MigrationContext;
 use crate::migration::fields::FieldDescriptor;
 use crate::store::StateScope;
-use crate::store::{StaticPath, StorageResult};
+use crate::store::StaticPath;
 use std::collections::BTreeSet;
 
 #[derive(Clone)]
@@ -12,7 +12,7 @@ pub struct MigrationStepEntry {
     pub dependencies: &'static [&'static str],
     pub struct_name: &'static str,
     pub fields: &'static [FieldDescriptor],
-    pub run: fn(&mut MigrationContext) -> StorageResult<()>,
+    pub run: fn(&mut MigrationContext) -> crate::migration::StepResult<()>,
 }
 
 inventory::collect!(MigrationStepEntry);

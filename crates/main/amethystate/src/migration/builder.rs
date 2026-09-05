@@ -2,7 +2,6 @@ use crate::migration::fields::FieldDescriptor;
 use crate::migration::provided::Provided;
 use crate::migration::registry::{MigrationDependency, MigrationStepEntry};
 use crate::migration::set::MigrationSet;
-use crate::store::StorageResult;
 use crate::{MigrationContext, MigrationPlan, StateScope};
 use std::collections::{BTreeSet, HashMap};
 
@@ -220,7 +219,7 @@ impl PrefixMigrationBuilder<'_> {
     /// ```
     pub fn step<F>(&mut self, target_version: u32, description: &str, run: F) -> &mut Self
     where
-        F: Fn(&mut MigrationContext) -> StorageResult<()> + Send + Sync + 'static,
+        F: Fn(&mut MigrationContext) -> crate::migration::StepResult<()> + Send + Sync + 'static,
     {
         let plan = self.builder.prefix_plan(&self.prefix);
         let migrator = std::mem::take(&mut plan.migrator);

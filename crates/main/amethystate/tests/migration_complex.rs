@@ -1,5 +1,4 @@
 use amethystate::migration::ComponentOutcome;
-use amethystate::store::IntoStorageReport;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, MigrationError, migrate};
 use amethystate_core::test_utils::TempPath;
@@ -385,7 +384,7 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
             m.for_node::<BrokenChild>().depends_on::<BrokenRoot>().step(
                 2,
                 "fail broken branch",
-                |_| Err(MigrationError::Custom("intentional failure".into()).into_report()),
+                |_| Err(MigrationError::Custom("intentional failure".into()).into()),
             );
         })
         .build_with_migration()

@@ -27,8 +27,7 @@ fn migrate_broken_v1_to_v2(
     _old: AmeData<v1::Broken>,
     _ctx: &mut amethystate::migration::MigrationContext,
 ) -> amethystate::MigrationResult<AmeData<Broken>> {
-    use amethystate::store::IntoStorageReport;
-    Err(amethystate::migration::MigrationError::Custom("refused".into()).into_report())
+    Err(amethystate::migration::MigrationError::Custom("refused".into()).into())
 }
 
 /// The snapshot records what the code declared, so the next run can say what

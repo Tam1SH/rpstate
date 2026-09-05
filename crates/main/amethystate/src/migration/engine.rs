@@ -396,7 +396,7 @@ mod tests {
     use crate::migration::context::{decode, encode};
     use crate::migration::fields::FieldDescriptor;
     use crate::migration::meta::StoredShape;
-    use crate::store::{CodecFormat, IntoStorageReport, StorageError};
+    use crate::store::{CodecFormat, StorageError};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::ops::Deref;
@@ -604,7 +604,7 @@ mod tests {
             .add(
                 "b",
                 MigrationPlan::new().step(1, "fail", |_| {
-                    Err(MigrationError::Custom("err".into()).into_report())
+                    Err(MigrationError::Custom("err".into()).into())
                 }),
                 EMPTY_FIELDS,
                 &[],

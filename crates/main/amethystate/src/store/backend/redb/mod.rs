@@ -1012,7 +1012,6 @@ mod tests {
 
     use crate::migration::fields::FieldDescriptor;
     use crate::migration::{MigrationError, MigrationPlan};
-    use crate::store::IntoStorageReport;
     use crate::store::StoreExt;
     use crate::store::config::AfterGivingUp;
     use amethystate_core::test_utils::TempPath;
@@ -1222,7 +1221,7 @@ mod tests {
             .add(
                 "ui",
                 MigrationPlan::new().step(1, "fail", |_| {
-                    Err(MigrationError::Custom("crash".into()).into_report())
+                    Err(MigrationError::Custom("crash".into()).into())
                 }),
                 EMPTY_FIELDS,
                 &["net"],

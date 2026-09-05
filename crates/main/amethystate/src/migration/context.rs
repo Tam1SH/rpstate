@@ -2,8 +2,9 @@ use crate::codec::CodecError;
 use crate::migration::fields::AmeStateFields;
 use crate::migration::migrate_from::MigrateFrom;
 use crate::migration::provided::Provided;
+use crate::migration::step::{RunStep, StepResult};
 use crate::store::MigrationBackendAdapter;
-use crate::store::facts::{Entry, Facts, Migrating, Prefix, RawKey};
+use crate::store::facts::{Entry, Facts, Prefix, RawKey};
 use crate::store::{CodecFormat, StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::{Report, ResultExt};
@@ -13,6 +14,7 @@ use serde::de::DeserializeOwned;
 use std::any::{Any, type_name};
 use std::hash::Hash;
 use std::str::FromStr;
+use std::sync::Arc;
 
 pub struct MigrationContext<'a> {
     prefix: String,
@@ -115,7 +117,7 @@ impl<'a> MigrationContext<'a> {
     /// let guidance = pinned.lines().last().unwrap().trim_start_matches(['╰', '╴']);
     /// assert!(rendered.contains(guidance), "{rendered}");
     /// ```
-    pub fn require<T: Any>(&self) -> StorageResult<&'a T> {
+    pub fn require<T: Any>(&self) -> StepResult<&'a T> {
         if let Some(value) = self.provided::<T>() {
             return Ok(value);
         }
@@ -127,11 +129,11 @@ impl<'a> MigrationContext<'a> {
             format!("provided: {}", offered.join(", "))
         };
 
-        Err(Report::new(StorageError::Migrate)
-            .attach(Migrating(self.prefix.clone()))
-            .attach(format!("no value provided for {}", type_name::<T>()))
-            .attach(offered)
-            .attach("StoreBuilder::provide hands a value to every migration step"))
+        Err(RunStep::NothingProvided {
+            under: Arc::from(self.prefix.as_str()),
+            wanted: type_name::<T>(),
+            on_offer: Arc::from(offered.as_str()),
+        })
     }
 
     /// Migrates a nested struct held at `key`, running its own
@@ -139,7 +141,7 @@ impl<'a> MigrationContext<'a> {
     ///
     /// For a field that is itself an `#[amethystate]` struct, so its migration
     /// is written once and reused wherever it is nested.
-    pub fn nested<TOld, TNew>(&mut self, key: &str, old_data: TOld) -> StorageResult<TNew>
+    pub fn nested<TOld, TNew>(&mut self, key: &str, old_data: TOld) -> StepResult<TNew>
     where
         TOld: AmeStateFields,
         TNew: MigrateFrom<TOld> + AmeStateFields,
@@ -165,12 +167,13 @@ impl<'a> MigrationContext<'a> {
     ///
     /// Deleting a key that was never there is not an error - a migration has
     /// to survive running against data that skipped a version.
-    pub fn delete(&mut self, key: &str) -> StorageResult<()> {
+    pub fn delete(&mut self, key: &str) -> StepResult<()> {
         let scoped = self.scoped_path(key);
         self.storage
             .delete(&scoped)
             .attach_migrating(&self.prefix)
             .attach_raw_key(&scoped)
+            .map_err(RunStep::Store)
     }
 
     /// Moves a value to another key, bytes untouched.
@@ -178,7 +181,7 @@ impl<'a> MigrationContext<'a> {
     /// Nothing is decoded, so this works whatever the value's type and cannot
     /// fail on a type it does not know. A `from` that holds nothing is a
     /// no-op rather than an error.
-    pub fn rename(&mut self, from: &str, to: &str) -> StorageResult<()> {
+    pub fn rename(&mut self, from: &str, to: &str) -> StepResult<()> {
         if let Some(bytes) = self.get_raw(from)? {
             self.set_raw(to, &bytes)?;
             self.delete(from)?;
@@ -194,8 +197,8 @@ impl<'a> MigrationContext<'a> {
     pub fn transform<TOld, TNew>(
         &mut self,
         key: &str,
-        f: impl FnOnce(TOld) -> StorageResult<TNew>,
-    ) -> StorageResult<()>
+        f: impl FnOnce(TOld) -> StepResult<TNew>,
+    ) -> StepResult<()>
     where
         TOld: DeserializeOwned,
         TNew: Serialize,
@@ -213,8 +216,8 @@ impl<'a> MigrationContext<'a> {
         &mut self,
         from: (&str, &str),
         into: &str,
-        f: impl FnOnce(TOld1, TOld2) -> StorageResult<TNew>,
-    ) -> StorageResult<()>
+        f: impl FnOnce(TOld1, TOld2) -> StepResult<TNew>,
+    ) -> StepResult<()>
     where
         TOld1: DeserializeOwned,
         TOld2: DeserializeOwned,
@@ -235,8 +238,8 @@ impl<'a> MigrationContext<'a> {
         &mut self,
         from: &str,
         into: (&str, &str),
-        f: impl FnOnce(TOld) -> StorageResult<(TNew1, TNew2)>,
-    ) -> StorageResult<()>
+        f: impl FnOnce(TOld) -> StepResult<(TNew1, TNew2)>,
+    ) -> StepResult<()>
     where
         TOld: DeserializeOwned,
         TNew1: Serialize,
@@ -254,24 +257,26 @@ impl<'a> MigrationContext<'a> {
     /// Reads a value as `T`, relative to this context's prefix.
     ///
     /// The escape hatch for a migration the shaped helpers do not cover.
-    pub fn get<T: DeserializeOwned>(&self, key: &str) -> StorageResult<Option<T>> {
+    pub fn get<T: DeserializeOwned>(&self, key: &str) -> StepResult<Option<T>> {
         match self.get_raw(key)? {
             Some(bytes) => Ok(Some(
                 decode(self.storage, &bytes)
                     .attach_migrating(&self.prefix)
                     .attach_entry(key)
-                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?,
+                    .attach_with(|| format!("as: {}", std::any::type_name::<T>()))
+                    .map_err(|why| RunStep::reading::<T>(&self.prefix, key, why))?,
             )),
             None => Ok(None),
         }
     }
 
     /// Writes a value relative to this context's prefix.
-    pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> StorageResult<()> {
+    pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> StepResult<()> {
         let bytes = encode(self.storage, value)
             .attach_migrating(&self.prefix)
             .attach_entry(key)
-            .attach_with(|| format!("as: {}", std::any::type_name::<T>()))?;
+            .attach_with(|| format!("as: {}", std::any::type_name::<T>()))
+            .map_err(|why| RunStep::writing::<T>(&self.prefix, key, why))?;
         self.set_raw(key, &bytes)
     }
 
@@ -281,57 +286,63 @@ impl<'a> MigrationContext<'a> {
     /// that value has already been migrated depends on ordering - declare it
     /// with [`PrefixMigrationBuilder::depends_on`](crate::migration::builder::PrefixMigrationBuilder::depends_on)
     /// rather than hoping.
-    pub fn global_get<T: DeserializeOwned>(&self, full_key: &str) -> StorageResult<Option<T>> {
+    pub fn global_get<T: DeserializeOwned>(&self, full_key: &str) -> StepResult<Option<T>> {
         let read = self
             .storage
             .get(full_key)
             .attach_migrating(&self.prefix)
-            .attach_raw_key(full_key)?;
+            .attach_raw_key(full_key)
+            .map_err(RunStep::Store)?;
 
         match read {
             Some(bytes) => Ok(Some(
                 decode(self.storage, &bytes)
                     .attach_migrating(&self.prefix)
-                    .attach_raw_key(full_key)?,
+                    .attach_raw_key(full_key)
+                    .map_err(|why| RunStep::reading::<T>(&self.prefix, full_key, why))?,
             )),
             None => Ok(None),
         }
     }
 
     /// Writes a value by its whole path, ignoring this context's prefix.
-    pub fn global_set<T: Serialize>(&mut self, full_key: &str, value: &T) -> StorageResult<()> {
+    pub fn global_set<T: Serialize>(&mut self, full_key: &str, value: &T) -> StepResult<()> {
         let bytes = encode(self.storage, value)
             .attach_migrating(&self.prefix)
-            .attach_raw_key(full_key)?;
+            .attach_raw_key(full_key)
+            .map_err(|why| RunStep::writing::<T>(&self.prefix, full_key, why))?;
         self.storage
             .set(full_key, &bytes)
             .attach_migrating(&self.prefix)
             .attach_raw_key(full_key)
             .attach_value_bytes(bytes.len())
+            .map_err(RunStep::Store)
     }
 
     /// The stored bytes at `key`, undecoded.
     ///
     /// For moving a value whose type this step cannot name, or reading one
     /// written in a shape that no longer deserialises.
-    pub fn get_raw(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
+    pub fn get_raw(&self, key: &str) -> StepResult<Option<Vec<u8>>> {
         let scoped = self.scoped_path(key);
         self.storage
             .get(&scoped)
             .attach_migrating(&self.prefix)
             .attach_raw_key(&scoped)
+            .map_err(RunStep::Store)
     }
 
     /// Writes bytes at `key` as they are.
     ///
     /// They must be in the backend's own encoding - [`encode`] produces it.
-    pub fn set_raw(&mut self, key: &str, value: &[u8]) -> StorageResult<()> {
+    pub fn set_raw(&mut self, key: &str, value: &[u8]) -> StepResult<()> {
         let scoped = self.scoped_path(key);
         self.storage
             .set(&scoped, value)
             .attach_migrating(&self.prefix)
             .attach_raw_key(&scoped)
             .attach_value_bytes(value.len())
+            .map_err(RunStep::Store)
     }
 
     /// A context narrowed to a sub-prefix, so a nested part can be migrated
@@ -368,20 +379,19 @@ impl<'a> MigrationContext<'a> {
     /// on `K` - `10, 100, 9` for numeric keys. A step that goes through the
     /// entries sees what the map itself would show. Writing them back is
     /// per-entry, so what the step does to this order reaches nothing.
-    pub fn scan_map<K, V>(&self, key: &str) -> StorageResult<IndexMap<K, V>>
+    pub fn scan_map<K, V>(&self, key: &str) -> StepResult<IndexMap<K, V>>
     where
         K: FromStr + Eq + Hash,
         V: DeserializeOwned,
     {
         let scoped = self.scoped_path(key);
-        let full_prefix = StorePath::parse_joined(&scoped)
-            .change_context(StorageError::Path)
-            .attach_raw_key(&scoped)?;
+        let full_prefix = StorePath::parse_joined(&scoped)?;
         let raw = self
             .storage
             .scan_prefix(&full_prefix)
             .attach_migrating(&self.prefix)
-            .attach_prefix(&full_prefix)?;
+            .attach_prefix(&full_prefix)
+            .map_err(RunStep::Store)?;
         let mut map = IndexMap::new();
 
         for (path, bytes) in raw {
@@ -390,34 +400,41 @@ impl<'a> MigrationContext<'a> {
             let name = match below {
                 amethystate_core::path::Level::Entry(name) => name.into_owned(),
                 amethystate_core::path::Level::Deeper(name) => {
-                    return Err(Report::new(StorageError::Path)
-                        .attach(Prefix(full_prefix.clone()))
-                        .attach(RawKey(path.to_string()))
-                        .attach(Entry(name.into_owned()))
-                        .attach(
-                            "a map owns the level below it and nothing further, and this \
-                             step would rewrite the map whole",
-                        ));
+                    return Err(RunStep::Store(
+                        Report::new(StorageError::Path)
+                            .attach(Prefix(full_prefix.clone()))
+                            .attach(RawKey(path.to_string()))
+                            .attach(Entry(name.into_owned()))
+                            .attach(
+                                "a map owns the level below it and nothing further, and this \
+                                 step would rewrite the map whole",
+                            ),
+                    ));
                 }
                 amethystate_core::path::Level::Prefix | amethystate_core::path::Level::Outside => {
-                    return Err(Report::new(StorageError::Path)
-                        .attach(Prefix(full_prefix.clone()))
-                        .attach(RawKey(path.to_string()))
-                        .attach("the key is not under the map it was scanned from"));
+                    return Err(RunStep::Store(
+                        Report::new(StorageError::Path)
+                            .attach(Prefix(full_prefix.clone()))
+                            .attach(RawKey(path.to_string()))
+                            .attach("the key is not under the map it was scanned from"),
+                    ));
                 }
             };
 
-            let parsed = K::from_str(&name).map_err(|_| {
-                Report::new(StorageError::Codec)
+            let parsed = K::from_str(&name).map_err(|_| RunStep::WillNotRead {
+                under: Arc::from(full_prefix.as_str()),
+                entry: Arc::from(name.as_str()),
+                wanted: std::any::type_name::<K>(),
+                why: Report::new(StorageError::Codec)
                     .attach(Prefix(full_prefix.clone()))
-                    .attach(Entry(name.clone()))
-                    .attach(format!("key type: {}", std::any::type_name::<K>()))
+                    .attach(Entry(name.clone())),
             })?;
 
             let value = decode::<V>(self.storage, &bytes)
                 .attach_prefix(&full_prefix)
                 .attach_entry(&name)
-                .attach_with(|| format!("value type: {}", std::any::type_name::<V>()))?;
+                .attach_with(|| format!("value type: {}", std::any::type_name::<V>()))
+                .map_err(|why| RunStep::reading::<V>(full_prefix.as_str(), &name, why))?;
 
             map.insert(parsed, value);
         }

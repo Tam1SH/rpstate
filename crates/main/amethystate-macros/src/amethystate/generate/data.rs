@@ -570,13 +570,13 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             const PARENT_PREFIX: #crate_name::store::StaticPath = #prefix_static;
             const MIGRATION_DEPS: &'static [&'static str] = &[];
 
-            fn load_struct(ctx: &mut #crate_name::MigrationContext) -> #crate_name::StorageResult<Self> {
+            fn load_struct(ctx: &mut #crate_name::MigrationContext) -> #crate_name::migration::StepResult<Self> {
                 Ok(Self {
                     #(#load_fields,)*
                 })
             }
 
-            fn save_struct(&self, ctx: &mut #crate_name::MigrationContext) -> #crate_name::StorageResult<()> {
+            fn save_struct(&self, ctx: &mut #crate_name::MigrationContext) -> #crate_name::migration::StepResult<()> {
                 #(#save_fields)*
                 Ok(())
             }

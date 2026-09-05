@@ -71,19 +71,28 @@ plain `?`, and giving up costs nothing.
 
 | set | raised by |
 | --- | --- |
-| `OpenStruct` | `new`, `new_with`, `new_with_id`, `new_with_id_under`, `load`, `load_with` |
+| `OpenStruct` | `new`, `new_with`, `new_with_id`, `new_with_id_under`, `load`, `load_with`, `Kv::cell` |
 | `OpenStore` | `StoreBuilder::build`, `build_with_migration`, `located` |
+| `LoadMap` | `Kv::map`, and a map field's own constructor |
 | `ReadValue` | `Store::get`, `Store::decode` |
 | `WriteValue` | `Store::set`, `Store::delete`, `Field::set`, `ReactiveCell::set`/`update`/`modify`, `ReactiveMap::insert` |
 | `KvWrite` | `Kv::get`, `Kv::set`, `Kv::remove` |
 | `ScanKeys` | `Store::scan_keys`, `Store::scan_prefix`, `Kv::keys` |
 | `Flush` | `save_now`, `close`, `flush_prefix` |
+| `RunStep` | every `MigrationContext` method, and what a migration step hands back |
 
 They overlap and they are still separate types. `WriteValue` has `Intercepted`,
 `Absent` and `SourceGone`, which a raw `Kv` write cannot reach; `KvWrite` has
 `Declared`, which a write through a field cannot. Four variants are shared.
 Written as one set, every caller would read past arms that cannot fire where
 they are.
+
+A map gets its own set rather than sharing `OpenStruct` because it is opened
+over what is already under it, and so meets two failures nothing else can: a
+stored key that is not one of its entries, and an entry whose *name* will not
+read as the key type. A migration step gets one because the distinction it
+needs - *this record is not what I expected*, which a step can often skip past,
+against *the disk is broken*, which it cannot - has nowhere else to live.
 
 `Field::try_get` is the odd one out and deliberately so: it is not a write, and
 not the store's failure, but what this field and the store do not agree about.
@@ -117,10 +126,10 @@ Pulling one out of a set is a `match` like any other:
 
 <!-- shown: getting at the report a set carries -->
 ```rust
-fn what_the_store_said(why: OpenStruct) -> StorageResult<()> {
+fn what_the_store_said(why: LoadMap) -> StorageResult<()> {
     match why {
-        OpenStruct::Store(report) => Err(report),
-        other => panic!("the store was expected to be at fault: {other}"),
+        LoadMap::EntryWillNotRead { why, .. } => Err(why),
+        other => panic!("an entry was expected to be at fault: {other}"),
     }
 }
 ```
@@ -163,7 +172,7 @@ newtype over the thing it holds, and its label lives on its `Display`.
 
 <!-- shown: reaching the entry that failed -->
 ```rust
-let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+let refused = store.kv().map::<String, u64>("ports").unwrap_err();
 let report = what_the_store_said(refused).unwrap_err();
 
 let entries: Vec<&Entry> = facts::all::<Entry, _>(&report).collect();
@@ -179,7 +188,7 @@ Asking for a fact the report does not carry hands back nothing:
 
 <!-- shown: asking for a fact the report does not carry -->
 ```rust
-let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+let refused = store.kv().map::<String, u64>("ports").unwrap_err();
 let report = what_the_store_said(refused).unwrap_err();
 
 let key = facts::all::<Key, _>(&report).next();
@@ -204,20 +213,42 @@ the facts under the frame that attached them.
 
 <!-- shown: an entry that will not decode -->
 ```rust
-store.set(["ports", "http"], &1u64)?;
+store.set(["ports", "http"], &"text".to_string())?;
 
-let undecodable = store.kv().map::<u16, u64>("ports").unwrap_err();
+let undecodable = store.kv().map::<String, u64>("ports").unwrap_err();
 ```
 <!-- /shown -->
 
 <!-- printed: an entry that will not decode from book_errors -->
 ```
+the entry at ports.http will not read back: the value could not be encoded or decoded <- Erased codec error: wrong msgpack marker FixStr(4) <- wrong msgpack marker FixStr(4)
+
 the value could not be encoded or decoded
+├╴as: u64
+├╴value bytes: 5
 ├╴prefix: ports
 ├╴entry: http
-╰╴key type: u16
+│
+├─▶ Erased codec error: wrong msgpack marker FixStr(4)
+│
+╰─▶ wrong msgpack marker FixStr(4)
 ```
 <!-- /printed -->
+
+<!-- shown: an entry whose name is not the map's key type -->
+```rust
+let wrong_key = store.kv().map::<u16, String>("ports").unwrap_err();
+```
+<!-- /shown -->
+
+<!-- printed: an entry whose name is not the map's key type from book_errors -->
+```
+`http` under ports will not read as a u16
+```
+<!-- /printed -->
+
+That one has no report under it, and needs none: the variant already names the
+map, the entry and the type it would not read as.
 
 <!-- shown: a name that cannot be a level -->
 ```rust

@@ -165,7 +165,7 @@ pub fn migrate_impl_inner(
                 #(#rename_tuples),*
             ];
 
-            fn migrate(old_val: #old_ty, ctx_val: &mut #crate_name::migration::MigrationContext) -> #crate_name::StorageResult<Self> {
+            fn migrate(old_val: #old_ty, ctx_val: &mut #crate_name::migration::MigrationContext) -> #crate_name::migration::StepResult<Self> {
                 #call_expr
             }
         }

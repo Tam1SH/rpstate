@@ -14,7 +14,10 @@ pub mod shape;
 pub mod store;
 
 pub type AmeData<T> = <T as AmeState>::Data;
-pub type MigrationResult<T> = StorageResult<T>;
+
+/// What a migration step answers with: everything it can fail at, and nothing
+/// else.
+pub type MigrationResult<T> = crate::migration::StepResult<T>;
 
 pub use erased_serde;
 pub use error_stack;

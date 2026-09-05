@@ -4,8 +4,9 @@ use crate::reactive::field::Unreadable;
 use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::StoreSubscription;
-use crate::store::facts::{Entry, Facts, Key, Prefix, RawKey, Refused};
+use crate::store::facts::{Facts, Key, Prefix, Refused};
 use crate::store::opening::OpenStruct;
+use crate::store::reading::{LoadMap, LoadMapResult};
 use crate::store::rules::{OnDelete, OnUnreadable, ReadRules};
 use crate::store::traits::{StoreExt as _, StoredAs};
 use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
@@ -42,12 +43,16 @@ where
 /// building the same struct twice claims the same path twice and changes
 /// nothing. An instance nobody registered claims nothing - there is no name to
 /// attribute it to, and refusing what cannot be attributed would be guessing.
-fn claim(store: &Store, path: &StorePath, instance_id: Uuid) -> Result<(), OpenStruct> {
+fn claim(
+    store: &Store,
+    path: &StorePath,
+    instance_id: Uuid,
+) -> Result<(), Box<crate::store::owners::Taken>> {
     let Some(by) = crate::store::instances::resolve_instance(instance_id) else {
         return Ok(());
     };
 
-    store.owners().take(path, by).map_err(OpenStruct::from)
+    store.owners().take(path, by)
 }
 
 pub fn field_with_path<TValue>(
@@ -228,7 +233,7 @@ pub fn reactive_map<TScope, K, V>(
     key: impl IntoStorePath,
     default: HashMap<K, V>,
     instance_id: Uuid,
-) -> Result<ReactiveMap<K, V>, OpenStruct>
+) -> LoadMapResult<ReactiveMap<K, V>>
 where
     TScope: StateScope,
     K: ReactiveMapKey,
@@ -243,7 +248,7 @@ pub fn reactive_map_with_path<TScope, K, V>(
     path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> Result<ReactiveMap<K, V>, OpenStruct>
+) -> LoadMapResult<ReactiveMap<K, V>>
 where
     TScope: StateScope,
     K: ReactiveMapKey,
@@ -307,7 +312,7 @@ where
 ///
 /// A key that cannot be read back is an error rather than an absence. The path
 /// itself is not an entry.
-pub fn load_map<K, V>(store: &Store, path: &StorePath) -> StorageResult<IndexMap<K, V>>
+pub fn load_map<K, V>(store: &Store, path: &StorePath) -> LoadMapResult<IndexMap<K, V>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
@@ -318,7 +323,8 @@ where
         let scanned = store
             .scan_prefix(path)
             .map_err(Report::from)
-            .attach_prefix(path)?;
+            .attach_prefix(path)
+            .map_err(|why| LoadMap::from_store(path, why))?;
 
         if scanned.len() >= PARALLEL_MIN_LEN {
             let decoded: Vec<(K, V)> = scanned
@@ -327,7 +333,7 @@ where
                 .filter_map(|(stored, bytes)| {
                     decode_entry(store, path, PathRef::from(stored), bytes).transpose()
                 })
-                .collect::<StorageResult<Vec<_>>>()?;
+                .collect::<LoadMapResult<Vec<_>>>()?;
 
             return Ok(decoded.into_iter().collect());
         }
@@ -342,14 +348,28 @@ where
     }
 
     let mut entries = IndexMap::new();
-    store.visit_prefix(path, &mut |key, bytes| {
-        if let Some((k, v)) = decode_entry(store, path, key, bytes)? {
-            entries.insert(k, v);
-        }
-        Ok(())
-    })?;
+    let mut refused: Option<LoadMap> = None;
 
-    Ok(entries)
+    let visited = store.visit_prefix(path, &mut |key, bytes| match decode_entry(
+        store, path, key, bytes,
+    ) {
+        Ok(Some((k, v))) => {
+            entries.insert(k, v);
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(why) => {
+            let stop = Report::new(StorageError::Read).attach("an entry the map would not take");
+            refused = Some(why);
+            Err(stop)
+        }
+    });
+
+    match (refused, visited) {
+        (Some(why), _) => Err(why),
+        (None, Err(why)) => Err(LoadMap::from_store(path, why)),
+        (None, Ok(())) => Ok(entries),
+    }
 }
 
 const PARALLEL_MIN_LEN: usize = 1024;
@@ -359,7 +379,7 @@ fn decode_entry<K, V>(
     path: &StorePath,
     stored: PathRef<'_>,
     bytes: &[u8],
-) -> StorageResult<Option<(K, V)>>
+) -> LoadMapResult<Option<(K, V)>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
@@ -369,35 +389,38 @@ where
     let name = match &below {
         Level::Entry(name) => name.as_ref(),
         Level::Prefix => return Ok(None),
-        Level::Deeper(name) => {
-            return Err(Report::new(StorageError::Path)
-                .attach(Prefix(path.clone()))
-                .attach(RawKey(stored.as_str().to_owned()))
-                .attach(Entry(name.to_string()))
-                .attach(
+        Level::Deeper(_) => {
+            return Err(LoadMap::KeyIsNotAnEntry {
+                under: path.clone(),
+                stored: Arc::from(stored.as_str()),
+                said: Arc::from(
                     "a map owns the level below it and nothing further, so this key \
                      belongs to whatever claimed that level",
-                ));
+                ),
+            });
         }
         Level::Outside => {
-            return Err(Report::new(StorageError::Path)
-                .attach(Prefix(path.clone()))
-                .attach(RawKey(stored.as_str().to_owned()))
-                .attach("the key is not under the map it was scanned from"));
+            return Err(LoadMap::KeyIsNotAnEntry {
+                under: path.clone(),
+                stored: Arc::from(stored.as_str()),
+                said: Arc::from("the key is not under the map it was scanned from"),
+            });
         }
     };
 
-    let key = K::from_str(name).map_err(|_| {
-        Report::new(StorageError::Codec)
-            .attach(Prefix(path.clone()))
-            .attach(Entry(name.to_owned()))
-            .attach(format!("key type: {}", std::any::type_name::<K>()))
+    let key = K::from_str(name).map_err(|_| LoadMap::KeyWillNotRead {
+        under: path.clone(),
+        entry: Arc::from(name),
+        wanted: std::any::type_name::<K>(),
     })?;
 
+    let entry = path.join(&StorePath::segment(name));
     let value = store
         .decode::<V>(bytes)
+        .map_err(Report::from)
         .attach_prefix(path)
-        .attach_entry(name)?;
+        .attach_entry(name)
+        .map_err(|why| LoadMap::from_store(&entry, why))?;
 
     Ok(Some((key, value)))
 }
@@ -407,7 +430,7 @@ pub fn reactive_map_with_path_only<K, V>(
     path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> Result<ReactiveMap<K, V>, OpenStruct>
+) -> LoadMapResult<ReactiveMap<K, V>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,

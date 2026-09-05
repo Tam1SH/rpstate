@@ -2,7 +2,6 @@ use amethystate::Store;
 use amethystate::migration::fields::FieldDescriptor;
 use amethystate::migration::set::MigrationSet;
 use amethystate::migration::{MigrationError, MigrationPlan};
-use amethystate::store::IntoStorageReport;
 use amethystate::store::StorageError;
 use amethystate::store::SubscriptionKind;
 use amethystate::store::config::StoreConfig;
@@ -173,7 +172,7 @@ fn test_component_atomic_rollback() {
         .add(
             "ui",
             MigrationPlan::new().step(1, "fail", |_| {
-                Err(MigrationError::Custom("crash".into()).into_report())
+                Err(MigrationError::Custom("crash".into()).into())
             }),
             EMPTY_FIELDS,
             &["net"],

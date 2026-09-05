@@ -1,5 +1,5 @@
 use crate::MigrationContext;
-use crate::store::{StaticPath, StorageResult, StorePath};
+use crate::store::{StaticPath, StorePath};
 
 /// What a declared path is, as far as the store is concerned.
 ///
@@ -237,7 +237,7 @@ pub trait AmeStateFields: Sized {
 
     const MIGRATION_DEPS: &'static [&'static str];
 
-    fn load_struct(ctx: &mut MigrationContext) -> StorageResult<Self>;
+    fn load_struct(ctx: &mut MigrationContext) -> crate::migration::StepResult<Self>;
 
-    fn save_struct(&self, ctx: &mut MigrationContext) -> StorageResult<()>;
+    fn save_struct(&self, ctx: &mut MigrationContext) -> crate::migration::StepResult<()>;
 }

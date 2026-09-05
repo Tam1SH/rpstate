@@ -13,7 +13,9 @@
 use amethystate::Field;
 use amethystate::store::StoreBackend;
 use amethystate::store::builder::{StoreBuilder, default_backend};
-use amethystate::store::{OpenStruct, ReadValue, StorageError, reactive_map_with_path_only};
+use amethystate::store::{
+    LoadMap, OpenStruct, ReadValue, StorageError, reactive_map_with_path_only,
+};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use error_stack::Report;
@@ -39,6 +41,14 @@ fn store(name: &str) -> (TempPath, amethystate::Store) {
 fn from_the_store(why: OpenStruct) -> Report<StorageError> {
     match why {
         OpenStruct::Store(report) => report,
+        other => panic!("the store was expected to be at fault: {other}"),
+    }
+}
+
+/// The same, for a map that would not load.
+fn from_the_map(why: LoadMap) -> Report<StorageError> {
+    match why {
+        LoadMap::Store(report) | LoadMap::EntryWillNotRead { why: report, .. } => report,
         other => panic!("the store was expected to be at fault: {other}"),
     }
 }
@@ -114,7 +124,7 @@ fn a_map_entry_that_will_not_read() {
 
     insta::assert_snapshot!(
         per_engine(default_backend(), "map_entry_wrong_type"),
-        shape(&from_the_store(err))
+        shape(&from_the_map(err))
     );
 }
 
@@ -131,7 +141,7 @@ fn a_map_default_with_an_empty_key() {
     )
     .unwrap_err();
 
-    insta::assert_snapshot!("map_empty_default_key", shape(&from_the_store(err)));
+    insta::assert_snapshot!("map_empty_default_key", shape(&from_the_map(err)));
 }
 
 /// A key that cannot be a level. The map is not at fault and neither is the

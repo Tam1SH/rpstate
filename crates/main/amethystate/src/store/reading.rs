@@ -5,6 +5,7 @@ use amethystate_core::failure::one_line;
 use amethystate_core::path::{StorePath, StorePathError};
 use error_stack::Report;
 use std::fmt;
+use std::sync::Arc;
 
 /// What stopped a value from being read back.
 #[derive(Debug)]
@@ -198,3 +199,183 @@ impl From<ScanKeys> for Report<StorageError> {
 
 pub type ReadResult<T> = Result<T, ReadValue>;
 pub type ScanResult<T> = Result<T, ScanKeys>;
+
+/// What stopped a map from being read back whole.
+///
+/// Its own set rather than [`OpenStruct`](crate::store::OpenStruct): a map is
+/// opened over what is already under it, so it meets two failures nothing else
+/// can - a stored key that is not one of its entries, and an entry whose name
+/// will not read as its key type.
+#[derive(Debug)]
+pub enum LoadMap {
+    /// The levels handed in do not make a path.
+    NotAPath(StorePathError),
+
+    /// Another declaration already owns that place.
+    Claimed(Box<crate::store::owners::Taken>),
+
+    /// A key under the map is not one of its entries.
+    ///
+    /// A map owns the level below it and nothing further, so a key deeper than
+    /// that belongs to whatever claimed that level. `stored` is the key as it
+    /// sits on disk, which is the only state it is in when the reason for the
+    /// failure is where it sits.
+    KeyIsNotAnEntry {
+        under: StorePath,
+        stored: Arc<str>,
+        said: Arc<str>,
+    },
+
+    /// An entry's name will not read back as the map's key type.
+    KeyWillNotRead {
+        under: StorePath,
+        entry: Arc<str>,
+        wanted: &'static str,
+    },
+
+    /// An entry's value will not read back as the map's value type.
+    EntryWillNotRead {
+        at: StorePath,
+        why: Report<StorageError>,
+    },
+
+    /// The store has let go of its file.
+    Closed { under: StorePath },
+
+    /// The disk, in every sense.
+    Store(Report<StorageError>),
+}
+
+impl LoadMap {
+    /// What the store said, told apart where a caller would act on it
+    /// differently.
+    pub fn from_store(at: &StorePath, why: Report<StorageError>) -> Self {
+        if *why.current_context() == StorageError::Closed {
+            return Self::Closed { under: at.clone() };
+        }
+
+        match crate::store::rules::will_not_read(&why) {
+            true => Self::EntryWillNotRead {
+                at: at.clone(),
+                why,
+            },
+            false => Self::Store(why),
+        }
+    }
+}
+
+impl fmt::Display for LoadMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotAPath(why) => write!(f, "the map was given no path to sit at: {why}"),
+            Self::Claimed(taken) => write!(f, "{taken}"),
+            Self::KeyIsNotAnEntry {
+                under,
+                stored,
+                said,
+            } => write!(f, "`{stored}` is not an entry of {under}: {said}"),
+            Self::KeyWillNotRead {
+                under,
+                entry,
+                wanted,
+            } => write!(f, "`{entry}` under {under} will not read as a {wanted}"),
+            Self::EntryWillNotRead { at, why } => {
+                write!(f, "the entry at {at} will not read back: {}", one_line(why))
+            }
+            Self::Closed { under } => {
+                write!(f, "the store was closed, so {under} was not read")
+            }
+            Self::Store(why) => write!(f, "{}", why.current_context()),
+        }
+    }
+}
+
+impl std::error::Error for LoadMap {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotAPath(why) => Some(why),
+            Self::Store(why) | Self::EntryWillNotRead { why, .. } => Some(why.current_context()),
+            Self::Claimed(_)
+            | Self::KeyIsNotAnEntry { .. }
+            | Self::KeyWillNotRead { .. }
+            | Self::Closed { .. } => None,
+        }
+    }
+}
+
+impl From<StorePathError> for LoadMap {
+    fn from(why: StorePathError) -> Self {
+        Self::NotAPath(why)
+    }
+}
+
+impl From<Report<StorageError>> for LoadMap {
+    fn from(why: Report<StorageError>) -> Self {
+        Self::Store(why)
+    }
+}
+
+impl From<Box<crate::store::owners::Taken>> for LoadMap {
+    fn from(taken: Box<crate::store::owners::Taken>) -> Self {
+        Self::Claimed(taken)
+    }
+}
+
+/// A write that would not land while the map was being built - seeding its
+/// declared defaults is the one that reaches here.
+impl From<amethystate_core::primitives::error::WriteValue> for LoadMap {
+    fn from(why: amethystate_core::primitives::error::WriteValue) -> Self {
+        Self::Store(why.into())
+    }
+}
+
+impl From<LoadMap> for Report<StorageError> {
+    fn from(why: LoadMap) -> Self {
+        match why {
+            LoadMap::Store(report) | LoadMap::EntryWillNotRead { why: report, .. } => report,
+            LoadMap::NotAPath(why) => Report::new(why).change_context(StorageError::Path),
+            LoadMap::Claimed(taken) => Report::new(StorageError::Claimed)
+                .attach(crate::store::owners::Claimed {
+                    path: taken.held_at,
+                    by: taken.held_by,
+                })
+                .attach(crate::store::owners::Claimed {
+                    path: taken.at,
+                    by: taken.wanted_by,
+                }),
+            LoadMap::KeyIsNotAnEntry {
+                under,
+                stored,
+                said,
+            } => Report::new(StorageError::Path)
+                .attach(amethystate_core::facts::Prefix(under))
+                .attach(amethystate_core::facts::RawKey(stored.to_string()))
+                .attach(said.to_string()),
+            LoadMap::KeyWillNotRead {
+                under,
+                entry,
+                wanted,
+            } => Report::new(StorageError::Codec)
+                .attach(amethystate_core::facts::Prefix(under))
+                .attach(amethystate_core::facts::Entry(entry.to_string()))
+                .attach(format!("key type: {wanted}")),
+            LoadMap::Closed { under } => {
+                Report::new(StorageError::Closed).attach(amethystate_core::facts::Prefix(under))
+            }
+        }
+    }
+}
+
+/// A map that would not load stopped a struct from opening.
+impl From<LoadMap> for crate::store::OpenStruct {
+    fn from(why: LoadMap) -> Self {
+        match why {
+            LoadMap::NotAPath(why) => Self::NotAPath(why),
+            LoadMap::Claimed(taken) => Self::Claimed(taken),
+            LoadMap::EntryWillNotRead { at, why } => Self::WillNotRead { at, why },
+            other => Self::Store(other.into()),
+        }
+    }
+}
+
+pub type LoadMapResult<T> = Result<T, LoadMap>;

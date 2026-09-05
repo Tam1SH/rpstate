@@ -1,7 +1,7 @@
 use amethystate::errors::StorageError;
 use amethystate::errors::facts::{self, Entry, Key, Prefix};
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{OpenStruct, StorageResult, WriteValue};
+use amethystate::store::{LoadMap, OpenStruct, StorageResult, WriteValue};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use error_stack::Report;
@@ -11,10 +11,10 @@ use std::fmt;
 mod common;
 
 //@show getting at the report a set carries
-fn what_the_store_said(why: OpenStruct) -> StorageResult<()> {
+fn what_the_store_said(why: LoadMap) -> StorageResult<()> {
     match why {
-        OpenStruct::Store(report) => Err(report),
-        other => panic!("the store was expected to be at fault: {other}"),
+        LoadMap::EntryWillNotRead { why, .. } => Err(why),
+        other => panic!("an entry was expected to be at fault: {other}"),
     }
 }
 //@show-end
@@ -123,10 +123,10 @@ fn the_top_of_a_report_names_the_operation(backend: Backend) -> anyhow::Result<(
 #[backends(all)]
 fn a_report_carries_the_entry_it_failed_on(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_entry")?;
-    store.set(["ports", "http"], &1u64)?;
+    store.set(["ports", "http"], &"text".to_string())?;
 
     //@show reaching the entry that failed
-    let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let refused = store.kv().map::<String, u64>("ports").unwrap_err();
     let report = what_the_store_said(refused).unwrap_err();
 
     let entries: Vec<&Entry> = facts::all::<Entry, _>(&report).collect();
@@ -142,10 +142,10 @@ fn a_report_carries_the_entry_it_failed_on(backend: Backend) -> anyhow::Result<(
 #[backends(all)]
 fn a_fact_that_is_not_there_reads_as_nothing(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_absent")?;
-    store.set(["ports", "http"], &1u64)?;
+    store.set(["ports", "http"], &"text".to_string())?;
 
     //@show asking for a fact the report does not carry
-    let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let refused = store.kv().map::<String, u64>("ports").unwrap_err();
     let report = what_the_store_said(refused).unwrap_err();
 
     let key = facts::all::<Key, _>(&report).next();
@@ -159,9 +159,9 @@ fn a_fact_that_is_not_there_reads_as_nothing(backend: Backend) -> anyhow::Result
 #[backends(all)]
 fn the_whole_chain_is_in_the_debug_form(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_chain")?;
-    store.set(["ports", "http"], &1u64)?;
+    store.set(["ports", "http"], &"text".to_string())?;
 
-    let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let refused = store.kv().map::<String, u64>("ports").unwrap_err();
     let report = what_the_store_said(refused).unwrap_err();
 
     let sentence = report.to_string();
@@ -199,9 +199,9 @@ fn a_variant_that_classified_a_report_still_holds_it(backend: Backend) -> anyhow
 #[backends(all)]
 fn into_error_keeps_what_the_report_carried(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_into")?;
-    store.set(["ports", "http"], &1u64)?;
+    store.set(["ports", "http"], &"text".to_string())?;
 
-    let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let refused = store.kv().map::<String, u64>("ports").unwrap_err();
     let report = what_the_store_said(refused).unwrap_err();
 
     //@show turning a report into a std error
@@ -222,9 +222,13 @@ fn what_different_refusals_look_like(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_shapes")?;
 
     //@show an entry that will not decode
-    store.set(["ports", "http"], &1u64)?;
+    store.set(["ports", "http"], &"text".to_string())?;
 
-    let undecodable = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let undecodable = store.kv().map::<String, u64>("ports").unwrap_err();
+    //@show-end
+
+    //@show an entry whose name is not the map's key type
+    let wrong_key = store.kv().map::<u16, String>("ports").unwrap_err();
     //@show-end
 
     //@show a name that cannot be a level
@@ -242,7 +246,7 @@ fn what_different_refusals_look_like(backend: Backend) -> anyhow::Result<()> {
     let too_deep = shallow.set(["a", "b", "c", "d", "e"], &1u32).unwrap_err();
     //@show-end
 
-    let OpenStruct::Store(disk) = &undecodable else {
+    let LoadMap::EntryWillNotRead { why: disk, .. } = &undecodable else {
         panic!("{undecodable}")
     };
     let WriteValue::TooDeep { why: budget, .. } = &too_deep else {
@@ -255,7 +259,14 @@ fn what_different_refusals_look_like(backend: Backend) -> anyhow::Result<()> {
             "an entry that will not decode",
             &refusal(&undecodable, Some(disk)),
         ),
-        ("a name that cannot be a level", &refusal(&empty_level, None)),
+        (
+            "an entry whose name is not the map's key type",
+            &refusal(&wrong_key, None),
+        ),
+        (
+            "a name that cannot be a level",
+            &refusal(&empty_level, None),
+        ),
         (
             "a path past the cap it was given",
             &refusal(&too_deep, Some(budget)),
