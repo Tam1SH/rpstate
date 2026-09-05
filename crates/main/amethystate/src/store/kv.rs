@@ -1,16 +1,18 @@
 use crate::migration::fields::{FieldDescriptor, Role};
-use crate::observability::SchemaEntry;
-use crate::observability::register_instance;
-use crate::reactive::error::{WriteError, WriteResult};
+use crate::schema::SchemaEntry;
 use crate::store::Durable;
 use crate::store::facts::Facts;
+use crate::store::instances::register_instance;
+use crate::store::owners::Taken;
+use crate::store::writing::{KvResult, KvWrite};
 use crate::store::{
-    InitState, StorageResult, StoreBackend, field_with_path, reactive_map_with_path_only,
+    InitState, OpenStruct, StorageResult, StoreBackend, field_with_path,
+    reactive_map_with_path_only,
 };
 use crate::{ReactiveCell, ReactiveMap, Store};
 use crate::{ReactiveMapKey, ReactiveMapValue};
-use amethystate_core::path::StorePath;
-use error_stack::{Report, ResultExt};
+use amethystate_core::path::{StorePath, StorePathError};
+use error_stack::Report;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -79,11 +81,15 @@ impl Kv {
     /// assert_eq!(ui.namespace("panels").get::<bool>("left").unwrap(), Some(true));
     ///
     /// // A separator in the namespace's name is part of the name, so this is
-    /// // one level called `a.b` rather than a level `b` under a level `a`.
+    /// // one level called `a.b`.
     /// let odd = store.kv().namespace("a.b");
     /// odd.set("x", &1u32).unwrap();
     /// assert_eq!(odd.get::<u32>("x").unwrap(), Some(1));
-    /// assert_eq!(store.kv().namespace("a").get::<u32>("x").unwrap(), None);
+    ///
+    /// // Spelled as two levels it is somewhere else entirely, and nothing
+    /// // was ever written there.
+    /// let nested = store.kv().namespace("a").namespace("b");
+    /// assert_eq!(nested.get::<u32>("x").unwrap(), None);
     /// ```
     #[track_caller]
     pub fn namespace(&self, name: &str) -> Self {
@@ -92,11 +98,11 @@ impl Kv {
     }
 
     /// [`Kv::namespace`] for a name that can turn out to be empty.
-    pub fn try_namespace(&self, name: &str) -> WriteResult<Self> {
+    pub fn try_namespace(&self, name: &str) -> Result<Self, StorePathError> {
         Ok(Self {
             store: self.store.clone(),
             instance_id: self.instance_id,
-            prefix: Some(self.resolve(name)?),
+            prefix: Some(self.resolve_path(name)?),
         })
     }
 
@@ -105,16 +111,11 @@ impl Kv {
         self.prefix.as_ref()
     }
 
-    fn resolve(&self, name: &str) -> WriteResult<StorePath> {
+    fn resolve_path(&self, name: &str) -> Result<StorePath, StorePathError> {
         match &self.prefix {
             Some(prefix) => prefix.try_push(name),
             None => StorePath::try_segment(name),
         }
-        .change_context(WriteError::Path)
-        .attach_with(|| match &self.prefix {
-            Some(prefix) => format!("namespace: {prefix}, name: {name}"),
-            None => format!("name: {name}"),
-        })
     }
 
     /// Reads a value, or `None` if the path holds nothing.
@@ -133,12 +134,13 @@ impl Kv {
     /// kv.set("width", &1280u32).unwrap();
     /// assert_eq!(kv.get::<u32>("width").unwrap(), Some(1280));
     /// ```
-    pub fn get<T: DeserializeOwned>(&self, name: &str) -> WriteResult<Option<T>> {
-        let path = self.resolve(name)?;
+    pub fn get<T: DeserializeOwned>(&self, name: &str) -> KvResult<Option<T>> {
+        let path = self.resolve_path(name)?;
         self.store
             .get(&path)
-            .change_context(WriteError::Storage)
+            .map_err(Report::from)
             .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))
     }
 
     /// The same writes, each returning only once the change is on disk.
@@ -169,13 +171,14 @@ impl Kv {
     /// assert_eq!(kv.get::<String>("ui.theme").unwrap(), Some("solarized".into()));
     /// assert_eq!(kv.namespace("ui").get::<String>("theme").unwrap(), None);
     /// ```
-    pub fn set<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
-        let path = self.resolve(name)?;
-        self.guard(&path)?;
+    pub fn set<T: Serialize>(&self, name: &str, value: &T) -> KvResult<()> {
+        let path = self.resolve_path(name)?;
+        self.refuse_raw(&path)?;
         self.store
             .set_with_source(&path, value, Some(self.instance_id))
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+            .map_err(Report::from)
+            .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))?;
         Ok(())
     }
 
@@ -197,13 +200,13 @@ impl Kv {
     /// // Again, on a name that now holds nothing.
     /// kv.remove("theme").unwrap();
     /// ```
-    pub fn remove(&self, name: &str) -> WriteResult<()> {
-        let path = self.resolve(name)?;
-        self.guard(&path)?;
+    pub fn remove(&self, name: &str) -> KvResult<()> {
+        let path = self.resolve_path(name)?;
+        self.refuse_raw(&path)?;
         self.store
             .delete_with_source(&path, Some(self.instance_id))
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+            .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))?;
         Ok(())
     }
 
@@ -229,7 +232,7 @@ impl Kv {
     /// );
     /// ```
     #[doc = include_str!("scan_contract.md")]
-    pub fn keys(&self) -> StorageResult<Vec<StorePath>> {
+    pub fn keys(&self) -> crate::store::ScanResult<Vec<StorePath>> {
         match &self.prefix {
             Some(prefix) => self.store.scan_keys(prefix),
             None => self.store.scan_keys(StorePath::root()),
@@ -265,16 +268,14 @@ impl Kv {
     /// // a string where a number was asked for.
     /// assert!(kv.cell("theme", 0u32).is_err());
     /// ```
-    pub fn cell<T>(&self, name: &str, default: T) -> WriteResult<ReactiveCell<T>>
+    pub fn cell<T>(&self, name: &str, default: T) -> Result<ReactiveCell<T>, OpenStruct>
     where
         T: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
     {
-        let path = self.resolve(name)?;
-        self.guard(&path)?;
+        let path = self.resolve_path(name)?;
+        self.refuse_open(&path)?;
 
-        let field = field_with_path::<T>(&self.store, path.clone(), default, self.instance_id)
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+        let field = field_with_path::<T>(&self.store, path, default, self.instance_id)?;
 
         let cell = field.cell();
         Ok(cell.owning(Arc::new(field)))
@@ -298,17 +299,15 @@ impl Kv {
     /// let columns = kv.namespace("columns");
     /// assert_eq!(columns.get::<u64>("cpu").unwrap(), Some(120));
     /// ```
-    pub fn map<K, V>(&self, name: &str) -> WriteResult<ReactiveMap<K, V>>
+    pub fn map<K, V>(&self, name: &str) -> Result<ReactiveMap<K, V>, OpenStruct>
     where
         K: ReactiveMapKey,
         V: ReactiveMapValue,
     {
-        let path = self.resolve(name)?;
-        self.guard(&path)?;
+        let path = self.resolve_path(name)?;
+        self.refuse_open(&path)?;
 
-        reactive_map_with_path_only(&self.store, path.clone(), HashMap::new(), self.instance_id)
-            .change_context(WriteError::Storage)
-            .attach_prefix(&path)
+        reactive_map_with_path_only(&self.store, path, HashMap::new(), self.instance_id)
     }
 
     /// Refuses a path a declared struct owns.
@@ -321,7 +320,7 @@ impl Kv {
     /// prefix it sits under stays open, so an extension, a theme or a person
     /// editing the file can put their own keys beside the declared ones:
     /// `app.width` is owned, and `app.myplugin.enabled` is nobody's.
-    fn guard(&self, path: &StorePath) -> WriteResult<()> {
+    fn guard(&self, path: &StorePath) -> Result<(), (StorePath, &'static str)> {
         let Some((found, struct_name)) = schema_collision(path) else {
             return Ok(());
         };
@@ -330,11 +329,27 @@ impl Kv {
             Collision::Owned(declared) | Collision::Holds(declared) => declared,
         };
 
-        Err(Report::new(WriteError::SchemaOwned {
-            path: path.as_str().to_string(),
-            declared: declared.as_str().to_string(),
+        Err((declared, struct_name))
+    }
+
+    fn refuse_raw(&self, at: &StorePath) -> Result<(), KvWrite> {
+        self.guard(at)
+            .map_err(|(declared_at, by)| KvWrite::Declared {
+                at: at.clone(),
+                declared_at,
+                by,
+            })
+    }
+
+    fn refuse_open(&self, at: &StorePath) -> Result<(), OpenStruct> {
+        self.guard(at).map_err(|(held_at, held_by)| {
+            OpenStruct::Claimed(Box::new(Taken {
+                at: at.clone(),
+                wanted_by: "a kv handle",
+                held_at,
+                held_by,
+            }))
         })
-        .attach(format!("declared by: {struct_name}")))
     }
 
     /// Drops everything under this handle that no schema declared.
@@ -562,14 +577,15 @@ impl Durable<'_, Kv> {
     /// Writes a value at `path`, creating it or replacing what was there.
     ///
     /// Returns only once it is on disk rather than buffered.
-    pub fn set<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
+    pub fn set<T: Serialize>(&self, name: &str, value: &T) -> KvResult<()> {
         self.0.set(name, value)?;
-        let path = self.0.resolve(name)?;
+        let path = self.0.resolve_path(name)?;
         self.0
             .store
             .flush_prefix(&path)
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+            .map_err(Report::from)
+            .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))?;
         Ok(())
     }
 
@@ -577,29 +593,30 @@ impl Durable<'_, Kv> {
     ///
     /// Resolves once the change is on disk. Like every future, this does
     /// nothing until awaited - the write included.
-    pub async fn set_async<T: Serialize>(&self, name: &str, value: &T) -> WriteResult<()> {
+    pub async fn set_async<T: Serialize>(&self, name: &str, value: &T) -> KvResult<()> {
         self.0.set(name, value)?;
-        let path = self.0.resolve(name)?;
+        let path = self.0.resolve_path(name)?;
         self.0
             .store
             .flush_async()
             .await
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+            .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))?;
         Ok(())
     }
 
     /// Drops whatever is at `path`.
     ///
     /// Returns only once the removal is on disk rather than buffered.
-    pub fn remove(&self, name: &str) -> WriteResult<()> {
+    pub fn remove(&self, name: &str) -> KvResult<()> {
         self.0.remove(name)?;
-        let path = self.0.resolve(name)?;
+        let path = self.0.resolve_path(name)?;
         self.0
             .store
             .flush_prefix(&path)
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+            .map_err(Report::from)
+            .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))?;
         Ok(())
     }
 
@@ -607,15 +624,15 @@ impl Durable<'_, Kv> {
     ///
     /// Resolves once the change is on disk. Like every future, this does
     /// nothing until awaited - the removal included.
-    pub async fn remove_async(&self, name: &str) -> WriteResult<()> {
+    pub async fn remove_async(&self, name: &str) -> KvResult<()> {
         self.0.remove(name)?;
-        let path = self.0.resolve(name)?;
+        let path = self.0.resolve_path(name)?;
         self.0
             .store
             .flush_async()
             .await
-            .change_context(WriteError::Storage)
-            .attach_key(&path)?;
+            .attach_key(&path)
+            .map_err(|why| KvWrite::from_store(&path, why))?;
         Ok(())
     }
 }

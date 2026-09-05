@@ -1,14 +1,15 @@
 use super::cell::ReactiveCell;
 use super::error::{FieldError, ReactiveFieldResult};
+use crate::observability::{Disagreement, Reason};
 use crate::reactive::cell::CellCommit;
 use crate::reactive::watch::{Watch, Watchable};
-use crate::store::facts::{Facts, Key, Refused};
+use crate::store::facts::Facts;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Commit, Durable, StoreBackend, StoreSubscription, StoredAs};
 use amethystate_core::Signal;
 use amethystate_core::path::{IntoStorePath, StorePath};
 use amethystate_core::{Change, FieldCore, InterceptDisposer, SignalSubscription};
-use error_stack::{Report, ResultExt};
+use error_stack::Report;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -51,29 +52,7 @@ pub(crate) struct FieldInner<TValue> {
 /// left behind by a migration, or written by a codec that accepted something
 /// it cannot read back. Cleared by the next change that does decode, so a field
 /// says so exactly as long as it is true.
-pub(crate) type Unreadable = Arc<std::sync::Mutex<Option<Unread>>>;
-
-/// Which of the two ways a field's stored value went unread.
-///
-/// [`Field::try_get`] hands the reason on as a fact, and the two want
-/// different ones: a check's verdict is about a value that decoded perfectly,
-/// so it travels as [`Refused`], and bytes that would not decode carry the
-/// codec's own sentence.
-#[derive(Debug, Clone)]
-pub(crate) enum Unread {
-    /// A declared check turned the value down, in the check's own words.
-    Refused(Arc<str>),
-
-    /// The bytes would not read as the field's type.
-    Undecodable(Arc<str>),
-
-    /// The field never got to write its default, because the store already
-    /// held something at its path that seeding would have destroyed.
-    ///
-    /// So the field reports what it was declared with and the store holds
-    /// something else, from the first moment it exists.
-    Occupied(Arc<str>),
-}
+pub(crate) type Unreadable = Arc<std::sync::Mutex<Option<Reason>>>;
 
 pub struct Field<TValue> {
     pub(crate) inner: Arc<FieldInner<TValue>>,
@@ -114,7 +93,7 @@ impl<TValue> Field<TValue> {
     #[doc(hidden)]
     pub fn __ame_refused(&self, why: &str) {
         if let Ok(mut held) = self.inner.unreadable.lock() {
-            *held = Some(Unread::Refused(Arc::from(why)));
+            *held = Some(Reason::Refused(Arc::from(why)));
         }
     }
 }
@@ -172,8 +151,7 @@ where
         self.inner
             .core
             .run_interceptors(self.inner.path.clone(), value, Some(self.inner.instance_id))
-            .map_err(FieldError::intercepted)
-            .attach_key(&self.inner.path)
+            .map_err(|said| FieldError::intercepted(&self.inner.path, said))
     }
 
     /// [`Field::fork`] with the instance id chosen rather than generated.
@@ -241,65 +219,65 @@ where
     /// as it is true. Nothing here fails at the moment of asking: what failed
     /// happened earlier, and this reports it.
     ///
-    /// The report says which of the three it is without being read as a
-    /// sentence. All of them carry [`Key`]; a check's verdict adds
-    /// [`Refused`], and a store that has let go of its file answers
-    /// [`WriteError::Closed`](crate::errors::WriteError::Closed).
+    /// The `Err` says which of the four it is by its variant rather than by a
+    /// sentence somebody has to read.
+    ///
+    /// ```
+    /// # use amethystate::StoreBuilder;
+    /// # use amethystate::observability::Reason;
+    /// # use amethystate::store::field_with_path;
+    /// # let path = amethystate_core::test_utils::TempPath::new("doc");
+    /// # let store = StoreBuilder::new(&*path).build().unwrap();
+    /// # let port = field_with_path::<u16>(
+    /// #     &store, ["net", "port"], 8080, amethystate::uuid::Uuid::new_v4(),
+    /// # ).unwrap();
+    /// let held = match port.try_get() {
+    ///     Ok(port) => port,
+    ///     Err(no) => {
+    ///         match no.reason {
+    ///             Reason::WillNotRead(said) => eprintln!("{} holds {said}", no.at),
+    ///             Reason::Refused(said) => eprintln!("{} was turned down: {said}", no.at),
+    ///             Reason::Occupied(said) => eprintln!("{} was taken: {said}", no.at),
+    ///             _ => eprintln!("{} is not what the store has", no.at),
+    ///         }
+    ///         port.get()
+    ///     }
+    /// };
+    /// assert_eq!(held, 8080);
+    /// ```
+    pub fn try_get(&self) -> Result<TValue, Disagreement> {
+        if self.store_has_closed() {
+            return Err(Disagreement {
+                at: self.inner.path.clone(),
+                reason: Reason::Closed,
+            });
+        }
+
+        match self.__ame_disagreement() {
+            None => Ok(self.get()),
+            Some(no) => Err(no),
+        }
+    }
+
     /// What this field and the store disagree about, if anything.
     ///
     /// The same state [`try_get`](Field::try_get) answers with, said as a fact
     /// rather than as an error - for a walk over every field that wants a list
-    /// rather than a decision.
+    /// rather than a decision. A closed store is not one of them: it is every
+    /// field at once and says nothing about any of them.
     #[doc(hidden)]
-    pub fn __ame_disagreement(&self) -> Option<crate::observability::Disagreement> {
-        use crate::observability::{Disagreement, Reason};
-
-        let held = self
+    pub fn __ame_disagreement(&self) -> Option<Disagreement> {
+        let reason = self
             .inner
             .unreadable
             .lock()
             .ok()
             .and_then(|it| it.clone())?;
 
-        let reason = match held {
-            Unread::Refused(why) => Reason::Refused(why),
-            Unread::Undecodable(why) => Reason::WillNotRead(why),
-            Unread::Occupied(why) => Reason::Occupied(why),
-        };
-
         Some(Disagreement {
             at: self.inner.path.clone(),
             reason,
         })
-    }
-
-    pub fn try_get(&self) -> ReactiveFieldResult<TValue> {
-        if self.store_has_closed() {
-            return Err(Report::new(FieldError::Closed).attach(Key(self.inner.path.clone())));
-        }
-
-        let unreadable = self
-            .inner
-            .unreadable
-            .lock()
-            .ok()
-            .and_then(|held| held.clone());
-
-        match unreadable {
-            None => Ok(self.get()),
-            Some(Unread::Refused(why)) => Err(Report::new(FieldError::Storage)
-                .attach(Key(self.inner.path.clone()))
-                .attach(Refused(why.to_string()))),
-            Some(Unread::Undecodable(why)) => Err(Report::new(FieldError::Storage)
-                .attach(Key(self.inner.path.clone()))
-                .attach(format!("the stored value could not be read: {why}"))),
-            Some(Unread::Occupied(what)) => Err(Report::new(FieldError::Storage)
-                .attach(Key(self.inner.path.clone()))
-                .attach(format!(
-                    "this field holds the default it was declared with and the store holds \
-                     something else: its default was never written, because {what}"
-                ))),
-        }
     }
 
     fn store_has_closed(&self) -> bool {
@@ -482,17 +460,13 @@ where
 
             CellCommit {
                 now: Arc::new(move || {
-                    let inner = flush
-                        .upgrade()
-                        .ok_or_else(|| Report::new(FieldError::SourceGone))?;
-                    let sub = inner
-                        .store_sub
-                        .as_ref()
-                        .ok_or_else(|| Report::new(FieldError::SourceGone))?;
+                    let inner = flush.upgrade().ok_or(FieldError::SourceGone)?;
+                    let sub = inner.store_sub.as_ref().ok_or(FieldError::SourceGone)?;
                     sub.store()
                         .flush_prefix(&inner.path)
-                        .change_context(FieldError::Storage)
+                        .map_err(Report::from)
                         .attach_key(&inner.path)
+                        .map_err(|why| FieldError::from_store(&inner.path, why))
                 }),
                 start: Arc::new(move || match start.upgrade() {
                     Some(inner) => match inner.store_sub.as_ref() {
@@ -573,7 +547,7 @@ where
         tracing::trace!(
             target: "amethystate",
             path = %self.inner.path,
-            source = crate::observability::resolve_instance_short(self.inner.instance_id).unwrap_or("external"),
+            source = crate::store::instances::resolve_instance_short(self.inner.instance_id).unwrap_or("external"),
             "field write",
         );
 
@@ -584,8 +558,8 @@ where
                 write(&change.new_value, &mut |erased| {
                     StoreBackend::set_erased(sub.store(), &self.inner.path, erased, change.source)
                 })
-                .change_context(FieldError::Storage)
-                .attach_key(&self.inner.path)?;
+                .attach_key(&self.inner.path)
+                .map_err(|why| FieldError::from_store(&self.inner.path, why))?;
             } else {
                 let backend = SyncBridge::new(sub.store().clone());
                 amethystate_core::field_set(
@@ -597,9 +571,7 @@ where
                 )?;
             }
         } else {
-            let change = self
-                .intercepted(value)
-                .attach("a volatile field: nothing was going to be stored either way")?;
+            let change = self.intercepted(value)?;
             self.inner
                 .core
                 .signal
@@ -903,8 +875,9 @@ where
         if let Some(sub) = &self.0.inner.store_sub {
             sub.store()
                 .flush_prefix(&self.0.inner.path)
-                .change_context(FieldError::Storage)
-                .attach_key(&self.0.inner.path)?;
+                .map_err(Report::from)
+                .attach_key(&self.0.inner.path)
+                .map_err(|why| FieldError::from_store(&self.0.inner.path, why))?;
         }
         Ok(())
     }
@@ -914,8 +887,8 @@ where
             sub.store()
                 .flush_async()
                 .await
-                .change_context(FieldError::Storage)
-                .attach_key(&self.0.inner.path)?;
+                .attach_key(&self.0.inner.path)
+                .map_err(|why| FieldError::from_store(&self.0.inner.path, why))?;
         }
         Ok(())
     }

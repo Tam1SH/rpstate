@@ -1,6 +1,5 @@
 ---
 source: crates/main/amethystate/tests/kv_guard_root.rs
-expression: shape(&err)
+expression: err.to_string()
 ---
-`width` is declared by a schema
-╰╴declared by: RootConfig
+width is declared by RootConfig

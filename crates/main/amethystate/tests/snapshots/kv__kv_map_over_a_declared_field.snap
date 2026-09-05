@@ -1,6 +1,5 @@
 ---
 source: crates/main/amethystate/tests/kv.rs
-expression: shape(&err)
+expression: said
 ---
-`typed` holds `typed.port`, which a schema declares
-╰╴declared by: Typed
+a kv handle wants typed, which Typed already holds through typed.port

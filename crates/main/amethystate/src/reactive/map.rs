@@ -1,14 +1,15 @@
 use crate::Store;
 use crate::reactive::watch::{Watch, Watchable};
 use crate::store::StoreSubscription;
-use crate::store::facts::{Facts, Prefix};
+use crate::store::facts::Facts;
 use crate::store::sync_backend::SyncBridge;
 use crate::store::{Durable, StoreBackend};
 use amethystate_core::path::StorePath;
+use amethystate_core::primitives::map_core::MapEntryPath;
 use amethystate_core::{
     Entries, InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription, Walk,
 };
-use error_stack::{Report, ResultExt};
+use error_stack::Report;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
@@ -451,8 +452,9 @@ where
             self.update(key, &new_val)?;
             Ok(Some(new_val))
         } else {
-            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(Prefix(self.inner.path.clone())))
+            Err(ReactiveMapError::Absent {
+                at: self.inner.path.entry(&key)?,
+            })
         }
     }
 
@@ -468,8 +470,9 @@ where
             f(&mut val);
             self.update(key, &val)
         } else {
-            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(Prefix(self.inner.path.clone())))
+            Err(ReactiveMapError::Absent {
+                at: self.inner.path.entry(&key)?,
+            })
         }
     }
 
@@ -511,8 +514,9 @@ where
         Q: Display + ?Sized,
     {
         let Some(owned) = self.inner.core.cache.owned_key(key) else {
-            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(Prefix(self.inner.path.clone())));
+            return Err(ReactiveMapError::Absent {
+                at: self.inner.path.entry(&key)?,
+            });
         };
 
         let backend = SyncBridge::new(self.inner.store.clone());
@@ -833,8 +837,9 @@ where
             .inner
             .store
             .flush_prefix(&self.0.inner.path)
-            .change_context(ReactiveMapError::Storage)
-            .attach_prefix(&self.0.inner.path)?;
+            .map_err(Report::from)
+            .attach_prefix(&self.0.inner.path)
+            .map_err(|why| ReactiveMapError::from_store(&self.0.inner.path, why))?;
         Ok(())
     }
 
@@ -844,8 +849,8 @@ where
             .store
             .flush_async()
             .await
-            .change_context(ReactiveMapError::Storage)
-            .attach_prefix(&self.0.inner.path)?;
+            .attach_prefix(&self.0.inner.path)
+            .map_err(|why| ReactiveMapError::from_store(&self.0.inner.path, why))?;
         Ok(())
     }
 }
@@ -993,10 +998,7 @@ mod tests {
         assert_eq!(map.get("a"), Some(20));
 
         let res = map.update("missing", &30);
-        assert!(matches!(
-            res.unwrap_err().current_context(),
-            ReactiveMapError::KeyNotFound(_)
-        ));
+        assert!(matches!(res.unwrap_err(), ReactiveMapError::Absent { .. }));
 
         map.insert("b".into(), &100).unwrap();
         let entries: Vec<_> = map.entries().collect();
@@ -1032,8 +1034,8 @@ mod tests {
 
         let res = map.insert("val".into(), &-1);
         assert!(matches!(
-            res.unwrap_err().current_context(),
-            ReactiveMapError::Intercepted
+            res.unwrap_err(),
+            ReactiveMapError::Intercepted { .. }
         ));
 
         store.save_now().unwrap();
@@ -1243,8 +1245,8 @@ mod tests {
         map.update("target", &50).unwrap();
         let res = map.update("target", &150);
         assert!(matches!(
-            res.unwrap_err().current_context(),
-            ReactiveMapError::Intercepted
+            res.unwrap_err(),
+            ReactiveMapError::Intercepted { .. }
         ));
 
         map.update("other", &150).unwrap();
@@ -1286,6 +1288,10 @@ mod tests {
             Uuid::new_v4(),
         )
         .unwrap_err();
+
+        let crate::store::OpenStruct::Store(err) = err else {
+            panic!("{err}")
+        };
 
         assert_eq!(
             err.current_context(),

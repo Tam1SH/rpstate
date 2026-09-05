@@ -1,8 +1,9 @@
 //! Walking a declared struct's fields at runtime.
 //!
-//! [`InspectorBackend`](crate::observability::InspectorBackend) asks the store
-//! what is on disk. This asks the other side: what the declaration says, and
-//! what the struct is holding right now.
+//! [`InspectorBackend`](crate::store::InspectorBackend) asks the store what is
+//! on disk, from outside the program that wrote it. This asks the other side,
+//! from inside: what the declaration says, and what the struct is holding right
+//! now.
 //!
 //! Nothing here is typed. A caller that knows the type reads the field; this is
 //! for the callers that do not - a screen that draws a row per setting, a dump
@@ -70,7 +71,13 @@ pub struct Disagreement {
     pub reason: Reason,
 }
 
+/// `non_exhaustive` for the same reason [`StorageError`] is: it is a list of
+/// what the store can be found disagreeing about, it grows, and it is read
+/// rather than dispatched on.
+///
+/// [`StorageError`]: crate::store::StorageError
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Reason {
     /// What is stored will not read back as the declared type.
     WillNotRead(std::sync::Arc<str>),
@@ -82,6 +89,10 @@ pub enum Reason {
     /// something at its path that seeding would have destroyed - so the two
     /// have disagreed from the first moment the field existed.
     Occupied(std::sync::Arc<str>),
+
+    /// The store has let go of its file, so what the field holds is the last
+    /// thing it heard rather than what is on disk.
+    Closed,
 }
 
 impl fmt::Display for Reason {
@@ -90,9 +101,19 @@ impl fmt::Display for Reason {
             Reason::WillNotRead(why) => write!(f, "will not read: {why}"),
             Reason::Refused(why) => write!(f, "refused: {why}"),
             Reason::Occupied(why) => write!(f, "already held something else: {why}"),
+            Reason::Closed => f.write_str("the store was closed, so this is the last it heard"),
         }
     }
 }
+
+impl fmt::Display for Disagreement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { at, reason } = self;
+        write!(f, "{at} {reason}")
+    }
+}
+
+impl std::error::Error for Disagreement {}
 
 /// A struct that can list its own fields.
 ///

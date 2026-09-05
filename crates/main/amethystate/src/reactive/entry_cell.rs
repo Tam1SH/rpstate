@@ -1,11 +1,11 @@
 use crate::reactive::cell::CellCommit;
 use crate::reactive::cell::ReactiveCell;
-use crate::reactive::error::WriteError;
+use crate::reactive::error::WriteValue;
 use crate::store::StoreBackend;
 use crate::store::facts::Facts;
 use crate::{ReactiveMap, ReactiveMapKey, ReactiveMapValue};
 use amethystate_core::{MapChange, Signal};
-use error_stack::{Report, ResultExt};
+use error_stack::Report;
 use std::sync::Arc;
 
 impl<K, V> ReactiveMap<K, V>
@@ -86,14 +86,13 @@ where
         let start = weak.clone();
         let commit = CellCommit {
             now: Arc::new(move || {
-                let inner = flush
-                    .upgrade()
-                    .ok_or_else(|| Report::new(WriteError::SourceGone))?;
+                let inner = flush.upgrade().ok_or(WriteValue::SourceGone)?;
                 inner
                     .store
                     .flush_prefix(&inner.path)
-                    .change_context(WriteError::Storage)
+                    .map_err(Report::from)
                     .attach_key(&inner.path)
+                    .map_err(|why| WriteValue::from_store(&inner.path, why))
             }),
             start: Arc::new(move || match start.upgrade() {
                 Some(inner) => inner.store.flush_async(),
@@ -105,11 +104,7 @@ where
         ReactiveCell::from_parts(
             cache,
             Arc::new(move |value: V| {
-                let inner = weak.upgrade().ok_or_else(|| {
-                    Report::new(WriteError::SourceGone)
-                        .attach(format!("entry: {write_key}"))
-                        .attach("writing through a cell whose map has been dropped")
-                })?;
+                let inner = weak.upgrade().ok_or(WriteValue::SourceGone)?;
                 let map = ReactiveMap::<K, V> { inner };
                 map.update(&write_key, &value)
             }),

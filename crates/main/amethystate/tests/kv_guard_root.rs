@@ -5,7 +5,6 @@ use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 mod common;
-use common::shape;
 
 #[amethystate(as_root)]
 pub struct RootConfig {
@@ -35,7 +34,7 @@ fn kv_refuses_a_path_owned_by_a_prefixed_struct(backend: Backend) {
         .set("width", &"oops".to_string())
         .unwrap_err();
 
-    insta::assert_snapshot!("kv_write_under_a_declared_prefix", shape(&err));
+    insta::assert_snapshot!("kv_write_under_a_declared_prefix", err.to_string());
 }
 
 /// A root struct's fields sit at bare paths, one level below nothing. Ownership
@@ -52,7 +51,7 @@ fn kv_refuses_a_path_owned_by_a_root_struct(backend: Backend) {
 
     let err = store.kv().set("width", &"oops".to_string()).unwrap_err();
 
-    insta::assert_snapshot!("kv_write_over_a_root_struct_field", shape(&err));
+    insta::assert_snapshot!("kv_write_over_a_root_struct_field", err.to_string());
 
     assert_eq!(cfg.width().get(), 1280);
 }

@@ -1,11 +1,10 @@
 use crate::AmeBackendAsync as AmeBackend;
-use crate::facts::{Facts, Prefix};
+use crate::facts::Facts;
+use crate::failure::StorageError;
 use crate::path::StorePath;
-use crate::primitives::error::WriteError;
-use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
+use crate::primitives::error::{ReactiveMapError, ReactiveMapResult, WriteValue};
 use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
 use crate::{MapChange, ReactiveMapCore, map_apply_remote_change};
-use error_stack::{Report, ResultExt};
 use uuid::Uuid;
 
 use serde::de::DeserializeOwned;
@@ -20,8 +19,8 @@ where
     backend
         .get::<V>(entry)
         .await
-        .change_context(WriteError::Storage)
         .attach_key(entry)
+        .map_err(|why| WriteValue::from_backend(entry, StorageError::Read, why))
 }
 
 pub async fn map_get_async<B, K, V>(
@@ -50,8 +49,8 @@ where
     let kvs = backend
         .scan_prefix(path)
         .await
-        .change_context(WriteError::Storage)
-        .attach_prefix(path)?;
+        .attach_prefix(path)
+        .map_err(|why| WriteValue::from_backend(path, StorageError::Scan, why))?;
     let mut results = Vec::new();
 
     for (full_path, raw) in kvs {
@@ -69,9 +68,9 @@ where
 
         let value = backend
             .decode::<V>(&raw)
-            .change_context(WriteError::Storage)
             .attach_prefix(path)
-            .attach_entry(&key_str)?;
+            .attach_entry(&key_str)
+            .map_err(|why| WriteValue::from_backend(&full_path, StorageError::Codec, why))?;
 
         results.push((key, value));
     }
@@ -95,10 +94,7 @@ where
     let full_path = path.entry(&key)?;
     let old_value = match read_entry::<B, V>(backend, &full_path).await? {
         Some(old_value) => old_value,
-        None => {
-            return Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(Prefix(path.clone())));
-        }
+        None => return Err(ReactiveMapError::Absent { at: full_path }),
     };
 
     let change = MapChange::Update {
@@ -209,13 +205,8 @@ where
     let context_path = subject.clone().unwrap_or_else(|| path.clone());
 
     let processed = core
-        .run_interceptors(context_path, change)
-        .map_err(ReactiveMapError::intercepted)
-        .attach_prefix(&path)
-        .attach_with(|| match &subject {
-            Some(entry) => format!("affects: {entry}"),
-            None => format!("affects: all of {path}"),
-        })?;
+        .run_interceptors(context_path.clone(), change)
+        .map_err(|said| ReactiveMapError::intercepted(&context_path, said))?;
 
     let source = processed.source();
 
@@ -230,23 +221,23 @@ where
             backend
                 .set_with_source(&entry, value, source)
                 .await
-                .change_context(WriteError::Storage)
-                .attach_key(&entry)?;
+                .attach_key(&entry)
+                .map_err(|why| WriteValue::from_backend(&entry, StorageError::Write, why))?;
         }
         MapChange::Remove { key, .. } => {
             let entry = path.entry(key)?;
             backend
                 .delete_with_source(&entry, source)
                 .await
-                .change_context(WriteError::Storage)
-                .attach_key(&entry)?;
+                .attach_key(&entry)
+                .map_err(|why| WriteValue::from_backend(&entry, StorageError::Delete, why))?;
         }
         MapChange::Clear { .. } => {
             backend
                 .delete_prefix(&path, source)
                 .await
-                .change_context(WriteError::Storage)
-                .attach_prefix(&path)?;
+                .attach_prefix(&path)
+                .map_err(|why| WriteValue::from_backend(&path, StorageError::Delete, why))?;
         }
     }
 

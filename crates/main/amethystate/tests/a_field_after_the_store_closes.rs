@@ -1,3 +1,4 @@
+use amethystate::observability::Reason;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{Field, amethystate};
 use amethystate_core::test_utils::TempPath;
@@ -50,7 +51,7 @@ fn survives_the_close(field: &Field<u8>, backend: Backend, declared: &str) {
         .try_get()
         .expect_err(&format!("{backend:?} {declared}: try_get kept quiet"));
     assert!(
-        format!("{refused:?}").contains("the store was closed"),
+        matches!(refused.reason, Reason::Closed),
         "{backend:?} {declared}: try_get said {refused:?}"
     );
 

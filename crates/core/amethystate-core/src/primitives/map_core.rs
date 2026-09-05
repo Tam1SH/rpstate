@@ -1,13 +1,11 @@
 use crate::SignalSubscription;
 use crate::change::MapChange;
-use crate::facts::Facts;
 use crate::path::{StorePath, escape_name};
-use crate::primitives::error::{ReactiveMapResult, WriteError};
+use crate::primitives::error::{ReactiveMapResult, WriteValue};
 use crate::primitives::intercept::{InterceptDisposer, InterceptGuard};
 use crate::primitives::signal::SubscriptionMeta;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use error_stack::ResultExt;
 use rpds::RedBlackTreeMapSync;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -29,10 +27,7 @@ impl MapEntryPath for StorePath {
     fn entry(&self, key: &impl Display) -> ReactiveMapResult<StorePath> {
         let key = key.to_string();
 
-        self.try_push(&key)
-            .change_context(WriteError::Path)
-            .attach_prefix(self)
-            .attach_entry(&key)
+        self.try_push(&key).map_err(WriteValue::NotAPath)
     }
 }
 

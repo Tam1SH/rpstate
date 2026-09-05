@@ -1,4 +1,5 @@
 use amethystate::amethystate;
+use amethystate::store::OpenStruct;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
@@ -102,19 +103,26 @@ fn writing_into_a_declared_path_is_refused(backend: Backend) {
         .namespace("typed")
         .set("port", &"not a number".to_string())
         .unwrap_err();
-    insta::assert_snapshot!("kv_write_over_a_declared_field", shape(&err));
+    insta::assert_snapshot!("kv_write_over_a_declared_field", err.to_string());
 
     let refused = [
         kv.namespace("typed")
             .cell("port", 1u16)
             .map(|_| ())
-            .unwrap_err(),
-        kv.namespace("typed").remove("port").unwrap_err(),
-        kv.map::<String, u8>("typed").map(|_| ()).unwrap_err(),
+            .unwrap_err()
+            .to_string(),
+        kv.namespace("typed")
+            .remove("port")
+            .unwrap_err()
+            .to_string(),
+        kv.map::<String, u8>("typed")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string(),
     ];
 
-    for (way, err) in ["cell", "remove", "map"].into_iter().zip(refused) {
-        insta::assert_snapshot!(format!("kv_{way}_over_a_declared_field"), shape(&err));
+    for (way, said) in ["cell", "remove", "map"].into_iter().zip(refused) {
+        insta::assert_snapshot!(format!("kv_{way}_over_a_declared_field"), said);
     }
 }
 
@@ -168,9 +176,13 @@ fn the_same_path_cannot_be_two_types(backend: Backend) {
     let _width = kv.namespace("ui").cell("width", 800u32).unwrap();
     let err = kv.namespace("ui").cell("width", String::new()).unwrap_err();
 
+    let OpenStruct::WillNotRead { why, .. } = &err else {
+        panic!("{err}")
+    };
+
     insta::assert_snapshot!(
         per_engine(backend, "kv_asked_for_a_second_type"),
-        shape(&err)
+        shape(why)
     );
 }
 

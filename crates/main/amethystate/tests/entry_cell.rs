@@ -7,7 +7,6 @@ use amethystate::{ReactiveMap, amethystate};
 mod common;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
-use common::shape;
 
 #[amethystate(prefix = "app")]
 pub struct TableConfig {
@@ -45,7 +44,7 @@ fn entry_cell_on_a_missing_key_is_empty_and_refuses_writes(backend: Backend) {
     assert_eq!(entry.get(), None);
 
     let err = entry.set(110).unwrap_err();
-    insta::assert_snapshot!("write_to_an_absent_key", shape(&err));
+    insta::assert_snapshot!("write_to_an_absent_key", err.to_string());
 
     assert_eq!(config.widths().get("disk"), None);
 }
@@ -91,7 +90,7 @@ fn removed_key_empties_the_cell(backend: Backend) {
     assert_eq!(entry.get(), None);
 
     let err = entry.set(110).unwrap_err();
-    insta::assert_snapshot!("write_to_a_removed_key", shape(&err));
+    insta::assert_snapshot!("write_to_a_removed_key", err.to_string());
 
     assert_eq!(config.widths().get("cpu"), None);
 }
@@ -154,7 +153,7 @@ fn rejected_write_reports_and_leaves_the_cell_alone(backend: Backend) {
     let result = entry.set(999);
 
     let err = result.unwrap_err();
-    insta::assert_snapshot!("write_an_interceptor_refused", shape(&err));
+    insta::assert_snapshot!("write_an_interceptor_refused", err.to_string());
     assert_eq!(
         entry.get(),
         Some(80),
@@ -197,7 +196,7 @@ fn a_cell_dies_with_the_map_it_views(backend: Backend) {
     assert_eq!(entry.get(), None);
 
     let err = entry.set(1).unwrap_err();
-    insta::assert_snapshot!("write_through_a_cell_whose_map_is_gone", shape(&err));
+    insta::assert_snapshot!("write_through_a_cell_whose_map_is_gone", err.to_string());
 }
 
 /// Integration: a write through the entry cell survives a store rebuild.

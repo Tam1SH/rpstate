@@ -1,6 +1,5 @@
 ---
 source: crates/main/amethystate/tests/entry_cell.rs
-expression: shape(&err)
+expression: err.to_string()
 ---
-nothing is stored at `cpu`
-╰╴prefix: app.widths
+nothing is stored at app.widths.cpu

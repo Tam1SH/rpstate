@@ -1,11 +1,11 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
 use crate::error::FieldError;
 use crate::facts::Facts;
+use crate::failure::StorageError;
 use crate::path::StorePath;
 use crate::primitives::error::ReactiveFieldResult;
 use crate::primitives::field_core::FieldValue;
 use crate::{Change, FieldCore, InterceptDisposer, Signal, SignalSubscription};
-use error_stack::{Report, ResultExt};
 use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -112,11 +112,10 @@ where
         self.backend
             .get(&self.path)
             .await
-            .change_context(FieldError::Storage)
-            .attach_key(&self.path)?
-            .ok_or_else(|| {
-                Report::new(FieldError::KeyNotFound(self.path.to_string()))
-                    .attach("read through a field handle")
+            .attach_key(&self.path)
+            .map_err(|why| FieldError::from_backend(&self.path, StorageError::Read, why))?
+            .ok_or_else(|| FieldError::Absent {
+                at: self.path.clone(),
             })
     }
 

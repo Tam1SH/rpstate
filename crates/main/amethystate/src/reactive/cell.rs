@@ -1,4 +1,4 @@
-use crate::reactive::error::{WriteError, WriteResult};
+use crate::reactive::error::{WriteResult, WriteValue};
 use crate::reactive::watch::{Watch, Watchable};
 use crate::store::Durable;
 use amethystate_core::{Signal, SignalSubscription};
@@ -24,7 +24,7 @@ pub(crate) struct CellCommit {
 /// A cell holds nothing open: it keeps a weak reference to the primitive it
 /// views, so a forgotten cell in a UI does not keep the store file open. Once
 /// that primitive is dropped every write fails with
-/// [`WriteError::SourceGone`]
+/// [`WriteValue::SourceGone`]
 /// and [`get`](ReactiveCell::get) returns `None`.
 ///
 /// Absence is a value here: a cell over a map entry whose key is missing reads
@@ -163,7 +163,7 @@ where
     /// Reads the value, writes back what `f` returns, and yields the new
     /// value.
     ///
-    /// Fails with [`WriteError::SourceGone`]
+    /// Fails with [`WriteValue::SourceGone`]
     /// when there is nothing to read - there is no value to hand `f`.
     ///
     /// ```
@@ -177,7 +177,7 @@ where
     where
         F: FnOnce(T) -> T,
     {
-        let next = f(self.get().ok_or(WriteError::SourceGone)?);
+        let next = f(self.get().ok_or(WriteValue::SourceGone)?);
         self.set(next.clone())?;
         Ok(next)
     }
@@ -188,7 +188,7 @@ where
     where
         F: FnOnce(&mut T),
     {
-        let mut value = self.get().ok_or(WriteError::SourceGone)?;
+        let mut value = self.get().ok_or(WriteValue::SourceGone)?;
         f(&mut value);
         self.set(value)
     }
@@ -333,8 +333,8 @@ where
         match pending {
             Some(commit) => commit
                 .await
-                .change_context(WriteError::Storage)
-                .attach("committing a cell write"),
+                .attach("committing a cell write")
+                .map_err(WriteValue::Store),
             None => Ok(()),
         }
     }

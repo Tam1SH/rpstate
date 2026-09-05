@@ -1,9 +1,8 @@
 use crate::async_impl::{AsyncSubscriptionBackend, SubscriptionHandle};
 use crate::path::StorePath;
 use crate::primitives::error::{ReactiveMapError, ReactiveMapResult};
-use crate::primitives::map_core::{ReactiveMapKey, ReactiveMapValue};
+use crate::primitives::map_core::{MapEntryPath, ReactiveMapKey, ReactiveMapValue};
 use crate::{InterceptDisposer, MapChange, ReactiveMapCore, SignalSubscription};
-use error_stack::Report;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
@@ -154,8 +153,9 @@ where
             self.set(key, &new_val).await?;
             Ok(Some(new_val))
         } else {
-            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {}", self.prefix)))
+            Err(ReactiveMapError::Absent {
+                at: self.prefix.entry(&key)?,
+            })
         }
     }
 
@@ -167,8 +167,9 @@ where
             f(&mut val);
             self.set(key, &val).await
         } else {
-            Err(Report::new(ReactiveMapError::KeyNotFound(key.to_string()))
-                .attach(format!("map: {}", self.prefix)))
+            Err(ReactiveMapError::Absent {
+                at: self.prefix.entry(&key)?,
+            })
         }
     }
 

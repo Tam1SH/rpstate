@@ -1,9 +1,11 @@
+use crate::observability::Reason;
 use crate::observability::register_field;
-use crate::reactive::field::{Unread, Unreadable};
+use crate::reactive::field::Unreadable;
 use crate::store::StorageError;
 use crate::store::StorageResult;
 use crate::store::StoreSubscription;
 use crate::store::facts::{Entry, Facts, Key, Prefix, RawKey, Refused};
+use crate::store::opening::OpenStruct;
 use crate::store::rules::{OnDelete, OnUnreadable, ReadRules};
 use crate::store::traits::{StoreExt as _, StoredAs};
 use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
@@ -24,12 +26,12 @@ pub fn field<TScope, TValue>(
     key: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue>>
+) -> Result<Field<TValue>, OpenStruct>
 where
     TScope: StateScope,
     TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    let path = TScope::PATH.join(&crate::store::to_path(key)?);
+    let path = TScope::PATH.join(&key.into_store_path()?);
     field_with_path(store, path, default, instance_id)
 }
 
@@ -40,11 +42,12 @@ where
 /// building the same struct twice claims the same path twice and changes
 /// nothing. An instance nobody registered claims nothing - there is no name to
 /// attribute it to, and refusing what cannot be attributed would be guessing.
-fn claim(store: &Store, path: &StorePath, instance_id: Uuid) -> StorageResult<()> {
-    match crate::observability::resolve_instance(instance_id) {
-        Some(by) => store.owners().claim(path, by),
-        None => Ok(()),
-    }
+fn claim(store: &Store, path: &StorePath, instance_id: Uuid) -> Result<(), OpenStruct> {
+    let Some(by) = crate::store::instances::resolve_instance(instance_id) else {
+        return Ok(());
+    };
+
+    store.owners().take(path, by).map_err(OpenStruct::from)
 }
 
 pub fn field_with_path<TValue>(
@@ -52,7 +55,7 @@ pub fn field_with_path<TValue>(
     path: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue>>
+) -> Result<Field<TValue>, OpenStruct>
 where
     TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
@@ -68,7 +71,7 @@ pub fn field_with_path_where<TValue>(
     instance_id: Uuid,
     policy: OnUnreadable,
     on_delete: OnDelete,
-) -> StorageResult<Field<TValue>>
+) -> Result<Field<TValue>, OpenStruct>
 where
     TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
@@ -89,11 +92,11 @@ pub fn field_with_path_under<TValue>(
     default: TValue,
     instance_id: Uuid,
     rules: ReadRules<TValue>,
-) -> StorageResult<Field<TValue>>
+) -> Result<Field<TValue>, OpenStruct>
 where
     TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    let path = crate::store::to_path(path)?;
+    let path = path.into_store_path()?;
     let ReadRules {
         on_unreadable: policy,
         on_delete,
@@ -104,14 +107,17 @@ where
     claim(store, &path, instance_id)?;
     register_field::<TValue>(&path, instance_id);
 
-    let mut refused: Option<Unread> = None;
+    let mut refused: Option<Reason> = None;
 
     let current = match read_stored(store, &path, stored_as) {
         Ok(Some(stored)) => match check.map(|check| check(&stored, store.context())) {
             None | Some(Ok(())) => stored,
             Some(Err(invalid)) => {
                 if policy == OnUnreadable::Refuse {
-                    return Err(crate::store::refused(&path, &invalid));
+                    return Err(OpenStruct::Refused {
+                        at: path.clone(),
+                        said: Arc::from(invalid.reason()),
+                    });
                 }
 
                 tracing::error!(
@@ -119,22 +125,30 @@ where
                     reason = %invalid,
                     "a declared check refused the stored value, so the field starts on its default"
                 );
-                refused = Some(Unread::Refused(Arc::from(invalid.reason())));
+                refused = Some(Reason::Refused(Arc::from(invalid.reason())));
                 default.clone()
             }
         },
         Ok(None) => {
             if let Some(in_the_way) = seed(store, &path, &default, stored_as)? {
-                refused = Some(Unread::Occupied(in_the_way));
+                refused = Some(Reason::Occupied(in_the_way));
             }
             default.clone()
         }
         Err(why) if policy.covers(&why) => {
             tracing::error!(path = %path, error = %why, "decode failed while building");
-            refused = Some(Unread::Undecodable(Arc::from(why.to_string().as_str())));
+            refused = Some(Reason::WillNotRead(Arc::from(why.to_string().as_str())));
             default.clone()
         }
-        Err(why) => return Err(why),
+        Err(why) => {
+            return Err(match crate::store::rules::will_not_read(&why) {
+                true => OpenStruct::WillNotRead {
+                    at: path.clone(),
+                    why,
+                },
+                false => OpenStruct::Store(why),
+            });
+        }
     };
 
     let signal = Signal::new(current);
@@ -159,7 +173,7 @@ where
                         && let Err(invalid) = check(&parsed, store_clone.context())
                     {
                         if let Ok(mut held) = unreadable_sub.lock() {
-                            *held = Some(Unread::Refused(Arc::from(invalid.reason())));
+                            *held = Some(Reason::Refused(Arc::from(invalid.reason())));
                         }
 
                         return Err(Report::new(StorageError::Notify)
@@ -176,7 +190,7 @@ where
                 }
                 Err(e) => {
                     if let Ok(mut held) = unreadable_sub.lock() {
-                        *held = Some(Unread::Undecodable(Arc::from(e.to_string().as_str())));
+                        *held = Some(Reason::WillNotRead(Arc::from(e.to_string().as_str())));
                     }
 
                     Err(e
@@ -214,13 +228,13 @@ pub fn reactive_map<TScope, K, V>(
     key: impl IntoStorePath,
     default: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V>>
+) -> Result<ReactiveMap<K, V>, OpenStruct>
 where
     TScope: StateScope,
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let path = TScope::PATH.join(&crate::store::to_path(key)?);
+    let path = TScope::PATH.join(&key.into_store_path()?);
     reactive_map_with_path::<TScope, _, _>(store, path, default, instance_id)
 }
 
@@ -229,7 +243,7 @@ pub fn reactive_map_with_path<TScope, K, V>(
     path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V>>
+) -> Result<ReactiveMap<K, V>, OpenStruct>
 where
     TScope: StateScope,
     K: ReactiveMapKey,
@@ -249,7 +263,7 @@ where
     TValue: DeserializeOwned + 'static,
 {
     let Some(read) = stored_as.read else {
-        return store.get::<TValue>(path);
+        return Ok(store.get::<TValue>(path)?);
     };
 
     match store.get_raw(path)? {
@@ -262,7 +276,7 @@ where
 ///
 /// `Some` is what stood in the way. Building carries on - the field takes the
 /// default it was declared with - but it is now reporting something the store
-/// does not hold, so what came back here goes to [`Unread::Occupied`] and out
+/// does not hold, so what came back here goes to [`Reason::Occupied`] and out
 /// through [`Field::try_get`](crate::Field::try_get).
 fn seed<TValue>(
     store: &Store,
@@ -277,7 +291,7 @@ where
         Some(write) => write(default, &mut |erased| {
             StoreBackend::set_erased(store, path, erased, None)
         }),
-        None => store.set(path, default),
+        None => store.set(path, default).map_err(Report::from),
     };
 
     match written {
@@ -301,7 +315,10 @@ where
     if store.parallel_reads() {
         use rayon::prelude::*;
 
-        let scanned = store.scan_prefix(path).attach_prefix(path)?;
+        let scanned = store
+            .scan_prefix(path)
+            .map_err(Report::from)
+            .attach_prefix(path)?;
 
         if scanned.len() >= PARALLEL_MIN_LEN {
             let decoded: Vec<(K, V)> = scanned
@@ -390,12 +407,12 @@ pub fn reactive_map_with_path_only<K, V>(
     path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V>>
+) -> Result<ReactiveMap<K, V>, OpenStruct>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let path = crate::store::to_path(path)?;
+    let path = path.into_store_path()?;
     claim(store, &path, instance_id)?;
 
     let mut known_cache = load_map::<K, V>(store, &path)?;
