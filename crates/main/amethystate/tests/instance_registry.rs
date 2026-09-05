@@ -1,6 +1,6 @@
 use amethystate::amethystate;
-use amethystate::observability::resolve_instance;
 use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate::store::instances::resolve_instance;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use uuid::Uuid;

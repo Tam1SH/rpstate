@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 #[cfg(feature = "redb")]
-use amethystate::observability::InspectorBackend;
+use amethystate::store::InspectorBackend;
 #[cfg(feature = "redb")]
 use amethystate::store::builder::{Backend, StoreBuilder};
 #[cfg(feature = "redb")]

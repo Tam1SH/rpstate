@@ -1,6 +1,6 @@
 use crate::report::anyhowed;
 use amethystate::StoreConfig;
-use amethystate::observability::InspectorBackend;
+use amethystate::store::InspectorBackend;
 use amethystate::stores::{JsonStore, RedbStore, RonStore, SqliteStore, TomlStore};
 use std::path::Path;
 

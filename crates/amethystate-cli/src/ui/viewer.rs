@@ -1,5 +1,6 @@
 use crate::app::{App, ViewMode};
 
+use amethystate::store::StorePath;
 use amethystate::store::meta::SchemaSnapshot;
 use ratatui::{
     Frame,
@@ -93,12 +94,17 @@ fn render_snapshot_lines(
         Span::raw(" {"),
     ])];
 
+    let under = StorePath::parse_joined(prefix).ok();
+
     for field in &snapshot.fields {
-        let path = format!("{}.{}", prefix, field.name);
+        let at = match &under {
+            Some(under) => under.join(&field.name),
+            None => field.name.clone(),
+        };
         let val_str = match app.backend.scan_all() {
             Ok(entries) => entries
                 .into_iter()
-                .find(|(k, _)| k.as_str() == path)
+                .find(|(k, _)| *k == at)
                 .map(|(_, v)| String::from_utf8_lossy(&v).to_string())
                 .unwrap_or_else(|| "<missing>".to_string()),
             Err(_) => "<error>".to_string(),
@@ -106,7 +112,7 @@ fn render_snapshot_lines(
 
         lines.push(Line::from(vec![
             Span::raw("    "),
-            Span::styled(field.name.clone(), Style::default().fg(Color::Cyan)),
+            Span::styled(field.name.to_string(), Style::default().fg(Color::Cyan)),
             Span::raw(": "),
             Span::styled(
                 field.type_name.clone(),

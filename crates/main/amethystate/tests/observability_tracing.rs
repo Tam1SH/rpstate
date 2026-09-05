@@ -26,7 +26,7 @@ fn a_field_named_with_a_separator_is_registered_under_that_name() {
     use amethystate_core::path::StorePath;
 
     let id = Uuid::new_v4();
-    observability::register_instance(id, "SeparatorNamed");
+    amethystate::store::instances::register_instance(id, "SeparatorNamed");
     let path = StorePath::from_segments(["obs_sep", "a.b"]);
     observability::register_field::<u16>(&path, id);
 

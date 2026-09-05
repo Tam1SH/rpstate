@@ -1,6 +1,6 @@
 use crate::codec::CodecError;
-use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
+use crate::store::InspectorBackend;
 use crate::store::backend::sqlite::error::SqliteStoreError;
 use crate::store::backend::utils;
 use crate::store::error::StorageError;

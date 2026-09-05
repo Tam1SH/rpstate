@@ -1,6 +1,6 @@
 use crate::codec::CodecError;
-use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
+use crate::store::InspectorBackend;
 use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
 use crate::store::backend::utils;
 use crate::store::error::StorageError;

@@ -9,7 +9,7 @@
 #[cfg(feature = "redb")]
 use amethystate::migration::fields::Role;
 #[cfg(feature = "redb")]
-use amethystate::observability::InspectorBackend;
+use amethystate::store::InspectorBackend;
 use amethystate::store::builder::{Backend, StoreBuilder};
 #[cfg(feature = "redb")]
 use amethystate::store::meta::{SchemaSnapshot, StoredFieldEntry};

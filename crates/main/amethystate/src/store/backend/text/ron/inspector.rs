@@ -1,6 +1,6 @@
 use crate::StorageResult;
-use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
+use crate::store::InspectorBackend;
 use crate::store::meta::SchemaSnapshot;
 use crate::stores::RonStore;
 

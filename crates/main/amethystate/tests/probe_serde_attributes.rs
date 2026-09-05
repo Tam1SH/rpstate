@@ -1695,7 +1695,7 @@ fn the_schema_snapshot_beside_the_data() {
 
 /// The names the file's own schema snapshot records for `serde_named`.
 fn snapshot_names(file: &TempPath, backend: Backend) -> Option<Vec<String>> {
-    use amethystate::observability::InspectorBackend;
+    use amethystate::store::InspectorBackend;
     use amethystate::store::config::StoreConfig;
 
     let snapshots = match backend {

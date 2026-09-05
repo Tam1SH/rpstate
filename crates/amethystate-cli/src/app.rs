@@ -1,4 +1,4 @@
-use amethystate::observability::InspectorBackend;
+use amethystate::store::InspectorBackend;
 use amethystate::store::meta::SchemaSnapshot;
 
 pub enum ViewMode {

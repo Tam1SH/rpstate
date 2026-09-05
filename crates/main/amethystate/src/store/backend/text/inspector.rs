@@ -1,6 +1,6 @@
 use crate::StorageResult;
-use crate::observability::InspectorBackend;
 use crate::store::CodecFormat;
+use crate::store::InspectorBackend;
 use crate::store::StorageError;
 use crate::store::backend::text::store::scan_prefix_recursive;
 use crate::store::backend::text::{TextDocument, TextStore};
