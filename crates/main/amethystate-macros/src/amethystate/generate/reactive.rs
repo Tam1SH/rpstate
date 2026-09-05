@@ -24,7 +24,7 @@ pub(crate) fn declaration(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
     quote! {
         #[derive(Clone)]
         #(#attrs)* #vis struct #name {
-            __amethystate_instance_id: ::std::sync::Arc<#crate_name::observability::InstanceGuard>,
+            __amethystate_instance_id: ::std::sync::Arc<#crate_name::store::instances::InstanceGuard>,
             /// Where this struct's fields hang, kept so it can say so: a root
             /// knows it from `StateScope`, and one that is embedded is only
             /// told at the call that built it.
@@ -164,7 +164,7 @@ pub(crate) fn fork(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
         #[doc(hidden)]
         pub fn fork_with_id(&self, new_id: #crate_name::uuid::Uuid) -> Self {
             Self {
-                __amethystate_instance_id: #crate_name::observability::InstanceGuard::new(
+                __amethystate_instance_id: #crate_name::store::instances::InstanceGuard::new(
                     new_id,
                     ::std::any::type_name::<Self>(),
                 ),

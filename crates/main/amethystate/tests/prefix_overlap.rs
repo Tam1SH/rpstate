@@ -1,14 +1,10 @@
-use amethystate::store::StorageError;
+use amethystate::Store;
+use amethystate::store::OpenStruct;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::owners::Claimed;
-use amethystate::{StorageResult, Store};
-use amethystate_core::facts::all;
+use amethystate::store::owners::Taken;
 use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
-
-mod common;
-use common::shape;
 
 #[amethystate(prefix = "coll", version = 1)]
 pub struct Outer {
@@ -43,8 +39,8 @@ pub struct TypedPanels {
 fn contested(
     backend: Backend,
     at: &str,
-    first: fn(&Store) -> StorageResult<()>,
-    second: fn(&Store) -> StorageResult<()>,
+    first: fn(&Store) -> Result<(), OpenStruct>,
+    second: fn(&Store) -> Result<(), OpenStruct>,
 ) -> String {
     let path = TempPath::new(at);
     let store = StoreBuilder::new(path.path())
@@ -55,28 +51,28 @@ fn contested(
     first(&store).expect("the first spelling is free to take it");
     let refused = second(&store).expect_err("the second wanted the same place");
 
+    let OpenStruct::Claimed(taken) = &refused else {
+        panic!("refused, but not as a claim: {refused:?}")
+    };
+
+    let Taken {
+        at,
+        wanted_by,
+        held_at,
+        held_by,
+    } = &**taken;
+
     assert_eq!(
-        refused.current_context(),
-        &StorageError::Claimed,
-        "refused, but not as a claim: {refused:?}"
+        (at.as_str(), held_at.as_str()),
+        ("coll.panels.left.visible", "coll.panels.left.visible"),
+        "the refusal is about the place all three spell"
     );
-
-    let claims: Vec<&Claimed> = all::<Claimed, _>(&refused).collect();
-
-    assert_eq!(claims.len(), 2, "the report names both: {refused:?}");
-    for claim in &claims {
-        assert_eq!(
-            claim.path.as_str(),
-            "coll.panels.left.visible",
-            "the refusal is about the place all three spell: {refused:?}"
-        );
-    }
     assert_ne!(
-        claims[0].by, claims[1].by,
-        "and attributes it to two different schemas: {refused:?}"
+        wanted_by, held_by,
+        "and attributes it to two different schemas"
     );
 
-    shape(&refused)
+    refused.to_string()
 }
 
 #[backends(all)]
@@ -132,11 +128,12 @@ fn one_claim_refuses_every_other_spelling_not_only_the_next(backend: Backend) {
         Panels::new_with(&store).map(|_| ()).unwrap_err(),
         Left::new_with(&store).map(|_| ()).unwrap_err(),
     ] {
-        let by: Vec<&str> = all::<Claimed, _>(&refused).map(|claim| claim.by).collect();
+        let OpenStruct::Claimed(taken) = &refused else {
+            panic!("{refused:?}")
+        };
 
-        assert_eq!(by.len(), 2, "two claims, not a pile: {refused:?}");
         assert!(
-            by.iter().any(|by| by.ends_with("Outer")),
+            taken.held_by.ends_with("Outer"),
             "the standing claim is still Outer's: {refused:?}"
         );
     }
@@ -171,13 +168,14 @@ fn a_prefix_is_refused_by_a_field_already_under_it(backend: Backend) {
     Branch::new_with(&store).unwrap();
     let refused = Root::new_with(&store).unwrap_err();
 
-    let claims: Vec<&str> = all::<Claimed, _>(&refused)
-        .map(|claim| claim.path.as_str())
-        .collect();
+    let OpenStruct::Claimed(taken) = &refused else {
+        panic!("{refused:?}")
+    };
 
-    assert!(
-        claims.contains(&"root.b") && claims.contains(&"root.b.x"),
-        "both places are named whichever was claimed first: {refused:?}"
+    assert_eq!(
+        (taken.at.as_str(), taken.held_at.as_str()),
+        ("root.b", "root.b.x"),
+        "both places are named whichever was claimed first"
     );
 }
 
@@ -238,13 +236,14 @@ fn a_prefix_may_not_land_on_another_structs_field(backend: Backend) {
     let _root = Root::new_with(&store).unwrap();
     let refused = Branch::new_with(&store).unwrap_err();
 
-    let claims: Vec<String> = all::<Claimed, _>(&refused)
-        .map(|claim| claim.path.as_str().to_string())
-        .collect();
+    let OpenStruct::Claimed(taken) = &refused else {
+        panic!("{refused:?}")
+    };
 
-    assert!(
-        claims.iter().any(|p| p == "root.b") && claims.iter().any(|p| p == "root.b.x"),
-        "the report names the leaf and the branch that wanted to sit under it: {claims:?}"
+    assert_eq!(
+        (taken.at.as_str(), taken.held_at.as_str()),
+        ("root.b.x", "root.b"),
+        "the report names the leaf and the branch that wanted to sit under it"
     );
 }
 

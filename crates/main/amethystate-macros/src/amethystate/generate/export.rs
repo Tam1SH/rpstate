@@ -28,7 +28,7 @@ pub(crate) fn entries(crate_name: &TokenStream2, schema: &Schema) -> TokenStream
 
     let declared = quote! {
         #crate_name::inventory::submit! {
-            #crate_name::observability::SchemaEntry {
+            #crate_name::schema::SchemaEntry {
                 prefix: #at,
                 struct_name: #named,
                 version: #version,

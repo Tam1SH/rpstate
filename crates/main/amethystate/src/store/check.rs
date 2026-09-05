@@ -1,5 +1,5 @@
+use crate::store::StorageError;
 use crate::store::facts::{Key, Prefix, Refused};
-use crate::store::{StorageError, StorageResult};
 use amethystate_core::path::StorePath;
 use error_stack::Report;
 use std::any::{Any, TypeId, type_name};
@@ -182,9 +182,12 @@ pub fn refused_struct_or_kept(
     prefix: &StorePath,
     invalid: Invalid,
     policy: crate::store::OnUnreadable,
-) -> StorageResult<()> {
+) -> Result<(), crate::store::OpenStruct> {
     match policy {
-        crate::store::OnUnreadable::Refuse => Err(refused_under(prefix, &invalid)),
+        crate::store::OnUnreadable::Refuse => Err(crate::store::OpenStruct::Refused {
+            at: prefix.clone(),
+            said: std::sync::Arc::from(invalid.reason()),
+        }),
         crate::store::OnUnreadable::UseDefault => {
             tracing::error!(
                 target: "amethystate",
@@ -209,9 +212,12 @@ pub fn refused_or_default<TValue>(
     invalid: Invalid,
     policy: crate::store::OnUnreadable,
     default: TValue,
-) -> StorageResult<TValue> {
+) -> Result<TValue, crate::store::OpenStruct> {
     match policy {
-        crate::store::OnUnreadable::Refuse => Err(refused(path, &invalid)),
+        crate::store::OnUnreadable::Refuse => Err(crate::store::OpenStruct::Refused {
+            at: path.clone(),
+            said: Arc::from(invalid.reason()),
+        }),
         crate::store::OnUnreadable::UseDefault => {
             tracing::error!(
                 target: "amethystate",

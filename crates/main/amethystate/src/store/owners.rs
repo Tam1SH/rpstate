@@ -34,12 +34,52 @@ pub struct Owners {
     claims: RwLock<Vec<Claimed>>,
 }
 
-fn refused(standing: &Claimed, path: &StorePath, by: &'static str) -> Report<StorageError> {
+/// Two owners over one place, with both sides named.
+///
+/// Which side is which is the whole of the diagnosis, and a report carrying
+/// two [`Claimed`] facts leaves the reader to tell them apart by the order
+/// they were attached in. Here they are separate fields.
+///
+/// `held_at` need not be `at`: a claim holds this one by sitting above it or
+/// inside it, and saying which is what makes the collision findable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Taken {
+    pub at: StorePath,
+    pub wanted_by: &'static str,
+    pub held_at: StorePath,
+    pub held_by: &'static str,
+}
+
+impl fmt::Display for Taken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            at,
+            wanted_by,
+            held_at,
+            held_by,
+        } = self;
+
+        match at == held_at {
+            true => write!(f, "{wanted_by} wants {at}, which {held_by} already holds"),
+            false => write!(
+                f,
+                "{wanted_by} wants {at}, which {held_by} already holds through {held_at}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Taken {}
+
+fn refused(taken: &Taken) -> Report<StorageError> {
     Report::new(StorageError::Claimed)
-        .attach(standing.clone())
         .attach(Claimed {
-            path: path.clone(),
-            by,
+            path: taken.held_at.clone(),
+            by: taken.held_by,
+        })
+        .attach(Claimed {
+            path: taken.at.clone(),
+            by: taken.wanted_by,
         })
 }
 
@@ -72,6 +112,24 @@ impl Owners {
     ///
     /// [`Subtree::may_still_reach`]: amethystate_core::path::Subtree::may_still_reach
     pub fn claim(&self, path: &StorePath, by: &'static str) -> StorageResult<()> {
+        self.take(path, by).map_err(|taken| refused(&taken))
+    }
+
+    /// [`Owners::claim`], refusing with both sides named rather than with a
+    /// report to be taken apart.
+    ///
+    /// Boxed because four paths and names are wide enough that carrying them
+    /// unboxed would widen every `Result` on the way out.
+    pub fn take(&self, path: &StorePath, by: &'static str) -> Result<(), Box<Taken>> {
+        let refuse = |other: &Claimed| {
+            Box::new(Taken {
+                at: path.clone(),
+                wanted_by: by,
+                held_at: other.path.clone(),
+                held_by: other.by,
+            })
+        };
+
         let mut claims = self.claims.write();
 
         // A claim that holds `path` sits at `path` itself or at one of its
@@ -85,7 +143,7 @@ impl Owners {
             if let Ok(found) = claims.binary_search_by(|c| c.path.cmp(&one)) {
                 let other = &claims[found];
                 if other.by != by {
-                    return Err(refused(other, path, by));
+                    return Err(refuse(other));
                 }
                 if other.path == *path {
                     return Ok(());
@@ -104,7 +162,7 @@ impl Owners {
             .take_while(|c| subtree.may_still_reach(&c.path))
         {
             if other.by != by && path.overlaps(&other.path) {
-                return Err(refused(other, path, by));
+                return Err(refuse(other));
             }
         }
 

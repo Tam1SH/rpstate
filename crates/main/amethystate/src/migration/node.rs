@@ -1,6 +1,6 @@
 use crate::Store;
 use crate::migration::fields::AmeStateFields;
-use crate::store::StorageResult;
+use crate::store::opening::OpenStruct;
 use amethystate_core::path::StorePath;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -25,8 +25,12 @@ pub trait AmeStateNode: Sized {
     /// out of is a crash with no message.
     const CONSTRUCTION_TERMINATES: ();
 
-    fn new_node(store: &Store, path: &StorePath) -> StorageResult<Self>;
-    fn new_node_with_id(store: &Store, path: &StorePath, instance_id: Uuid) -> StorageResult<Self>;
+    fn new_node(store: &Store, path: &StorePath) -> Result<Self, OpenStruct>;
+    fn new_node_with_id(
+        store: &Store,
+        path: &StorePath,
+        instance_id: Uuid,
+    ) -> Result<Self, OpenStruct>;
 }
 
 pub trait AmeState {

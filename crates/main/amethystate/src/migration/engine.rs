@@ -2,7 +2,7 @@ use crate::migration::fields::FieldDescriptor;
 use crate::migration::meta::{PrefixMeta, SchemaSnapshot, StoredFieldEntry};
 use crate::migration::set::MigrationSet;
 use crate::migration::{AppliedStep, ComponentOutcome, ComponentResult, NaggingRecord, SchemaDiff};
-use crate::observability::SchemaEntry;
+use crate::schema::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
 use crate::store::facts::Facts;
 use crate::store::moved::{self, Moved, Verdict};

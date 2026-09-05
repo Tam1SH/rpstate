@@ -1,12 +1,10 @@
 use amethystate::amethystate;
-use amethystate::store::StorageError;
+use amethystate::store::OpenStruct;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::owners::Claimed;
-use amethystate_core::facts::all;
+use amethystate::store::owners::Taken;
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
-use std::error::Error;
 
 //@show two structs that want the same place
 #[amethystate(prefix = "ui", version = 1)]
@@ -31,9 +29,7 @@ pub struct RightPanel {
 //@show-end
 
 #[backends(all)]
-fn the_second_claim_on_one_place_is_refused(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_second_claim_on_one_place_is_refused(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_claims");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
@@ -43,23 +39,30 @@ fn the_second_claim_on_one_place_is_refused(
     let refused =
         Panels::new_with(&store).expect_err("`ui.panels.left.visible` is spelled by both of them");
 
-    assert_eq!(refused.current_context(), &StorageError::Claimed);
+    let OpenStruct::Claimed(taken) = &refused else {
+        panic!("{refused}")
+    };
 
-    for claim in all::<Claimed, _>(&refused) {
-        println!("{} claims {}", claim.by, claim.path);
-    }
+    let Taken {
+        at,
+        wanted_by,
+        held_at,
+        held_by,
+    } = &**taken;
+
+    println!("{wanted_by} wants {at}, which {held_by} already holds at {held_at}");
     //@show-end
 
-    let named: Vec<&str> = all::<Claimed, _>(&refused).map(|claim| claim.by).collect();
-    assert_eq!(named.len(), 2, "the report names both: {refused:?}");
+    assert!(wanted_by.ends_with("Panels"));
+    assert!(held_by.ends_with("Ui"));
+    assert_eq!(at.as_str(), "ui.panels.left.visible");
+    assert_eq!(held_at.as_str(), "ui.panels.left.visible");
 
     Ok(())
 }
 
 #[backends(all)]
-fn places_that_do_not_meet_are_left_alone(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn places_that_do_not_meet_are_left_alone(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_claims_apart");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
@@ -70,9 +73,7 @@ fn places_that_do_not_meet_are_left_alone(
 }
 
 #[backends(all)]
-fn a_claim_outlives_the_handle_that_made_it(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_claim_outlives_the_handle_that_made_it(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_claims_dropped");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
@@ -87,9 +88,7 @@ fn a_claim_outlives_the_handle_that_made_it(
 }
 
 #[backends(all)]
-fn the_store_says_who_claimed_a_place(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_store_says_who_claimed_a_place(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_claims_who");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 

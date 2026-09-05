@@ -89,7 +89,7 @@ impl MigrationSet {
             return *target;
         }
 
-        inventory::iter::<crate::observability::SchemaEntry>
+        inventory::iter::<crate::schema::SchemaEntry>
             .into_iter()
             .find(|entry| entry.prefix.as_ref().is_some_and(|p| p.as_str() == prefix))
             .map(|entry| (entry.version, entry.fields))

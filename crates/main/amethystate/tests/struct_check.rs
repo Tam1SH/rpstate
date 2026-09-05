@@ -1,6 +1,5 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::facts::{Refused, all};
-use amethystate::store::{CheckContext, Invalid};
+use amethystate::store::{CheckContext, Invalid, OpenStruct};
 use amethystate::{AmeData, amethystate};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
@@ -89,13 +88,13 @@ fn a_struct_whose_invariant_fails_does_not_open(backend: Backend) {
 
     store.set(["window_strict", "min"], &2000u32).unwrap();
 
-    let refused = StrictWindow::new_with(&store).unwrap_err();
-
-    let said: Vec<&Refused> = all::<Refused, _>(&refused).collect();
-    assert_eq!(
-        said.first().map(|r| r.0.as_str()),
-        Some("the smallest window is wider than the largest")
-    );
+    match StrictWindow::new_with(&store).unwrap_err() {
+        OpenStruct::Refused { at, said } => {
+            assert_eq!(at.as_str(), "window_strict");
+            assert_eq!(&*said, "the smallest window is wider than the largest");
+        }
+        other => panic!("{other}"),
+    }
 }
 
 #[backends(all)]
@@ -216,16 +215,14 @@ fn a_loaded_struct_whose_invariant_fails_does_not_load(backend: Backend) {
 
     store.set(["kept_window", "min"], &2000u32).unwrap();
 
-    let refused = match KeptWindow::load_with(&store) {
+    match KeptWindow::load_with(&store) {
         Ok(_) => panic!("a window whose min is past its max loaded"),
-        Err(refused) => refused,
-    };
-
-    let said: Vec<&Refused> = all::<Refused, _>(&refused).collect();
-    assert_eq!(
-        said.first().map(|r| r.0.as_str()),
-        Some("the smallest window is wider than the largest")
-    );
+        Err(OpenStruct::Refused { at, said }) => {
+            assert_eq!(at.as_str(), "kept_window");
+            assert_eq!(&*said, "the smallest window is wider than the largest");
+        }
+        Err(other) => panic!("{other}"),
+    }
 }
 
 #[backends(all)]

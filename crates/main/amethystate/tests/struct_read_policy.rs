@@ -1,5 +1,5 @@
 use amethystate::amethystate;
-use amethystate::errors::StorageError;
+use amethystate::store::OpenStruct;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
@@ -125,9 +125,10 @@ fn a_struct_refuses_to_open_over_a_value_it_cannot_read(backend: Backend) {
         .set(["strict", "port"], &"not a number".to_string())
         .unwrap();
 
-    let refused = Strict::new_with(&store).unwrap_err();
-
-    assert_eq!(refused.current_context(), &StorageError::Read);
+    match Strict::new_with(&store).unwrap_err() {
+        OpenStruct::WillNotRead { at, .. } => assert_eq!(at.to_string(), "strict.port"),
+        other => panic!("{other}"),
+    }
 }
 
 #[backends(all)]

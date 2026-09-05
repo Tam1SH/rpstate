@@ -84,11 +84,11 @@ pub(crate) fn node_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             impl #crate_name::AmeStateNode for #name {
                 #terminates
 
-                fn new_node(store: &#crate_name::Store, _path: &#crate_name::store::StorePath) -> #crate_name::StorageResult<Self> {
+                fn new_node(store: &#crate_name::Store, _path: &#crate_name::store::StorePath) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                     Self::new_with(store)
                 }
 
-                fn new_node_with_id(store: &#crate_name::Store, _path: &#crate_name::store::StorePath, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                fn new_node_with_id(store: &#crate_name::Store, _path: &#crate_name::store::StorePath, instance_id: #crate_name::uuid::Uuid) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                     Self::new_with_id(store, instance_id)
                 }
             }
@@ -100,11 +100,11 @@ pub(crate) fn node_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             impl #crate_name::AmeStateNode for #name {
                 #terminates
 
-                fn new_node(store: &#crate_name::Store, path: &#crate_name::store::StorePath) -> #crate_name::StorageResult<Self> {
+                fn new_node(store: &#crate_name::Store, path: &#crate_name::store::StorePath) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                     Self::new(store, path)
                 }
 
-                fn new_node_with_id(store: &#crate_name::Store, path: &#crate_name::store::StorePath, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+                fn new_node_with_id(store: &#crate_name::Store, path: &#crate_name::store::StorePath, instance_id: #crate_name::uuid::Uuid) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                     Self::new_with_id(store, path, instance_id)
                 }
             }
@@ -190,7 +190,7 @@ pub(crate) fn slice_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStr
 
     quote! {
         impl #crate_name::AmeStateSlice for #name {
-            fn load_slice(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
+            fn load_slice(store: &#crate_name::Store) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 #load
             }
 
@@ -209,7 +209,7 @@ pub(crate) fn global_new(crate_name: &TokenStream2, schema: &Schema) -> TokenStr
 
     quote! {
         impl #name {
-            pub fn new() -> #crate_name::StorageResult<Self> {
+            pub fn new() -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 let store = #crate_name::global_store();
                 Self::new_with(&store)
             }
@@ -268,9 +268,9 @@ fn struct_check(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
     };
 
     let where_it_is = if schema.is_root() {
-        quote! { &<Self as #crate_name::StateScope>::PATH }
+        quote! { <Self as #crate_name::StateScope>::PATH.clone() }
     } else {
-        quote! { &namespace }
+        quote! { namespace.clone() }
     };
 
     quote_spanned! {check.span()=>
@@ -278,7 +278,10 @@ fn struct_check(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
             match #rule {
                 #crate_name::store::OnUnreadable::Refuse => {
                     return ::core::result::Result::Err(
-                        #crate_name::store::refused_under(#where_it_is, &__ame_invalid)
+                        #crate_name::store::OpenStruct::Refused {
+                            at: #where_it_is,
+                            said: ::std::sync::Arc::from(__ame_invalid.reason()),
+                        }
                     );
                 }
                 #crate_name::store::OnUnreadable::UseDefault => {
@@ -295,11 +298,11 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
 
     if schema.is_root() {
         quote! {
-            pub fn new_with(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
+            pub fn new_with(store: &#crate_name::Store) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 Self::new_with_id(store, #crate_name::uuid::Uuid::new_v4())
             }
 
-            pub fn new_with_id(store: &#crate_name::Store, instance_id: #crate_name::uuid::Uuid) -> #crate_name::StorageResult<Self> {
+            pub fn new_with_id(store: &#crate_name::Store, instance_id: #crate_name::uuid::Uuid) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 let __ame_fallbacks = store.fallbacks();
                 Self::new_with_id_under(
                     store,
@@ -319,9 +322,9 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                 instance_id: #crate_name::uuid::Uuid,
                 __ame_on_unreadable: #crate_name::store::OnUnreadable,
                 __ame_on_delete: #crate_name::store::OnDelete,
-            ) -> #crate_name::StorageResult<Self> {
+            ) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 use #crate_name::{StoreBackend, StoreExt};
-                let __amethystate_guard = #crate_name::observability::InstanceGuard::new(
+                let __amethystate_guard = #crate_name::store::instances::InstanceGuard::new(
                     instance_id,
                     ::std::any::type_name::<Self>(),
                 );
@@ -340,7 +343,7 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
             pub fn new(
                 store: &#crate_name::Store,
                 namespace: impl #crate_name::store::IntoStorePath,
-            ) -> #crate_name::StorageResult<Self> {
+            ) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 Self::new_with_id(store, namespace, #crate_name::uuid::Uuid::new_v4())
             }
 
@@ -348,7 +351,7 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                 store: &#crate_name::Store,
                 namespace: impl #crate_name::store::IntoStorePath,
                 instance_id: #crate_name::uuid::Uuid,
-            ) -> #crate_name::StorageResult<Self> {
+            ) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 let __ame_fallbacks = store.fallbacks();
                 Self::new_with_id_under(
                     store,
@@ -370,10 +373,10 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                 instance_id: #crate_name::uuid::Uuid,
                 __ame_on_unreadable: #crate_name::store::OnUnreadable,
                 __ame_on_delete: #crate_name::store::OnDelete,
-            ) -> #crate_name::StorageResult<Self> {
+            ) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 use #crate_name::{StoreBackend, StoreExt};
-                let namespace = #crate_name::store::to_path(namespace)?;
-                let __amethystate_guard = #crate_name::observability::InstanceGuard::new(
+                let namespace = namespace.into_store_path()?;
+                let __amethystate_guard = #crate_name::store::instances::InstanceGuard::new(
                     instance_id,
                     ::std::any::type_name::<Self>(),
                 );

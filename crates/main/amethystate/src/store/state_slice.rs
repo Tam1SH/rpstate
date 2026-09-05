@@ -1,5 +1,4 @@
 use crate::Store;
-use crate::store::error::StorageResult;
 use amethystate_core::ReactiveScope;
 use amethystate_core::path::StorePath;
 
@@ -15,7 +14,7 @@ pub trait StateScope {
 }
 
 pub trait AmeStateSlice: Sized {
-    fn load_slice(store: &Store) -> StorageResult<Self>;
+    fn load_slice(store: &Store) -> Result<Self, crate::store::opening::OpenStruct>;
 
     fn subscribe_all<F>(&self, callback: F) -> ReactiveScope
     where

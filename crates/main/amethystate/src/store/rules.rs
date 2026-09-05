@@ -25,6 +25,18 @@ pub enum OnUnreadable {
     UseDefault,
 }
 
+/// Whether the store had the bytes and they would not read back, as against
+/// not having them at all.
+///
+/// The one place the difference is decided, because two callers need it and
+/// have to agree: the policy, to know whether a default may stand in, and the
+/// constructor, to say which of the two it is failing with.
+pub fn will_not_read(why: &Report<StorageError>) -> bool {
+    why.frames()
+        .filter_map(|frame| frame.downcast_ref::<StorageError>())
+        .any(|context| *context == StorageError::Codec)
+}
+
 impl OnUnreadable {
     /// Whether this failure is one [`OnUnreadable::UseDefault`] stands in for.
     ///
@@ -32,11 +44,7 @@ impl OnUnreadable {
     /// propagates: there is no default to stand in for a file that is not
     /// there.
     pub(crate) fn covers(&self, why: &Report<StorageError>) -> bool {
-        matches!(self, OnUnreadable::UseDefault)
-            && why
-                .frames()
-                .filter_map(|frame| frame.downcast_ref::<StorageError>())
-                .any(|context| *context == StorageError::Codec)
+        matches!(self, OnUnreadable::UseDefault) && will_not_read(why)
     }
 }
 
