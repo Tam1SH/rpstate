@@ -3,7 +3,6 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::{Store, amethystate};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
 use std::time::Duration;
 
 mod common;
@@ -17,7 +16,7 @@ pub struct ConnectionState {
     pub host: String,
 }
 
-fn open(tag: &str) -> Result<(Store, TempPath), Box<dyn Error + Send + Sync>> {
+fn open(tag: &str) -> anyhow::Result<(Store, TempPath)> {
     let path = TempPath::new(tag);
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
@@ -30,7 +29,7 @@ fn on_disk(path: &TempPath) -> String {
 }
 
 #[test]
-fn a_write_is_readable_before_it_is_stored() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_write_is_readable_before_it_is_stored() -> anyhow::Result<()> {
     let (store, path) = open("book_dur_buffered")?;
     let state = ConnectionState::new_with(&store)?;
 
@@ -47,7 +46,7 @@ fn a_write_is_readable_before_it_is_stored() -> Result<(), Box<dyn Error + Send 
 }
 
 #[test]
-fn save_now_puts_everything_on_disk() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn save_now_puts_everything_on_disk() -> anyhow::Result<()> {
     let (store, path) = open("book_dur_save_now")?;
     let state = ConnectionState::new_with(&store)?;
 
@@ -62,7 +61,7 @@ fn save_now_puts_everything_on_disk() -> Result<(), Box<dyn Error + Send + Sync>
 }
 
 #[test]
-fn a_durable_write_returns_after_the_disk() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_durable_write_returns_after_the_disk() -> anyhow::Result<()> {
     let (store, path) = open("book_dur_durable")?;
     let state = ConnectionState::new_with(&store)?;
 
@@ -76,7 +75,7 @@ fn a_durable_write_returns_after_the_disk() -> Result<(), Box<dyn Error + Send +
 }
 
 #[test]
-fn a_durable_write_takes_its_neighbours_with_it() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_durable_write_takes_its_neighbours_with_it() -> anyhow::Result<()> {
     let (store, path) = open("book_dur_neighbours")?;
     let state = ConnectionState::new_with(&store)?;
 
@@ -95,7 +94,7 @@ fn a_durable_write_takes_its_neighbours_with_it() -> Result<(), Box<dyn Error + 
 }
 
 #[test]
-fn the_window_is_set_at_the_builder() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_window_is_set_at_the_builder() -> anyhow::Result<()> {
     let path = TempPath::new("book_dur_window");
 
     //@show narrowing the window
@@ -113,7 +112,7 @@ fn the_window_is_set_at_the_builder() -> Result<(), Box<dyn Error + Send + Sync>
 }
 
 #[test]
-fn dropping_the_store_flushes_it() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn dropping_the_store_flushes_it() -> anyhow::Result<()> {
     let path = TempPath::new("book_dur_drop");
 
     {

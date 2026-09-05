@@ -1,5 +1,5 @@
 use amethystate::amethystate;
-use amethystate::store::StorageError;
+use amethystate::store::OpenStore;
 use amethystate::store::builder::{StoreBuilder, default_backend};
 #[cfg(all(windows, any(feature = "json", feature = "toml", feature = "ron")))]
 use amethystate::store::config::{FileWritePolicy, WriteAttempts};
@@ -45,15 +45,13 @@ fn a_path_that_cannot_be_written_is_reported() {
 
     std::fs::create_dir_all(path.path()).unwrap();
 
-    let report = StoreBuilder::new(path.path())
+    let refused = StoreBuilder::new(path.path())
         .build()
         .expect_err("a directory where the store's file goes was opened as a store");
 
-    assert_eq!(
-        report.current_context(),
-        &StorageError::Open,
-        "a path that cannot be used is an open failure, not a read or a codec one"
-    );
+    let OpenStore::WouldNotOpen { why: report } = refused else {
+        panic!("a path that cannot be used is an open failure, not a read or a codec one")
+    };
 
     let named: Vec<&StoreFile> = all::<StoreFile, _>(&report).collect();
     assert_eq!(

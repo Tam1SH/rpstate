@@ -12,8 +12,8 @@
 #![cfg(feature = "sqlite")]
 
 use amethystate::Store;
+use amethystate::store::StoreBackend;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{StorageResult, StoreBackend};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use serde::de::DeserializeOwned;
@@ -30,7 +30,7 @@ fn ns(joined: &str) -> StorePath {
 
 /// A sqlite store with the debouncer pushed out, so nothing lands except at a
 /// `save_now`.
-fn open(path: &Path) -> StorageResult<Store> {
+fn open(path: &Path) -> Result<Store, amethystate::store::OpenStore> {
     StoreBuilder::new(path)
         .backend(Backend::Sqlite)
         .disk(|d| {

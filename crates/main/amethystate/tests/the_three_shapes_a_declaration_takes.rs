@@ -1,7 +1,7 @@
 mod common;
 
+use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::{StoreBackend, StoreExt, amethystate};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 

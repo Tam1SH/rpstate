@@ -1,14 +1,11 @@
-use amethystate::store::StorageError;
+use amethystate::store::WriteValue;
 use amethystate::store::builder::{Backend, StoreBuilder, default_backend};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
-use std::error::Error;
 
 #[backends(Redb)]
-fn a_path_deeper_than_the_cap_is_refused(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_path_deeper_than_the_cap_is_refused(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_limits_depth");
     let settings = path.path();
 
@@ -25,7 +22,7 @@ fn a_path_deeper_than_the_cap_is_refused(
     //@show-end
 
     let refused = store.set(&deep, &1u32).unwrap_err();
-    assert_eq!(refused.current_context(), &StorageError::Depth);
+    assert!(matches!(refused, WriteValue::TooDeep { .. }), "{refused}");
 
     store.set(StorePath::from_segments(["a", "b", "c", "d"]), &1u32)?;
 
@@ -33,9 +30,7 @@ fn a_path_deeper_than_the_cap_is_refused(
 }
 
 #[backends(Redb)]
-fn a_store_can_promise_to_stay_readable_elsewhere(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_store_can_promise_to_stay_readable_elsewhere(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_limits_portable");
     let settings = path.path();
 

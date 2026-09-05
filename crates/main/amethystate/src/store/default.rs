@@ -19,9 +19,11 @@ use crate::MigrationReport;
 use crate::store::config::StoreConfig;
 use crate::store::traits::StoreLayout;
 use crate::store::{
-    InitState, StorageResult, StoreBackend, StoreCallback, StoreExt, SubscriptionId, to_path,
+    Flush, FlushResult, InitState, ReadResult, ScanKeys, ScanResult, StorageError, StorageResult,
+    StoreBackend, StoreCallback, StoreExt, SubscriptionId, WriteValue, to_path,
 };
 use amethystate_core::path::{IntoStorePath, PathRef, StorePath};
+use error_stack::Report;
 use std::sync::Arc;
 
 /// A handle on an open store.
@@ -157,7 +159,7 @@ impl Store {
     pub fn get<T: serde::de::DeserializeOwned>(
         &self,
         path: impl IntoStorePath,
-    ) -> StorageResult<Option<T>> {
+    ) -> ReadResult<Option<T>> {
         StoreExt::get(self, path)
     }
     /// Writes a value at `path`, creating it or replacing what was there.
@@ -170,12 +172,16 @@ impl Store {
         &self,
         path: impl IntoStorePath,
         value: &T,
-    ) -> StorageResult<()> {
+    ) -> Result<(), WriteValue> {
         StoreExt::set(self, path, value)
     }
     /// [`Store::set`] for a path already owned, saving the clone the borrowed
     /// form would make.
-    pub fn set_owned<T: serde::Serialize>(&self, path: StorePath, value: &T) -> StorageResult<()> {
+    pub fn set_owned<T: serde::Serialize>(
+        &self,
+        path: StorePath,
+        value: &T,
+    ) -> Result<(), WriteValue> {
         StoreExt::set_owned(self, path, value)
     }
     /// [`Store::set`] tagged with who made the write.
@@ -187,7 +193,7 @@ impl Store {
         path: impl IntoStorePath,
         value: &T,
         source: Option<uuid::Uuid>,
-    ) -> StorageResult<()> {
+    ) -> Result<(), WriteValue> {
         StoreExt::set_with_source(self, path, value, source)
     }
     /// [`Store::set_with_source`] for a path already owned.
@@ -196,35 +202,51 @@ impl Store {
         path: StorePath,
         value: &T,
         source: Option<uuid::Uuid>,
-    ) -> StorageResult<()> {
+    ) -> Result<(), WriteValue> {
         StoreExt::set_owned_with_source(self, path, value, source)
     }
     /// Removes whatever is at `path`. Removing an absent path is not an error.
-    pub fn delete(&self, path: impl IntoStorePath) -> StorageResult<()> {
-        StoreBackend::delete(self, &to_path(path)?)
+    pub fn delete(&self, path: impl IntoStorePath) -> Result<(), WriteValue> {
+        let path = to_path(path)?;
+        StoreBackend::delete(self, &path).map_err(|why| WriteValue::from_store(&path, why))
     }
 
     /// Removes every level under `prefix`, and the value at `prefix` itself.
-    pub fn delete_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
-        StoreBackend::delete_prefix(self, &to_path(prefix)?)
+    pub fn delete_prefix(&self, prefix: impl IntoStorePath) -> Result<(), WriteValue> {
+        let prefix = to_path(prefix)?;
+        StoreBackend::delete_prefix(self, &prefix)
+            .map_err(|why| WriteValue::from_store(&prefix, why))
     }
 
     /// Commits what is buffered under `prefix`.
-    pub fn flush_prefix(&self, prefix: impl IntoStorePath) -> StorageResult<()> {
-        StoreBackend::flush_prefix(self, &to_path(prefix)?)
+    pub fn flush_prefix(&self, prefix: impl IntoStorePath) -> FlushResult<()> {
+        let prefix = to_path(prefix).map_err(|why| {
+            Flush::from_store(Report::new(why).change_context(StorageError::Path))
+        })?;
+        StoreBackend::flush_prefix(self, &prefix).map_err(Flush::from_store)
+    }
+
+    /// Writes everything buffered, and waits for it to land.
+    pub fn save_now(&self) -> FlushResult<()> {
+        StoreBackend::save_now(self).map_err(Flush::from_store)
+    }
+
+    /// Writes what is buffered, stops the background threads and lets go of
+    /// the file.
+    pub fn close(&self) -> FlushResult<()> {
+        StoreBackend::close(self).map_err(Flush::from_store)
     }
 
     /// The keys under `prefix`, sorted, without reading their values.
-    pub fn scan_keys(&self, prefix: impl IntoStorePath) -> StorageResult<Vec<StorePath>> {
-        StoreBackend::scan_keys(self, &to_path(prefix)?)
+    pub fn scan_keys(&self, prefix: impl IntoStorePath) -> ScanResult<Vec<StorePath>> {
+        let prefix = to_path(prefix)?;
+        StoreBackend::scan_keys(self, &prefix).map_err(|why| ScanKeys::from_store(&prefix, why))
     }
 
     /// Every key under `prefix` with its bytes, sorted by key.
-    pub fn scan_prefix(
-        &self,
-        prefix: impl IntoStorePath,
-    ) -> StorageResult<Vec<(StorePath, Vec<u8>)>> {
-        StoreBackend::scan_prefix(self, &to_path(prefix)?)
+    pub fn scan_prefix(&self, prefix: impl IntoStorePath) -> ScanResult<Vec<(StorePath, Vec<u8>)>> {
+        let prefix = to_path(prefix)?;
+        StoreBackend::scan_prefix(self, &prefix).map_err(|why| ScanKeys::from_store(&prefix, why))
     }
 
     /// Decodes bytes that arrived in a [`StoreEvent`](crate::StoreEvent),

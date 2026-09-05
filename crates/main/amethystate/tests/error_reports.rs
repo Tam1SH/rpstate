@@ -13,9 +13,10 @@
 use amethystate::Field;
 use amethystate::store::StoreBackend;
 use amethystate::store::builder::{StoreBuilder, default_backend};
-use amethystate::store::reactive_map_with_path_only;
+use amethystate::store::{OpenStruct, ReadValue, StorageError, reactive_map_with_path_only};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
+use error_stack::Report;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -34,6 +35,14 @@ fn store(name: &str) -> (TempPath, amethystate::Store) {
     (path, store)
 }
 
+/// The report an open carries when the store is what went wrong.
+fn from_the_store(why: OpenStruct) -> Report<StorageError> {
+    match why {
+        OpenStruct::Store(report) => report,
+        other => panic!("the store was expected to be at fault: {other}"),
+    }
+}
+
 /// A level with no name, refused before anything is written.
 #[test]
 fn a_path_with_an_empty_level() {
@@ -41,7 +50,7 @@ fn a_path_with_an_empty_level() {
 
     let err = store.set(["ui", ""], &1u32).unwrap_err();
 
-    insta::assert_snapshot!("empty_level", shape(&err));
+    insta::assert_snapshot!("empty_level", err.to_string());
 }
 
 /// Bytes that are not the type asked for. The report has to name the type it
@@ -80,7 +89,11 @@ fn a_stored_value_read_as_the_wrong_type() {
 
     let err = store.get::<u32>(["cfg", "name"]).unwrap_err();
 
-    insta::assert_snapshot!(per_engine(default_backend(), "get_wrong_type"), shape(&err));
+    let ReadValue::WillNotRead { why, .. } = &err else {
+        panic!("{err}")
+    };
+
+    insta::assert_snapshot!(per_engine(default_backend(), "get_wrong_type"), shape(why));
 }
 
 /// A map entry that will not read. The report has to name the map and the
@@ -101,7 +114,7 @@ fn a_map_entry_that_will_not_read() {
 
     insta::assert_snapshot!(
         per_engine(default_backend(), "map_entry_wrong_type"),
-        shape(&err)
+        shape(&from_the_store(err))
     );
 }
 
@@ -118,7 +131,7 @@ fn a_map_default_with_an_empty_key() {
     )
     .unwrap_err();
 
-    insta::assert_snapshot!("map_empty_default_key", shape(&err));
+    insta::assert_snapshot!("map_empty_default_key", shape(&from_the_store(err)));
 }
 
 /// A key that cannot be a level. The map is not at fault and neither is the
@@ -131,7 +144,7 @@ fn a_map_key_that_cannot_be_a_level() {
 
     let err = widths.insert(String::new(), &1).unwrap_err();
 
-    insta::assert_snapshot!("map_empty_key", shape(&err));
+    insta::assert_snapshot!("map_empty_key", err.to_string());
 }
 
 /// The strict write on a key that is not there. `insert` is the one that adds
@@ -143,7 +156,7 @@ fn a_strict_write_to_an_absent_key() {
 
     let err = widths.update("cpu", &1).unwrap_err();
 
-    insta::assert_snapshot!("map_update_on_an_absent_key", shape(&err));
+    insta::assert_snapshot!("map_update_on_an_absent_key", err.to_string());
 }
 
 /// Both read-modify-write forms refuse an absent key the same way, and each
@@ -162,7 +175,7 @@ fn a_read_modify_write_on_an_absent_key() {
     ];
 
     for (way, err) in ["update_with", "modify"].into_iter().zip(refused) {
-        insta::assert_snapshot!(format!("map_{way}_on_an_absent_key"), shape(&err));
+        insta::assert_snapshot!(format!("map_{way}_on_an_absent_key"), err.to_string());
     }
 }
 
@@ -176,7 +189,7 @@ fn a_write_an_interceptor_turned_down() {
 
     let err = widths.insert("cpu".to_string(), &1).unwrap_err();
 
-    insta::assert_snapshot!("map_insert_an_interceptor_refused", shape(&err));
+    insta::assert_snapshot!("map_insert_an_interceptor_refused", err.to_string());
 }
 
 /// The same refusal aimed at the whole map rather than one key, which is the
@@ -190,7 +203,7 @@ fn a_clear_an_interceptor_turned_down() {
     let _guard = widths.intercept(|_| None);
     let err = widths.clear().unwrap_err();
 
-    insta::assert_snapshot!("map_clear_an_interceptor_refused", shape(&err));
+    insta::assert_snapshot!("map_clear_an_interceptor_refused", err.to_string());
 }
 
 /// A field write an interceptor turned down.
@@ -203,7 +216,7 @@ fn a_field_write_an_interceptor_turned_down() {
 
     let err = width.set(9).unwrap_err();
 
-    insta::assert_snapshot!("field_an_interceptor_refused", shape(&err));
+    insta::assert_snapshot!("field_an_interceptor_refused", err.to_string());
 }
 
 /// The same on a volatile field, which has no store behind it. The refusal is
@@ -218,7 +231,7 @@ fn a_volatile_field_write_an_interceptor_turned_down() {
 
     let err = session.set("alice".to_string()).unwrap_err();
 
-    insta::assert_snapshot!("volatile_field_an_interceptor_refused", shape(&err));
+    insta::assert_snapshot!("volatile_field_an_interceptor_refused", err.to_string());
 }
 
 /// A `Kv` write at a name that cannot be a level.
@@ -228,7 +241,7 @@ fn a_kv_name_that_cannot_be_a_level() {
 
     let err = store.kv().set("", &1u32).unwrap_err();
 
-    insta::assert_snapshot!("kv_empty_name", shape(&err));
+    insta::assert_snapshot!("kv_empty_name", err.to_string());
 }
 
 /// A `Kv` write into a namespace, so the report carries both halves.
@@ -238,5 +251,5 @@ fn a_kv_name_under_a_namespace() {
 
     let err = store.kv().namespace("ui").set("", &1u32).unwrap_err();
 
-    insta::assert_snapshot!("kv_empty_name_in_namespace", shape(&err));
+    insta::assert_snapshot!("kv_empty_name_in_namespace", err.to_string());
 }

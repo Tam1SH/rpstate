@@ -4,10 +4,9 @@ use amethystate::store::builder::{Layout, StoreBuilder};
 use amethystate::store::{StoreBackend, StoreLayout};
 use amethystate_core::test_utils::TempPath;
 use serial_test::serial;
-use std::error::Error;
 
 #[test]
-fn a_store_opens_at_the_path_it_is_given() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_store_opens_at_the_path_it_is_given() -> anyhow::Result<()> {
     let path = TempPath::new("book_store_open");
     let settings = path.path();
 
@@ -23,8 +22,7 @@ fn a_store_opens_at_the_path_it_is_given() -> Result<(), Box<dyn Error + Send + 
 
 #[cfg(feature = "json")]
 #[test]
-fn the_engine_names_the_file_when_the_caller_does_not() -> Result<(), Box<dyn Error + Send + Sync>>
-{
+fn the_engine_names_the_file_when_the_caller_does_not() -> anyhow::Result<()> {
     let dir = TempPath::new("book_store_extension");
     std::fs::create_dir_all(dir.path())?;
     let config_dir = dir.path();
@@ -49,7 +47,7 @@ fn the_engine_names_the_file_when_the_caller_does_not() -> Result<(), Box<dyn Er
 
 #[cfg(feature = "json")]
 #[test]
-fn an_extension_the_caller_wrote_is_left_alone() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn an_extension_the_caller_wrote_is_left_alone() -> anyhow::Result<()> {
     let dir = TempPath::new("book_store_named_ext");
     std::fs::create_dir_all(dir.path())?;
     let config_dir = dir.path();
@@ -74,7 +72,7 @@ fn an_extension_the_caller_wrote_is_left_alone() -> Result<(), Box<dyn Error + S
 
 #[test]
 #[serial(beside_the_executable)]
-fn the_three_places_a_location_can_name() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_three_places_a_location_can_name() -> anyhow::Result<()> {
     //@show letting the platform say where the file goes
     let config = StoreBuilder::located(|at| at.app("my-app", "settings"))?;
 
@@ -93,7 +91,7 @@ fn the_three_places_a_location_can_name() -> Result<(), Box<dyn Error + Send + S
 
 #[test]
 #[serial(beside_the_executable)]
-fn a_location_is_worked_out_rather_than_spelled() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_location_is_worked_out_rather_than_spelled() -> anyhow::Result<()> {
     let store = StoreBuilder::located(|at| at.beside_the_executable("settings"))?.build()?;
 
     store.kv().set("port", &8080u16)?;
@@ -123,7 +121,7 @@ fn a_location_is_worked_out_rather_than_spelled() -> Result<(), Box<dyn Error + 
 }
 
 #[test]
-fn closing_lets_something_else_have_the_file() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn closing_lets_something_else_have_the_file() -> anyhow::Result<()> {
     let path = TempPath::new("book_store_closing");
     let store = StoreBuilder::new(path.path()).build()?;
     store.kv().set("port", &8080u16)?;
@@ -144,7 +142,7 @@ fn closing_lets_something_else_have_the_file() -> Result<(), Box<dyn Error + Sen
 }
 
 #[test]
-fn saving_now_says_whether_the_last_writes_landed() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn saving_now_says_whether_the_last_writes_landed() -> anyhow::Result<()> {
     let path = TempPath::new("book_store_save_now");
     let store = StoreBuilder::new(path.path()).build()?;
 

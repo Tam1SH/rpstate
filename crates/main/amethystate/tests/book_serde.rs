@@ -2,7 +2,6 @@ use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::TempPath;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 
 #[amethystate(prefix = "bare")]
 pub struct Bare {
@@ -11,8 +10,7 @@ pub struct Bare {
 }
 
 #[test]
-fn a_field_with_no_annotation_takes_its_types_default() -> Result<(), Box<dyn Error + Send + Sync>>
-{
+fn a_field_with_no_annotation_takes_its_types_default() -> anyhow::Result<()> {
     let path = TempPath::new("book_serde_bare");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -37,7 +35,7 @@ pub struct NetState {
 //@show-end
 
 #[test]
-fn serde_names_where_a_field_goes() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn serde_names_where_a_field_goes() -> anyhow::Result<()> {
     let path = TempPath::new("book_serde_names");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -65,7 +63,7 @@ pub struct Editor {
 //@show-end
 
 #[test]
-fn a_flattened_child_writes_at_its_holders_level() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_flattened_child_writes_at_its_holders_level() -> anyhow::Result<()> {
     let path = TempPath::new("book_serde_flatten");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -96,7 +94,7 @@ pub struct Service {
 //@show-end
 
 #[test]
-fn a_leaf_keeps_its_own_serde() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_leaf_keeps_its_own_serde() -> anyhow::Result<()> {
     let path = TempPath::new("book_serde_leaf");
     let store = StoreBuilder::new(path.path()).build()?;
 

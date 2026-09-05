@@ -1,5 +1,5 @@
 #[cfg(feature = "ron")]
-use amethystate::store::StorageError;
+use amethystate::store::WriteValue;
 #[cfg(feature = "ron")]
 use amethystate::store::builder::Backend;
 use amethystate::store::builder::StoreBuilder;
@@ -61,7 +61,10 @@ fn ron_refuses_an_enum_rather_than_dropping_its_variant() {
         let refused = store
             .set(["probe", "mode"], &value)
             .expect_err(&format!("ron took a {label} it cannot read back"));
-        assert_eq!(refused.current_context(), &StorageError::Codec, "{label}");
+        assert!(
+            matches!(refused, WriteValue::WillNotEncode { .. }),
+            "{label}: {refused}"
+        );
 
         assert_eq!(
             store.get::<u8>(["probe", "mode"]).unwrap(),
@@ -84,7 +87,9 @@ fn the_refusal_says_which_shape_and_why() {
         .set(["probe", "mode"], &Mode::On(3))
         .expect_err("ron took an enum");
 
-    assert_eq!(refused.current_context(), &StorageError::Codec);
+    let WriteValue::WillNotEncode { why: refused, .. } = &refused else {
+        panic!("{refused}")
+    };
 
     let rendered = format!("{refused:?}");
     assert!(rendered.contains("an enum"), "{rendered}");

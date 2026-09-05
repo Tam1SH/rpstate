@@ -561,8 +561,12 @@ impl StoreBuilder {
     /// The file name carries no extension in any of those, so the engine that
     /// runs names it - see [`StoreBuilder::backend`] for what that means when
     /// the engine is chosen afterwards.
-    pub fn located(pick: impl FnOnce(Location) -> StorageResult<PathBuf>) -> StorageResult<Self> {
-        Ok(Self::new(pick(Location)?))
+    pub fn located(
+        pick: impl FnOnce(Location) -> StorageResult<PathBuf>,
+    ) -> Result<Self, crate::store::OpenStore> {
+        Ok(Self::new(
+            pick(Location).map_err(crate::store::OpenStore::from_store)?,
+        ))
     }
 
     /// How long a write waits in the buffer before it is flushed.
@@ -804,11 +808,14 @@ impl StoreBuilder {
     /// store.kv().set("a", &1u8).unwrap();
     /// assert_eq!(store.kv().get::<u8>("a").unwrap(), Some(1));
     /// ```
-    pub fn build(self) -> StorageResult<Store> {
+    pub fn build(self) -> Result<Store, crate::store::OpenStore> {
         let context = Arc::new(self.check_context);
         let fallbacks = self.fallbacks;
         let migration_set = self.migration_builder.into_set();
-        let (store, _) = self.backend.open_public(self.config, migration_set)?;
+        let (store, _) = self
+            .backend
+            .open_public(self.config, migration_set)
+            .map_err(crate::store::OpenStore::from_store)?;
 
         Ok(store.with_context(context).with_fallbacks(fallbacks))
     }
@@ -818,12 +825,17 @@ impl StoreBuilder {
     /// This is also the path that collects `#[migrate]` steps, so a store
     /// opened with [`StoreBuilder::build`] runs only the migrations declared
     /// by hand.
-    pub fn build_with_migration(mut self) -> StorageResult<(Store, MigrationReport)> {
+    pub fn build_with_migration(
+        mut self,
+    ) -> Result<(Store, MigrationReport), crate::store::OpenStore> {
         self.migration_builder.collect_codegen();
         let context = Arc::new(self.check_context);
         let fallbacks = self.fallbacks;
         let migration_set = self.migration_builder.into_set();
-        let (store, report) = self.backend.open_public(self.config, migration_set)?;
+        let (store, report) = self
+            .backend
+            .open_public(self.config, migration_set)
+            .map_err(crate::store::OpenStore::from_store)?;
         report.log_to_tracing();
         Ok((
             store.with_context(context).with_fallbacks(fallbacks),

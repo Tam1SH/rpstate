@@ -4,7 +4,6 @@ use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 mod common;
-use common::shape;
 
 #[backends(Redb)]
 fn a_write_after_shutdown_is_refused_and_what_came_before_it_is_on_disk(backend: Backend) {
@@ -21,7 +20,7 @@ fn a_write_after_shutdown_is_refused_and_what_came_before_it_is_on_disk(backend:
         .kv()
         .set("port", &9090u16)
         .expect_err("a closed global store took a write");
-    insta::assert_snapshot!("write_after_shutdown", shape(&refused));
+    insta::assert_snapshot!("write_after_shutdown", refused.to_string());
 
     assert!(amethystate::shutdown().is_ok());
 

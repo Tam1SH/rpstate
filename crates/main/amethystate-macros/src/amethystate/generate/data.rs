@@ -355,27 +355,31 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 }
 
                 impl #name {
-                    pub fn save_lazy(&self) -> #crate_name::StorageResult<()> {
+                    pub fn save_lazy(&self) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         self.inner
                             .__amethystate_save_to(&self.store, &self.prefix)
                     }
 
-                    pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
+                    pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         f(&mut self.inner);
                         self.save_lazy()
                     }
 
-                    pub fn mutate(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
+                    pub fn mutate(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         f(&mut self.inner);
                         self.save()
                     }
 
-                    pub fn save(&self) -> #crate_name::StorageResult<()> {
+                    pub fn save(&self) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         self.save_lazy()?;
-                        <#crate_name::Store as #crate_name::StoreBackend>::flush_prefix(&self.store, &self.prefix)
+                        #crate_name::Store::flush_prefix(&self.store, &self.prefix)
+                            .map_err(|why| #crate_name::store::WriteValue::from_store(
+                                &self.prefix,
+                                ::core::convert::Into::into(why),
+                            ))
                     }
 
-                    pub fn load_with(store: &#crate_name::Store) -> #crate_name::StorageResult<Self> {
+                    pub fn load_with(store: &#crate_name::Store) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                         Ok(Self {
                             inner: #data_struct_name::__amethystate_load_from(store, &#prefix_path)?,
                             store: store.clone(),
@@ -385,7 +389,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 }
 
                 impl #name {
-                    pub fn load() -> #crate_name::StorageResult<Self> {
+                    pub fn load() -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                         let store = #crate_name::global_store();
                         Self::load_with(&store)
                     }
@@ -419,29 +423,33 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 }
 
                 impl #persisted_struct_name {
-                    pub fn save_lazy(&self) -> #crate_name::StorageResult<()> {
+                    pub fn save_lazy(&self) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         self.inner
                             .__amethystate_save_to(&self.store, &self.prefix)
                     }
 
-                    pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
+                    pub fn mutate_lazy(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         f(&mut self.inner);
                         self.save_lazy()
                     }
 
-                    pub fn mutate(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> #crate_name::StorageResult<()> {
+                    pub fn mutate(&mut self, f: impl FnOnce(&mut #data_struct_name)) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         f(&mut self.inner);
                         self.save()
                     }
 
-                    pub fn save(&self) -> #crate_name::StorageResult<()> {
+                    pub fn save(&self) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                         self.save_lazy()?;
-                        <#crate_name::Store as #crate_name::StoreBackend>::flush_prefix(&self.store, &self.prefix)
+                        #crate_name::Store::flush_prefix(&self.store, &self.prefix)
+                            .map_err(|why| #crate_name::store::WriteValue::from_store(
+                                &self.prefix,
+                                ::core::convert::Into::into(why),
+                            ))
                     }
                 }
 
                 impl #name {
-                    pub fn load_with(store: &#crate_name::Store) -> #crate_name::StorageResult<#persisted_struct_name> {
+                    pub fn load_with(store: &#crate_name::Store) -> ::core::result::Result<#persisted_struct_name, #crate_name::store::OpenStruct> {
                         Ok(#persisted_struct_name {
                             inner: #data_struct_name::__amethystate_load_from(store, &#prefix_path)?,
                             store: store.clone(),
@@ -451,7 +459,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 }
 
                 impl #name {
-                    pub fn load() -> #crate_name::StorageResult<#persisted_struct_name> {
+                    pub fn load() -> ::core::result::Result<#persisted_struct_name, #crate_name::store::OpenStruct> {
                         let store = #crate_name::global_store();
                         Self::load_with(&store)
                     }
@@ -506,7 +514,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             pub fn __amethystate_load_from(
                 store: &#crate_name::Store,
                 prefix: &#crate_name::store::StorePath,
-            ) -> #crate_name::StorageResult<Self> {
+            ) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
                 let __ame_result = Self {
                     #(#store_load_fields,)*
                 };
@@ -519,7 +527,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 &self,
                 store: &#crate_name::Store,
                 prefix: &#crate_name::store::StorePath,
-            ) -> #crate_name::StorageResult<()> {
+            ) -> ::core::result::Result<(), #crate_name::store::WriteValue> {
                 #(#store_save_fields)*
                 Ok(())
             }

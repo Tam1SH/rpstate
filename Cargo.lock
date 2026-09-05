@@ -199,6 +199,7 @@ dependencies = [
  "amethystate-macros",
  "amethystate-tauri",
  "amethystate-test-macros",
+ "anyhow",
  "arc-swap",
  "criterion",
  "dashmap",

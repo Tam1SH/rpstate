@@ -4,7 +4,9 @@ use crate::migration::set::MigrationSet;
 use crate::store::builder::Backend;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::{Facts, ValueBytes};
-use amethystate_core::path::{IntoStorePath, PathRef, StorePath};
+use crate::store::reading::{ReadResult, ReadValue};
+use amethystate_core::path::{IntoStorePath, PathRef, StorePath, StorePathError};
+use amethystate_core::primitives::error::WriteValue;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -123,8 +125,8 @@ impl StoreLayout {
 /// Every typed entry point takes `impl IntoStorePath` and has to make the same
 /// conversion; doing it here means the failure gets named once rather than at
 /// each of them.
-pub fn to_path(path: impl IntoStorePath) -> StorageResult<StorePath> {
-    path.into_store_path().change_context(StorageError::Path)
+pub fn to_path(path: impl IntoStorePath) -> Result<StorePath, StorePathError> {
+    path.into_store_path()
 }
 
 /// One more level under `path`, named by a map key.
@@ -412,28 +414,38 @@ impl InitState {
 
 /// The typed surface over [`StoreBackend`]. Blanket-implemented, including for
 /// `dyn StoreBackend`, so a call site never has to know which it holds.
+///
+/// This is the boundary: a read fails with [`ReadValue`] and a write with
+/// [`WriteValue`], each carrying what is known where it was raised. Under it
+/// everything still travels as a `Report<StorageError>`, and the `From` impls
+/// both ways are what let a `?` cross without a `map_err` at every line.
 pub trait StoreExt: StoreBackend {
-    fn get<T: DeserializeOwned>(&self, path: impl IntoStorePath) -> StorageResult<Option<T>> {
+    fn get<T: DeserializeOwned>(&self, path: impl IntoStorePath) -> ReadResult<Option<T>> {
         let path = to_path(path)?;
         let mut out = None;
-        let found = self.get_erased(&path, &mut |d| {
-            out = Some(
-                erased_serde::deserialize::<T>(d)
-                    .map_err(CodecError::from)
-                    .change_context(StorageError::Codec)
-                    .attach_key(&path)?,
-            );
-            Ok(())
-        })?;
+        let found = self
+            .get_erased(&path, &mut |d| {
+                out = Some(
+                    erased_serde::deserialize::<T>(d)
+                        .map_err(CodecError::from)
+                        .change_context(StorageError::Codec)
+                        .attach_key(&path)?,
+                );
+                Ok(())
+            })
+            .map_err(|why| ReadValue::from_store(&path, why))?;
         Ok(if found { out } else { None })
     }
 
-    fn set<T: Serialize>(&self, path: impl IntoStorePath, value: &T) -> StorageResult<()> {
-        self.set_erased(&to_path(path)?, &value, None)
+    fn set<T: Serialize>(&self, path: impl IntoStorePath, value: &T) -> Result<(), WriteValue> {
+        let path = to_path(path)?;
+        self.set_erased(&path, &value, None)
+            .map_err(|why| WriteValue::from_store(&path, why))
     }
 
-    fn set_owned<T: Serialize>(&self, path: StorePath, value: &T) -> StorageResult<()> {
-        self.set_owned_erased(path, &value, None)
+    fn set_owned<T: Serialize>(&self, path: StorePath, value: &T) -> Result<(), WriteValue> {
+        self.set_owned_erased(path.clone(), &value, None)
+            .map_err(|why| WriteValue::from_store(&path, why))
     }
 
     fn set_with_source<T: Serialize>(
@@ -441,8 +453,10 @@ pub trait StoreExt: StoreBackend {
         path: impl IntoStorePath,
         value: &T,
         source: Option<Uuid>,
-    ) -> StorageResult<()> {
-        self.set_erased(&to_path(path)?, &value, source)
+    ) -> Result<(), WriteValue> {
+        let path = to_path(path)?;
+        self.set_erased(&path, &value, source)
+            .map_err(|why| WriteValue::from_store(&path, why))
     }
 
     fn set_owned_with_source<T: Serialize>(
@@ -450,8 +464,9 @@ pub trait StoreExt: StoreBackend {
         path: StorePath,
         value: &T,
         source: Option<Uuid>,
-    ) -> StorageResult<()> {
-        self.set_owned_erased(path, &value, source)
+    ) -> Result<(), WriteValue> {
+        self.set_owned_erased(path.clone(), &value, source)
+            .map_err(|why| WriteValue::from_store(&path, why))
     }
 
     /// Reads bytes that arrived in a [`StoreEvent`](crate::StoreEvent) as `T`.

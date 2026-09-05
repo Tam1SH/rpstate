@@ -1,6 +1,6 @@
 #[cfg(any(feature = "json", feature = "toml"))]
-use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
+use amethystate::store::{StorageError, WriteValue};
 use amethystate_core::test_utils::TempPath;
 
 mod common;
@@ -124,7 +124,9 @@ fn the_refusal_says_what_it_is_and_why() {
         .set(["probe", "v"], &Some(None::<u32>))
         .expect_err("json took it");
 
-    assert_eq!(refused.current_context(), &StorageError::Codec);
+    let WriteValue::WillNotEncode { why: refused, .. } = &refused else {
+        panic!("{refused}")
+    };
 
     let rendered = format!("{refused:?}");
     assert!(rendered.contains("holding nothing"), "{rendered}");
@@ -143,7 +145,10 @@ fn toml_refuses_it_in_its_own_codec_before_the_screening_looks() {
         .set(["probe", "v"], &Some(None::<u32>))
         .expect_err("toml took it");
 
-    assert_eq!(refused.current_context(), &StorageError::Write);
+    assert!(
+        matches!(refused, WriteValue::Store(ref why) if *why.current_context() == StorageError::Write),
+        "{refused}"
+    );
 }
 
 #[cfg(all(feature = "ron", feature = "json"))]

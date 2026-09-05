@@ -2,7 +2,6 @@ use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
-use std::error::Error;
 
 #[amethystate(prefix = "network")]
 pub struct Network {
@@ -10,17 +9,14 @@ pub struct Network {
     pub port: u16,
 }
 
-fn open(
-    backend: Backend,
-    tag: &str,
-) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
+fn open(backend: Backend, tag: &str) -> anyhow::Result<(amethystate::Store, TempPath)> {
     let path = TempPath::new(tag);
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     Ok((store, path))
 }
 
 #[backends(all)]
-fn raw_values_at_paths(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn raw_values_at_paths(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_raw")?;
 
     //@show reading and writing without a schema
@@ -51,7 +47,7 @@ fn raw_values_at_paths(backend: Backend) -> Result<(), Box<dyn Error + Send + Sy
 
 #[backends(all)]
 #[ignore = "red on the text engines and not yet answered: what a listing under a prefix covers"]
-fn what_a_listing_covers(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn what_a_listing_covers(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_keys")?;
     let kv = store.kv();
 
@@ -85,7 +81,7 @@ fn what_a_listing_covers(backend: Backend) -> Result<(), Box<dyn Error + Send + 
 }
 
 #[backends(all)]
-fn a_cell_and_a_map_without_a_struct(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_cell_and_a_map_without_a_struct(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_primitives")?;
     let kv = store.kv();
 
@@ -103,9 +99,7 @@ fn a_cell_and_a_map_without_a_struct(backend: Backend) -> Result<(), Box<dyn Err
 }
 
 #[backends(all)]
-fn a_path_a_struct_declared_is_refused(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_path_a_struct_declared_is_refused(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_owned")?;
     let _network = Network::new_with(&store)?;
     let kv = store.kv();
@@ -123,7 +117,7 @@ fn a_path_a_struct_declared_is_refused(
 }
 
 #[backends(all)]
-fn the_stored_value_decides_the_type(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_stored_value_decides_the_type(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_types")?;
     let kv = store.kv();
 
@@ -140,9 +134,7 @@ fn the_stored_value_decides_the_type(backend: Backend) -> Result<(), Box<dyn Err
 }
 
 #[backends(all)]
-fn a_cell_fills_the_path_it_was_asked_about(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_cell_fills_the_path_it_was_asked_about(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_empty")?;
     let kv = store.kv();
     let empty = kv.namespace("never_written");
@@ -160,7 +152,7 @@ fn a_cell_fills_the_path_it_was_asked_about(
 }
 
 #[backends(all)]
-fn raw_writes_are_checked_by_nothing(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn raw_writes_are_checked_by_nothing(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_raw_types")?;
     let kv = store.kv();
 

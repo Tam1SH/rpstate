@@ -1,9 +1,8 @@
 use amethystate::amethystate;
+use amethystate::observability::Reason;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::store::facts::{self, Key, Refused, all};
-use amethystate::store::{CheckContext, Invalid, StorageError};
+use amethystate::store::{CheckContext, Invalid, OpenStruct};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 mod common;
@@ -64,42 +63,38 @@ fn themes() -> InstalledThemes {
 }
 
 #[test]
-fn a_value_the_check_refuses_does_not_open_a_strict_struct()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_value_the_check_refuses_does_not_open_a_strict_struct() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_strict");
     let store = StoreBuilder::new(path.path()).build()?;
 
     store.set(["checked_strict", "font_size"], &3u8)?;
 
-    let refused = StrictUi::new_with(&store).unwrap_err();
-
-    let said: Vec<&Refused> = all::<Refused, _>(&refused).collect();
-    assert_eq!(
-        said.first().map(|r| r.0.as_str()),
-        Some("a font size below 6 renders nothing")
-    );
+    match StrictUi::new_with(&store).unwrap_err() {
+        OpenStruct::Refused { said, .. } => {
+            assert_eq!(&*said, "a font size below 6 renders nothing")
+        }
+        other => panic!("{other}"),
+    }
 
     Ok(())
 }
 
 #[test]
-fn a_refused_open_hands_over_the_path_and_the_reason() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_refused_open_hands_over_the_path_and_the_reason() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_matched");
     let store = StoreBuilder::new(path.path()).build()?;
 
     store.set(["checked_strict", "font_size"], &3u8)?;
 
     //@show telling one refused open from another
-    let refused = StrictUi::new_with(&store).unwrap_err();
-
-    let failed_at = facts::all::<Key, _>(&refused).next();
-    let said = facts::all::<Refused, _>(&refused).next();
-
-    match (refused.current_context(), failed_at, said) {
-        (StorageError::Read, Some(Key(at)), Some(Refused(why))) => {
-            eprintln!("{at} will not do: {why}")
+    match StrictUi::new_with(&store) {
+        Ok(_) => {}
+        Err(OpenStruct::Refused { at, said }) => eprintln!("{at} will not do: {said}"),
+        Err(OpenStruct::WillNotRead { at, why }) => eprintln!("{at} is unreadable: {why}"),
+        Err(OpenStruct::Claimed(taken)) => {
+            eprintln!("{} already holds {}", taken.held_by, taken.at)
         }
-        _ => return Err(refused.into()),
+        Err(other) => return Err(other.into()),
     }
     //@show-end
 
@@ -107,8 +102,7 @@ fn a_refused_open_hands_over_the_path_and_the_reason() -> Result<(), Box<dyn Err
 }
 
 #[test]
-fn try_get_hands_over_the_same_facts_the_open_would_have()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn try_get_hands_over_the_same_facts_the_open_would_have() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_try_get_matched");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 
@@ -119,12 +113,12 @@ fn try_get_hands_over_the_same_facts_the_open_would_have()
     //@show asking a field what the store disagrees with
     let held = match ui.font_size().try_get() {
         Ok(size) => size,
-        Err(unread) => {
-            let said = facts::all::<Refused, _>(&unread).next();
-
-            match said {
-                Some(Refused(why)) => eprintln!("running on the default: {why}"),
-                None => eprintln!("the stored bytes will not decode"),
+        Err(no) => {
+            match no.reason {
+                Reason::Refused(said) => eprintln!("running on the default: {said}"),
+                Reason::WillNotRead(said) => eprintln!("{} will not decode: {said}", no.at),
+                Reason::Occupied(said) => eprintln!("{} was already taken: {said}", no.at),
+                _ => eprintln!("{} is not what the store has", no.at),
             }
 
             ui.font_size().get()
@@ -138,8 +132,7 @@ fn try_get_hands_over_the_same_facts_the_open_would_have()
 }
 
 #[test]
-fn a_refused_value_takes_the_default_and_try_get_says_why()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_refused_value_takes_the_default_and_try_get_says_why() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_lenient");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 
@@ -155,7 +148,7 @@ fn a_refused_value_takes_the_default_and_try_get_says_why()
 }
 
 #[test]
-fn a_refused_value_is_left_where_it_is() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_refused_value_is_left_where_it_is() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_untouched");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 
@@ -168,7 +161,7 @@ fn a_refused_value_is_left_where_it_is() -> Result<(), Box<dyn Error + Send + Sy
 }
 
 #[test]
-fn a_value_the_check_accepts_is_read_as_it_is() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_value_the_check_accepts_is_read_as_it_is() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_accepted");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 
@@ -182,8 +175,7 @@ fn a_value_the_check_accepts_is_read_as_it_is() -> Result<(), Box<dyn Error + Se
 }
 
 #[test]
-fn a_check_judges_the_value_against_what_the_application_gave()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_check_judges_the_value_against_what_the_application_gave() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_context");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 
@@ -197,7 +189,7 @@ fn a_check_judges_the_value_against_what_the_application_gave()
 }
 
 #[test]
-fn a_theme_the_application_does_not_have_is_refused() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_theme_the_application_does_not_have_is_refused() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_unknown_theme");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 
@@ -212,7 +204,7 @@ fn a_theme_the_application_does_not_have_is_refused() -> Result<(), Box<dyn Erro
 }
 
 #[test]
-fn a_check_whose_input_nobody_gave_refuses_the_value() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_check_whose_input_nobody_gave_refuses_the_value() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_no_context");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -227,8 +219,7 @@ fn a_check_whose_input_nobody_gave_refuses_the_value() -> Result<(), Box<dyn Err
 }
 
 #[test]
-fn a_loaded_struct_takes_the_default_over_a_refused_value()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_loaded_struct_takes_the_default_over_a_refused_value() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_loaded");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -242,30 +233,26 @@ fn a_loaded_struct_takes_the_default_over_a_refused_value()
 }
 
 #[test]
-fn a_strict_loaded_struct_refuses_to_load_at_all() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_strict_loaded_struct_refuses_to_load_at_all() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_loaded_strict");
     let store = StoreBuilder::new(path.path()).build()?;
 
     store.set(["checked_loaded_strict", "font_size"], &3u8)?;
 
-    let refused = match StrictLoadedUi::load_with(&store) {
+    match StrictLoadedUi::load_with(&store) {
         Ok(_) => panic!("a value the check refuses must not load"),
-        Err(report) => report,
-    };
-
-    let said: Vec<&Refused> = all::<Refused, _>(&refused).collect();
-    assert_eq!(
-        said.first().map(|r| r.0.as_str()),
-        Some("a font size below 6 renders nothing")
-    );
+        Err(OpenStruct::Refused { said, .. }) => {
+            assert_eq!(&*said, "a font size below 6 renders nothing")
+        }
+        Err(other) => panic!("{other}"),
+    }
 
     Ok(())
 }
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn an_edit_from_outside_that_the_check_refuses_is_not_taken()
--> Result<(), Box<dyn Error + Send + Sync>> {
+fn an_edit_from_outside_that_the_check_refuses_is_not_taken() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_external");
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
@@ -290,7 +277,7 @@ fn an_edit_from_outside_that_the_check_refuses_is_not_taken()
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn an_edit_from_outside_the_check_accepts_arrives() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn an_edit_from_outside_the_check_accepts_arrives() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_external_good");
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())
@@ -312,8 +299,7 @@ fn an_edit_from_outside_the_check_accepts_arrives() -> Result<(), Box<dyn Error 
 }
 
 #[test]
-fn a_store_that_agrees_with_every_check_opens_quietly() -> Result<(), Box<dyn Error + Send + Sync>>
-{
+fn a_store_that_agrees_with_every_check_opens_quietly() -> anyhow::Result<()> {
     let path = TempPath::new("field_check_ordinary");
     let store = StoreBuilder::new(path.path()).context(themes()).build()?;
 

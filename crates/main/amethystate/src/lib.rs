@@ -9,6 +9,7 @@ mod macros;
 pub mod migration;
 pub mod observability;
 pub mod reactive;
+pub mod schema;
 pub mod shape;
 pub mod store;
 
@@ -30,7 +31,7 @@ pub use store::StoreSubscription;
 
 pub mod errors {
     pub use crate::codec::CodecError;
-    pub use crate::reactive::error::{FieldError, ReactiveMapError, WriteError, WriteResult};
+    pub use crate::reactive::error::{FieldError, ReactiveMapError, WriteResult, WriteValue};
     pub use crate::store::StorageError;
     pub use amethystate_core::facts;
     pub use error_stack::Report;

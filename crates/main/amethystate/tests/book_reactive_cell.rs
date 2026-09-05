@@ -3,7 +3,6 @@ use amethystate::{ReactiveCell, ReactiveMap, amethystate};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::collections::HashMap;
-use std::error::Error;
 
 #[amethystate(prefix = "ui")]
 pub struct Ui {
@@ -15,7 +14,7 @@ pub struct Ui {
 }
 
 #[backends(all)]
-fn four_things_erase_into_one_type(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn four_things_erase_into_one_type(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_cell_sources");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
@@ -42,9 +41,7 @@ fn four_things_erase_into_one_type(backend: Backend) -> Result<(), Box<dyn Error
 }
 
 #[backends(all)]
-fn a_cell_reads_writes_and_is_watched(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_cell_reads_writes_and_is_watched(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_cell_ops");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
@@ -68,9 +65,7 @@ fn a_cell_reads_writes_and_is_watched(
 }
 
 #[backends(all)]
-fn an_entry_cell_is_empty_until_its_key_exists(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn an_entry_cell_is_empty_until_its_key_exists(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_cell_entry");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;
@@ -94,9 +89,7 @@ fn an_entry_cell_is_empty_until_its_key_exists(
 }
 
 #[backends(all)]
-fn a_view_dies_with_its_source_and_an_owning_cell_does_not(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_view_dies_with_its_source_and_an_owning_cell_does_not(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_cell_owning");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = Ui::new_with(&store)?;

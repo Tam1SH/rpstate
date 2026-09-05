@@ -6,7 +6,7 @@
 
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::reactive_map_with_path_only;
-use amethystate::store::{StorageError, StoreBackend};
+use amethystate::store::{OpenStruct, StorageError, StoreBackend, WriteValue};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
@@ -59,6 +59,10 @@ fn a_map_entry_of_the_wrong_type_does_not_read_back_as_a_default(backend: Backen
     )
     .unwrap_err();
 
+    let OpenStruct::Store(err) = err else {
+        panic!("{err}")
+    };
+
     assert_eq!(err.current_context(), &StorageError::Codec, "got {err:?}");
     assert!(
         format!("{err:?}").contains("cpu"),
@@ -81,6 +85,10 @@ fn a_map_default_whose_key_is_empty_fails_rather_than_vanishing(backend: Backend
         reactive_map_with_path_only::<String, u32>(&store, ["sizes"], defaults, Uuid::new_v4())
             .unwrap_err();
 
+    let OpenStruct::Store(err) = err else {
+        panic!("{err}")
+    };
+
     assert_eq!(err.current_context(), &StorageError::Path, "got {err:?}");
 }
 
@@ -97,6 +105,6 @@ fn an_empty_level_is_refused_and_the_store_is_untouched(backend: Backend) {
 
     let err = store.set(["kept", ""], &2u32).unwrap_err();
 
-    assert_eq!(err.current_context(), &StorageError::Path, "got {err:?}");
+    assert!(matches!(err, WriteValue::NotAPath(_)), "got {err:?}");
     assert_eq!(store.get::<u32>(["kept"]).unwrap(), Some(1));
 }

@@ -7,7 +7,6 @@ use std::thread;
 use std::time::Duration;
 
 mod common;
-use common::shape;
 
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -42,7 +41,7 @@ fn a_durable_write_after_a_close_is_refused_rather_than_awaited(backend: Backend
     let refused = answered_within(move || state.port().durable().set(8080))
         .expect_err("a durable write was taken by a closed store");
 
-    insta::assert_snapshot!("durable_set_after_close", shape(&refused));
+    insta::assert_snapshot!("durable_set_after_close", refused.to_string());
 }
 
 #[backends(all)]
@@ -62,5 +61,5 @@ fn an_awaited_durable_write_after_a_close_is_refused_too(backend: Backend) {
     })
     .expect_err("an awaited durable write was taken by a closed store");
 
-    insta::assert_snapshot!("durable_set_async_after_close", shape(&refused));
+    insta::assert_snapshot!("durable_set_async_after_close", refused.to_string());
 }

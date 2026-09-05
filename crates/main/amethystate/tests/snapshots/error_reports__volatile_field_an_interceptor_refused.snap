@@ -1,8 +1,5 @@
 ---
 source: crates/main/amethystate/tests/error_reports.rs
-expression: shape(&err)
+expression: err.to_string()
 ---
-an interceptor rejected the change
-├╴refused by an interceptor on the field
-├╴key: app.session
-╰╴a volatile field: nothing was going to be stored either way
+an interceptor turned down the write to app.session: refused by an interceptor on the field

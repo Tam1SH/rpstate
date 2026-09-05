@@ -1,12 +1,11 @@
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::{StoreBackend, StoreLayout};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
 
 mod common;
 
 #[test]
-fn a_store_says_which_files_it_opened() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_store_says_which_files_it_opened() -> anyhow::Result<()> {
     let path = TempPath::new("book_files_layout");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -43,8 +42,7 @@ fn a_store_says_which_files_it_opened() -> Result<(), Box<dyn Error + Send + Syn
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn a_text_store_keeps_its_bookkeeping_beside_the_data() -> Result<(), Box<dyn Error + Send + Sync>>
-{
+fn a_text_store_keeps_its_bookkeeping_beside_the_data() -> anyhow::Result<()> {
     let path = TempPath::new("book_files_text");
     let store = StoreBuilder::new(path.path())
         .backend(common::text_backend())

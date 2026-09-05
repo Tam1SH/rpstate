@@ -115,8 +115,8 @@ fn cut(s: &str, at: usize) -> String {
     }
 }
 
-fn why<C>(report: &error_stack::Report<C>) -> String {
-    cut(&format!("{report}").replace('\n', " "), 140)
+fn why(said: &impl std::fmt::Display) -> String {
+    cut(&format!("{said}").replace('\n', " "), 140)
 }
 
 fn open(at: &std::path::Path) -> Result<Store, String> {

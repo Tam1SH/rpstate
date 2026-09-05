@@ -21,11 +21,9 @@
 //! distinction the other engines keep and this one cannot.
 
 use amethystate::amethystate;
-use amethystate::store::StoreBackend;
 use amethystate::store::builder::{Backend, StoreBuilder, default_backend};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
 
 mod common;
 
@@ -49,7 +47,7 @@ fn holds_nothing(backend: Backend) -> Option<Option<String>> {
 
 #[cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 #[test]
-fn what_a_document_holds_for_nothing() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn what_a_document_holds_for_nothing() -> anyhow::Result<()> {
     for backend in common::text_backends() {
         let path = TempPath::new(&format!("absent_or_null_{}", backend.extension()));
         let store = StoreBuilder::new(path.path()).backend(backend).build()?;
@@ -99,7 +97,7 @@ fn what_a_document_holds_for_nothing() -> Result<(), Box<dyn Error + Send + Sync
 }
 
 #[test]
-fn nothing_and_gone_are_different() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn nothing_and_gone_are_different() -> anyhow::Result<()> {
     let path = TempPath::new("absent_or_gone");
     let store = StoreBuilder::new(path.path()).build()?;
 
@@ -112,7 +110,7 @@ fn nothing_and_gone_are_different() -> Result<(), Box<dyn Error + Send + Sync>> 
         "set to nothing"
     );
 
-    StoreBackend::delete(&store, &note_path())?;
+    store.delete(note_path())?;
 
     assert_eq!(
         store.get::<Option<String>>(note_path())?,

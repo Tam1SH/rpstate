@@ -12,9 +12,10 @@
 
 #![cfg(feature = "redb")]
 
+use amethystate::Store;
+use amethystate::store::StorePath;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{StorageError, StorePath};
-use amethystate::{StorageResult, Store};
+use amethystate::store::{ReadValue, WriteValue};
 use amethystate_core::test_utils::TempPath;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -44,8 +45,8 @@ fn open(file: &TempPath) -> Store {
 /// What a write reported and what a read of the same path answered, with the
 /// file closed and opened again in between.
 struct Trip<T> {
-    wrote: StorageResult<()>,
-    read: StorageResult<Option<T>>,
+    wrote: Result<(), WriteValue>,
+    read: Result<Option<T>, ReadValue>,
 }
 
 impl<T> Trip<T> {
@@ -441,10 +442,7 @@ fn an_empty_segment_is_refused_and_writes_nothing() {
     let refused = store.set(["probe", ""], &1u32);
     assert!(refused.is_err(), "an empty level was accepted");
     assert!(
-        refused
-            .unwrap_err()
-            .downcast_ref::<StorageError>()
-            .is_some_and(|e| matches!(e, StorageError::Path)),
+        matches!(refused.unwrap_err(), WriteValue::NotAPath(_)),
         "refused for the wrong reason"
     );
 
@@ -1580,12 +1578,10 @@ fn a_type_mismatch_is_a_failure_not_an_absence() {
     let store = open(&file);
     let wrong = store.get::<u32>(&path);
     assert!(wrong.is_err(), "a struct read back as a u32: {wrong:?}");
-    let report = wrong.unwrap_err();
-    assert_eq!(
-        report.current_context(),
-        &StorageError::Read,
-        "the outermost context names what the caller asked for: {report:?}"
-    );
+    let refused = wrong.unwrap_err();
+    let ReadValue::WillNotRead { why: report, .. } = &refused else {
+        panic!("the variant names what the caller asked for: {refused}")
+    };
     assert!(
         report.contains::<amethystate::errors::CodecError>(),
         "the codec's refusal is the cause underneath: {report:?}"

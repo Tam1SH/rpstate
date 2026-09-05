@@ -1,5 +1,5 @@
-use amethystate::store::StorageError;
 use amethystate::store::builder::StoreBuilder;
+use amethystate::store::{ReadValue, ScanKeys, WriteValue};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 
@@ -19,24 +19,25 @@ fn a_closed_store_answers_every_engine_the_same_way() {
         let read = store
             .get::<u8>(["a"])
             .expect_err(&format!("{backend:?} read from a closed store"));
-        assert_eq!(read.current_context(), &StorageError::Closed, "{backend:?}");
+        assert!(
+            matches!(read, ReadValue::Closed { .. }),
+            "{backend:?}: {read}"
+        );
 
         let scanned = store
             .scan_keys(&StorePath::root())
             .expect_err(&format!("{backend:?} scanned a closed store"));
-        assert_eq!(
-            scanned.current_context(),
-            &StorageError::Closed,
-            "{backend:?}"
+        assert!(
+            matches!(scanned, ScanKeys::Closed { .. }),
+            "{backend:?}: {scanned}"
         );
 
         let removed = store
             .delete(["a"])
             .expect_err(&format!("{backend:?} deleted from a closed store"));
-        assert_eq!(
-            removed.current_context(),
-            &StorageError::Closed,
-            "{backend:?}"
+        assert!(
+            matches!(removed, WriteValue::Closed { .. }),
+            "{backend:?}: {removed}"
         );
     }
 }

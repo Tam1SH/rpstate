@@ -1,7 +1,5 @@
 ---
 source: crates/main/amethystate/tests/error_reports.rs
-expression: shape(&err)
+expression: err.to_string()
 ---
-an interceptor rejected the change
-├╴refused by an interceptor on the field
-╰╴key: panel.width
+an interceptor turned down the write to panel.width: refused by an interceptor on the field

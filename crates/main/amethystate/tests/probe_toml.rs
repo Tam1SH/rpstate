@@ -145,8 +145,8 @@ fn temp_for(label: &str) -> TempPath {
     TempPath::new(&stem)
 }
 
-fn open(path: &std::path::Path) -> amethystate::StorageResult<Store> {
-    StoreBuilder::new(path).backend(Backend::Toml).build()
+fn open(path: &std::path::Path) -> anyhow::Result<Store> {
+    Ok(StoreBuilder::new(path).backend(Backend::Toml).build()?)
 }
 
 fn root_keys(store: &Store) -> Vec<String> {
@@ -758,9 +758,9 @@ fn scripted(
     }
 }
 
-fn expect<T: Debug + PartialEq>(
+fn expect<T: Debug + PartialEq, E: Debug>(
     label: &str,
-    got: amethystate::StorageResult<Option<T>>,
+    got: Result<Option<T>, E>,
     want: Option<T>,
 ) -> String {
     match got {

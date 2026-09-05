@@ -1,5 +1,5 @@
 use amethystate::Store;
-use amethystate::store::StorageError;
+use amethystate::store::WriteValue;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 
@@ -112,10 +112,9 @@ fn a_write_after_a_close_is_refused_rather_than_lost() {
             .set(["b"], &2u8)
             .expect_err(&format!("{backend:?} took a write after close"));
 
-        assert_eq!(
-            refused.current_context(),
-            &StorageError::Closed,
-            "{backend:?}"
+        assert!(
+            matches!(refused, WriteValue::Closed { .. }),
+            "{backend:?}: {refused}"
         );
     }
 }

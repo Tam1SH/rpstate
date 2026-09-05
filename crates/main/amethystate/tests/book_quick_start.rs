@@ -3,7 +3,6 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -50,9 +49,7 @@ pub struct SystemSettings {
 //@show-end
 
 #[backends(Redb)]
-fn opening_a_store_and_reading_a_field(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn opening_a_store_and_reading_a_field(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_quick_start");
     let settings = path.path();
 
@@ -71,9 +68,7 @@ fn opening_a_store_and_reading_a_field(
 }
 
 #[backends(all)]
-fn writing_a_field_and_hearing_about_it(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn writing_a_field_and_hearing_about_it(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_quick_start_write");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = NetworkState::new_with(&store)?;
@@ -101,9 +96,7 @@ fn writing_a_field_and_hearing_about_it(
 }
 
 #[backends(all)]
-fn a_persistent_struct_is_plain_fields(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_persistent_struct_is_plain_fields(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_quick_start_kept");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
@@ -126,9 +119,7 @@ fn a_persistent_struct_is_plain_fields(
 }
 
 #[backends(all)]
-fn a_map_takes_entries_it_was_not_declared_with(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_map_takes_entries_it_was_not_declared_with(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_quick_start_map");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     let state = SystemSettings::new_with(&store)?;

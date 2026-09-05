@@ -1,7 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::{StoreBackend, StoreLayout};
 use amethystate_test_macros::backends;
-use std::error::Error;
 use std::path::{Path, PathBuf};
 
 /// A name nothing else on this machine would choose.
@@ -75,7 +74,7 @@ fn a_store_is_found_where_an_older_release_left_it(backend: Backend) {
     moved(backend).unwrap();
 }
 
-fn moved(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn moved(backend: Backend) -> anyhow::Result<()> {
     let app = format!("{APP}-{}", backend.extension());
 
     let before = StoreBuilder::located(|at| at.app(&app, "settings-legacy"))?

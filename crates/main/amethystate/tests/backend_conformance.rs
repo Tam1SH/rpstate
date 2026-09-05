@@ -39,12 +39,14 @@
 //! that one's reason instead of its own.
 
 use amethystate::Store;
-use amethystate::errors::WriteError;
+use amethystate::errors::WriteValue;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::{
-    Occupied, StorageError, StoreEvent, StoreOp, StorePath, StorePathError, SubscriptionKind,
+    Occupied, ReadValue, StorageError, StoreEvent, StoreOp, StorePath, StorePathError,
+    SubscriptionKind,
 };
 use amethystate_core::test_utils::TempPath;
+use error_stack::Report;
 use proptest::prelude::*;
 
 mod common;
@@ -545,6 +547,7 @@ fn a_leaf_and_a_branch_coexist_at_one_name(backend: Backend) {
                 prop_assert_eq!(store.get::<u32>(&under).ok(), Some(Some(2)));
             }
             Err(refused) => {
+                let refused: Report<StorageError> = refused.into();
                 prop_assert!(
                     refused.contains::<Occupied>(),
                     "refused for some other reason: {refused:?}"
@@ -571,6 +574,7 @@ fn a_leaf_and_a_branch_coexist_at_one_name(backend: Backend) {
                 );
             }
             Err(refused) => {
+                let refused: Report<StorageError> = refused.into();
                 prop_assert!(
                     refused.contains::<Occupied>(),
                     "refused for some other reason: {refused:?}"
@@ -677,13 +681,28 @@ fn a_level_with_no_name_is_refused_and_changes_nothing(backend: Backend) {
         let at = at % (segments.len() + 1);
         segments.insert(at, String::new());
 
-        let refusals = [
-            ("get", store.get::<u32>(segments.clone()).err()),
-            ("set", store.set(segments.clone(), &1u32).err()),
-            ("delete", store.delete(segments.clone()).err()),
-            ("delete_prefix", store.delete_prefix(segments.clone()).err()),
-            ("scan_keys", store.scan_keys(segments.clone()).err()),
-            ("scan_prefix", store.scan_prefix(segments.clone()).err()),
+        let refusals: [(&str, Option<Report<StorageError>>); 6] = [
+            (
+                "get",
+                store.get::<u32>(segments.clone()).err().map(Into::into),
+            ),
+            (
+                "set",
+                store.set(segments.clone(), &1u32).err().map(Into::into),
+            ),
+            ("delete", store.delete(segments.clone()).err().map(Into::into)),
+            (
+                "delete_prefix",
+                store.delete_prefix(segments.clone()).err().map(Into::into),
+            ),
+            (
+                "scan_keys",
+                store.scan_keys(segments.clone()).err().map(Into::into),
+            ),
+            (
+                "scan_prefix",
+                store.scan_prefix(segments.clone()).err().map(Into::into),
+            ),
         ];
 
         for (call, refusal) in refusals {
@@ -732,12 +751,10 @@ fn bytes_that_will_not_decode_are_a_codec_failure(backend: Backend) {
         "a string read as a number gave {:?}",
         refusal.unwrap()
     );
-    let report = refusal.unwrap_err();
-    assert_eq!(
-        report.current_context(),
-        &StorageError::Read,
-        "the outermost context names what the caller asked for: {report:?}"
-    );
+    let refused = refusal.unwrap_err();
+    let ReadValue::WillNotRead { why: report, .. } = &refused else {
+        panic!("a read that found the wrong type is not the store's fault: {refused}")
+    };
     assert!(
         report.contains::<amethystate::errors::CodecError>(),
         "the codec's refusal is the cause underneath: {report:?}"
@@ -758,8 +775,8 @@ fn an_absent_path_reads_as_nothing_rather_than_failing(backend: Backend) {
 }
 
 /// 18. A map refuses `update` on a key it does not hold with
-///     `WriteError::KeyNotFound`, and refuses a key that cannot be a level with
-///     `WriteError::Path`; `insert` is the call that adds a key.
+///     `WriteValue::Absent`, and refuses a key that cannot be a level with
+///     `WriteValue::NotAPath`; `insert` is the call that adds a key.
 fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Backend) {
     let file = TempPath::new("conf_map_errors");
     let store = open(backend, &file);
@@ -767,7 +784,7 @@ fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Ba
 
     let refusal = map.update("absent", &1).unwrap_err();
     assert!(
-        matches!(refusal.current_context(), WriteError::KeyNotFound(key) if key == "absent"),
+        matches!(&refusal, WriteValue::Absent { at } if at.as_str() == "m.absent"),
         "{refusal:?}"
     );
 
@@ -777,13 +794,9 @@ fn a_map_refuses_a_key_it_does_not_hold_and_a_key_that_is_not_a_name(backend: Ba
 
     let refusal = map.insert(String::new(), &1).unwrap_err();
     assert!(
-        matches!(refusal.current_context(), WriteError::Path),
-        "{refusal:?}"
-    );
-    assert!(
         matches!(
-            refusal.downcast_ref::<StorePathError>(),
-            Some(StorePathError::EmptySegment { .. })
+            &refusal,
+            WriteValue::NotAPath(StorePathError::EmptySegment { .. })
         ),
         "{refusal:?}"
     );

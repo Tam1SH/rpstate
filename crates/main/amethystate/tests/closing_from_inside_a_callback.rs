@@ -5,7 +5,7 @@
 //! threads, so which thread a callback happens to be on decides whether a close
 //! from inside it can be answered at all.
 
-use amethystate::errors::StorageError;
+use amethystate::store::Flush;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::config::AfterGivingUp;
 use amethystate::store::field_with_path;
@@ -103,7 +103,7 @@ fn the_failure_callback_is_told_it_cannot_close() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("store.json");
 
-    let (tx, rx) = mpsc::channel::<Option<StorageError>>();
+    let (tx, rx) = mpsc::channel::<Option<bool>>();
     let held: Arc<Mutex<Option<amethystate::Store>>> = Arc::new(Mutex::new(None));
     let from_callback = held.clone();
 
@@ -120,7 +120,7 @@ fn the_failure_callback_is_told_it_cannot_close() {
                         .clone()
                         .map(|store| store.close())
                         .and_then(Result::err)
-                        .map(|report| *report.current_context());
+                        .map(|why| matches!(why, Flush::Reentrant));
                     let _ = tx.send(told);
                     AfterGivingUp::Ignore
                 })
@@ -144,7 +144,7 @@ fn the_failure_callback_is_told_it_cannot_close() {
 
     assert_eq!(
         told,
-        Some(StorageError::Reentrant),
+        Some(true),
         "closing from on_persist_failure should be turned down, not waited on"
     );
 

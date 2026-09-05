@@ -169,7 +169,7 @@ pub fn global_store() -> Store {
 /// ```
 pub fn shutdown() -> StorageResult<()> {
     match GLOBAL_STORE.get() {
-        Some(store) => store.close(),
+        Some(store) => Ok(store.close()?),
         None => Ok(()),
     }
 }

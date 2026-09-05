@@ -1,8 +1,5 @@
 ---
 source: crates/main/amethystate/tests/error_reports.rs
-expression: shape(&err)
+expression: err.to_string()
 ---
-an interceptor rejected the change
-├╴refused by an interceptor on the map
-├╴prefix: cols
-╰╴affects: cols.cpu
+an interceptor turned down the write to cols.cpu: refused by an interceptor on the map

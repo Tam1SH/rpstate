@@ -3,7 +3,6 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::format::{StorageFactSet, TestFormatRecord};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
-use std::error::Error;
 
 mod common;
 
@@ -11,15 +10,24 @@ fn record(store: &amethystate::Store) -> &dyn TestFormatRecord {
     StoreBackend::format_record(store).expect("every engine in this crate keeps one")
 }
 
+trait Said<T> {
+    fn said(self) -> anyhow::Result<T>;
+}
+
+impl<T> Said<T> for amethystate::StorageResult<T> {
+    fn said(self) -> anyhow::Result<T> {
+        self.map_err(|why| anyhow::Error::new(why.into_error()))
+    }
+}
+
 #[backends(all)]
-fn a_new_store_records_how_it_was_written(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_new_store_records_how_it_was_written(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("facts_new");
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
 
     let recorded = record(&store)
-        .facts()?
+        .facts()
+        .said()?
         .expect("a store this build opened records what it wrote");
 
     assert_eq!(recorded, StorageFactSet::of(backend));
@@ -31,12 +39,14 @@ fn a_new_store_records_how_it_was_written(
 #[backends(all)]
 fn a_deciding_fact_this_build_does_not_know_refuses_the_open(
     backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> anyhow::Result<()> {
     let path = TempPath::new("facts_unknown");
 
     {
         let store = StoreBuilder::new(path.path()).backend(backend).build()?;
-        record(&store).set_facts(&StorageFactSet::of(backend).with("codec.frames", "chunked"))?;
+        record(&store)
+            .set_facts(&StorageFactSet::of(backend).with("codec.frames", "chunked"))
+            .said()?;
         store.close()?;
     }
 
@@ -57,12 +67,14 @@ fn a_deciding_fact_this_build_does_not_know_refuses_the_open(
 #[backends(all)]
 fn a_known_fact_at_a_value_this_build_does_not_write_refuses_too(
     backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> anyhow::Result<()> {
     let path = TempPath::new("facts_value");
 
     {
         let store = StoreBuilder::new(path.path()).backend(backend).build()?;
-        record(&store).set_facts(&StorageFactSet::of(backend).with("path.sep", "/"))?;
+        record(&store)
+            .set_facts(&StorageFactSet::of(backend).with("path.sep", "/"))
+            .said()?;
         store.close()?;
     }
 
@@ -83,13 +95,14 @@ fn a_known_fact_at_a_value_this_build_does_not_write_refuses_too(
 #[backends(all)]
 fn a_fact_outside_the_deciding_namespaces_opens_and_survives(
     backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> anyhow::Result<()> {
     let path = TempPath::new("facts_kept");
 
     {
         let store = StoreBuilder::new(path.path()).backend(backend).build()?;
         record(&store)
-            .set_facts(&StorageFactSet::of(backend).with("wrote.by", "a build from 2027"))?;
+            .set_facts(&StorageFactSet::of(backend).with("wrote.by", "a build from 2027"))
+            .said()?;
         store.close()?;
     }
 
@@ -97,7 +110,10 @@ fn a_fact_outside_the_deciding_namespaces_opens_and_survives(
     store.set(["kept", "something"], &1u32)?;
     store.save_now()?;
 
-    let recorded = record(&store).facts()?.expect("the record is still there");
+    let recorded = record(&store)
+        .facts()
+        .said()?
+        .expect("the record is still there");
     assert_eq!(
         recorded.get("wrote.by"),
         Some("a build from 2027"),
@@ -109,15 +125,15 @@ fn a_fact_outside_the_deciding_namespaces_opens_and_survives(
 }
 
 #[backends(all)]
-fn an_empty_record_is_filled_in_on_the_way_through(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn an_empty_record_is_filled_in_on_the_way_through(backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("facts_empty");
 
     {
         let store = StoreBuilder::new(path.path()).backend(backend).build()?;
         store.set(["old", "value"], &7u32)?;
-        record(&store).set_facts(&StorageFactSet::default())?;
+        record(&store)
+            .set_facts(&StorageFactSet::default())
+            .said()?;
         store.close()?;
     }
 
@@ -125,7 +141,7 @@ fn an_empty_record_is_filled_in_on_the_way_through(
 
     assert_eq!(store.get::<u32>(["old", "value"])?, Some(7));
     assert_eq!(
-        record(&store).facts()?,
+        record(&store).facts().said()?,
         Some(StorageFactSet::of(backend)),
         "an empty set decides nothing, so the open fills it in rather than refusing"
     );

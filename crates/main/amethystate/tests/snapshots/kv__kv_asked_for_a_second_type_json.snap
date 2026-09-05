@@ -1,13 +1,10 @@
 ---
 source: crates/main/amethystate/tests/kv.rs
-expression: shape(&err)
+expression: shape(why)
 ---
-the store could not carry out the write
+the store could not read
+├╴store: <store>
 ├╴key: ui.width
-│
-├─▶ the store could not read
-│   ├╴store: <store>
-│   ╰╴key: ui.width
 │
 ├─▶ the value could not be encoded or decoded
 │   ╰╴key: ui.width

@@ -24,9 +24,9 @@
 //! what msgpack alone would have held.
 
 use amethystate::amethystate;
-#[cfg(feature = "json")]
-use amethystate::store::StorageError;
 #[cfg(any(feature = "json", feature = "sqlite"))]
+use amethystate::errors::WriteValue;
+#[cfg(feature = "json")]
 use amethystate::store::builder::Backend;
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::path::StorePath;
@@ -135,11 +135,10 @@ fn a_promise_to_stay_readable_on_json_refuses_it_where_it_would_fit() {
         .set(f64::INFINITY)
         .expect_err("msgpack holds it, but the store promised json too");
 
-    assert_eq!(
-        refused.current_context(),
-        &amethystate_core::primitives::error::WriteError::Storage
-    );
-    assert!(format!("{refused:?}").contains("NaN or an infinity"));
+    let WriteValue::WillNotEncode { why, .. } = &refused else {
+        panic!("{refused}")
+    };
+    assert!(format!("{why:?}").contains("NaN or an infinity"));
 }
 
 #[cfg(all(feature = "redb", feature = "json"))]
@@ -185,7 +184,7 @@ fn what_each_engine_does_with_a_nan() {
         };
         let outcome = match &written {
             Ok(()) => format!("taken, and the field holds {held}"),
-            Err(report) => common::shape(report),
+            Err(refused) => refused.to_string(),
         };
 
         common::measured(&[
@@ -209,5 +208,8 @@ fn the_refusal_names_the_kind_it_is() {
         .set(["loose", "ratio"], &f64::NAN)
         .expect_err("a raw write is refused the same way");
 
-    assert_eq!(refused.current_context(), &StorageError::Codec);
+    assert!(
+        matches!(refused, WriteValue::WillNotEncode { .. }),
+        "{refused}"
+    );
 }

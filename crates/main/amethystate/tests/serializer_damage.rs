@@ -8,6 +8,7 @@
 
 #![cfg(any(feature = "json", feature = "toml", feature = "ron"))]
 
+use amethystate::errors::WriteValue;
 use amethystate::store::builder::StoreBuilder;
 use amethystate::store::field_with_path;
 use amethystate::uuid::Uuid;
@@ -211,7 +212,11 @@ fn a_value_the_writer_accepts_can_always_be_read_back() {
         // The whole report: the ceiling, what the path spent of it, and why a
         // deeper value is not merely inconvenient. Any one of those as a
         // `contains` would be satisfied by a line number in the same dump.
-        insta::assert_snapshot!("too_deep_to_read_back", common::shape(&refused));
+        let WriteValue::WillNotEncode { why, .. } = &refused else {
+            panic!("{refused}")
+        };
+
+        insta::assert_snapshot!("too_deep_to_read_back", common::shape(why));
 
         assert_eq!(deep.get(), Deep(0), "a refused write changed the value");
         store.save_now().unwrap();

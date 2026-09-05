@@ -21,7 +21,6 @@
 
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
 
 mod common;
 
@@ -34,7 +33,7 @@ fn with_an_unnamed_member(document: &str, backend: Backend) -> String {
 }
 
 #[test]
-fn a_name_no_path_can_address() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_name_no_path_can_address() -> anyhow::Result<()> {
     for backend in common::text_backends() {
         let path = TempPath::new(&format!("map_opening_scan_{}", backend.extension()));
 

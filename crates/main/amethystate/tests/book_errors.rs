@@ -1,16 +1,23 @@
+use amethystate::errors::StorageError;
 use amethystate::errors::facts::{self, Entry, Key, Prefix};
-use amethystate::errors::{StorageError, WriteError};
 use amethystate::store::builder::{Backend, StoreBuilder};
+use amethystate::store::{OpenStruct, StorageResult};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::error::Error;
 
 mod common;
 
-fn open(
-    backend: Backend,
-    tag: &str,
-) -> Result<(amethystate::Store, TempPath), Box<dyn Error + Send + Sync>> {
+//@show getting at the report a set carries
+fn what_the_store_said(why: OpenStruct) -> StorageResult<()> {
+    match why {
+        OpenStruct::Store(report) => Err(report),
+        other => panic!("the store was expected to be at fault: {other}"),
+    }
+}
+//@show-end
+
+fn open(backend: Backend, tag: &str) -> anyhow::Result<(amethystate::Store, TempPath)> {
     let path = TempPath::new(tag);
     let store = StoreBuilder::new(path.path()).backend(backend).build()?;
     Ok((store, path))
@@ -51,37 +58,35 @@ fn as_printed(report: &impl std::fmt::Debug) -> String {
 }
 
 #[backends(all)]
-fn the_top_of_a_report_names_the_operation(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_top_of_a_report_names_the_operation(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_top")?;
     store.set(["labels", "cpu"], &"text".to_string())?;
 
     //@show what a failure says it is
     let refused = store.kv().map::<String, u64>("labels").unwrap_err();
+    let report = what_the_store_said(refused).unwrap_err();
 
-    let context = refused.current_context();
-    let sentence = refused.to_string();
+    let context = report.current_context();
+    let sentence = report.to_string();
     //@show-end
 
-    assert_eq!(context, &WriteError::Storage);
-    assert_eq!(sentence, "the store could not carry out the write");
+    assert_eq!(context, &StorageError::Codec);
+    assert_eq!(sentence, "the value could not be encoded or decoded");
 
     Ok(())
 }
 
 #[backends(all)]
-fn a_report_carries_the_entry_it_failed_on(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_report_carries_the_entry_it_failed_on(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_entry")?;
     store.set(["ports", "http"], &1u64)?;
 
     //@show reaching the entry that failed
     let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let report = what_the_store_said(refused).unwrap_err();
 
-    let entries: Vec<&Entry> = facts::all::<Entry, _>(&refused).collect();
-    let prefixes: Vec<&Prefix> = facts::all::<Prefix, _>(&refused).collect();
+    let entries: Vec<&Entry> = facts::all::<Entry, _>(&report).collect();
+    let prefixes: Vec<&Prefix> = facts::all::<Prefix, _>(&report).collect();
     //@show-end
 
     assert_eq!(entries[0].0, "http");
@@ -91,16 +96,15 @@ fn a_report_carries_the_entry_it_failed_on(
 }
 
 #[backends(all)]
-fn a_fact_that_is_not_there_reads_as_nothing(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_fact_that_is_not_there_reads_as_nothing(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_absent")?;
     store.set(["ports", "http"], &1u64)?;
 
     //@show asking for a fact the report does not carry
     let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let report = what_the_store_said(refused).unwrap_err();
 
-    let key = facts::all::<Key, _>(&refused).next();
+    let key = facts::all::<Key, _>(&report).next();
     //@show-end
 
     assert!(key.is_none());
@@ -109,16 +113,15 @@ fn a_fact_that_is_not_there_reads_as_nothing(
 }
 
 #[backends(all)]
-fn the_whole_chain_is_in_the_debug_form(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_whole_chain_is_in_the_debug_form(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_chain")?;
     store.set(["ports", "http"], &1u64)?;
 
     let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let report = what_the_store_said(refused).unwrap_err();
 
-    let sentence = refused.to_string();
-    let whole = format!("{refused:?}");
+    let sentence = report.to_string();
+    let whole = format!("{report:?}");
 
     assert!(!sentence.contains("entry: http"));
     assert!(whole.contains("entry: http"));
@@ -128,29 +131,28 @@ fn the_whole_chain_is_in_the_debug_form(
 }
 
 #[backends(all)]
-fn into_error_keeps_what_the_report_carried(
-    backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn into_error_keeps_what_the_report_carried(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_into")?;
     store.set(["ports", "http"], &1u64)?;
 
     let refused = store.kv().map::<u16, u64>("ports").unwrap_err();
+    let report = what_the_store_said(refused).unwrap_err();
 
     //@show turning a report into a std error
-    let std_error = refused.into_error();
+    let std_error = report.into_error();
 
     let sentence = std_error.to_string();
     let whole = format!("{std_error:?}");
     //@show-end
 
-    assert_eq!(sentence, "the store could not carry out the write");
+    assert_eq!(sentence, "the value could not be encoded or decoded");
     assert!(whole.contains("entry: http"));
 
     Ok(())
 }
 
 #[backends(Redb)]
-fn what_different_refusals_look_like(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn what_different_refusals_look_like(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_shapes")?;
 
     //@show an entry that will not decode
@@ -185,17 +187,23 @@ fn what_different_refusals_look_like(backend: Backend) -> Result<(), Box<dyn Err
 }
 
 #[backends(all)]
-fn a_report_travels_as_a_boxed_error(backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_report_travels_as_a_boxed_error(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_boxed")?;
 
-    //@show handing a report to something that wants a std error
-    fn writing(store: &amethystate::Store) -> Result<(), Box<dyn Error + Send + Sync>> {
+    //@show handing a report to whatever the caller's crate uses
+    fn with_anyhow(store: &amethystate::Store) -> anyhow::Result<()> {
         store.set(["ui", "width"], &800u32)?;
+        Ok(())
+    }
+
+    fn with_a_box(store: &amethystate::Store) -> Result<(), Box<dyn Error + Send + Sync>> {
+        store.set(["ui", "height"], &600u32)?;
         Ok(())
     }
     //@show-end
 
-    writing(&store)?;
+    with_anyhow(&store)?;
+    with_a_box(&store).map_err(|why| anyhow::anyhow!("{why}"))?;
 
     assert_eq!(store.get::<u32>(["ui", "width"])?, Some(800));
 

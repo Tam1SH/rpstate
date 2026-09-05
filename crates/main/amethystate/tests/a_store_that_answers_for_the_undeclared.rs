@@ -2,7 +2,7 @@ mod common;
 
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::{OnDelete, OnUnreadable};
-use amethystate::{AmeStateSlice, Store, StoreBackend, StoreExt, amethystate};
+use amethystate::{AmeStateSlice, Store, amethystate};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 

@@ -4,11 +4,10 @@ use amethystate::store::config::AfterGivingUp;
 use amethystate::store::config::WriteAttempts;
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
-use std::error::Error;
 use std::time::Duration;
 
 #[backends(Redb)]
-fn the_two_intervals_are_set_apart(_backend: Backend) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn the_two_intervals_are_set_apart(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_config_intervals");
     let settings = path.path();
 
@@ -26,9 +25,7 @@ fn the_two_intervals_are_set_apart(_backend: Backend) -> Result<(), Box<dyn Erro
 }
 
 #[backends(Redb)]
-fn a_failing_flush_is_retried_and_then_reported(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_failing_flush_is_retried_and_then_reported(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_config_retry");
     let settings = path.path();
 
@@ -50,9 +47,7 @@ fn a_failing_flush_is_retried_and_then_reported(
 }
 
 #[backends(Redb)]
-fn one_write_can_be_told_how_hard_to_fight(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn one_write_can_be_told_how_hard_to_fight(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_config_write");
     let settings = path.path();
 
@@ -70,9 +65,7 @@ fn one_write_can_be_told_how_hard_to_fight(
 }
 
 #[backends(Redb)]
-fn a_store_can_refuse_what_another_engine_could_not_hold(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_store_can_refuse_what_another_engine_could_not_hold(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_config_limits");
     let settings = path.path();
 
@@ -87,9 +80,7 @@ fn a_store_can_refuse_what_another_engine_could_not_hold(
 }
 
 #[backends(Redb)]
-fn reading_a_large_collection_can_use_more_than_one_core(
-    _backend: Backend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn reading_a_large_collection_can_use_more_than_one_core(_backend: Backend) -> anyhow::Result<()> {
     let path = TempPath::new("book_config_parallel");
     let settings = path.path();
 

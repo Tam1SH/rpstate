@@ -2,7 +2,6 @@
 
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
-use std::error::Error;
 
 fn user_version(path: &std::path::Path) -> i32 {
     let conn = rusqlite::Connection::open(path).unwrap();
@@ -16,7 +15,7 @@ fn set_user_version(path: &std::path::Path, value: i32) {
 }
 
 #[test]
-fn a_new_store_records_the_floor_it_needs() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn a_new_store_records_the_floor_it_needs() -> anyhow::Result<()> {
     let path = TempPath::new("sqlite_floor_new");
     let store = StoreBuilder::new(path.path())
         .backend(Backend::Sqlite)
@@ -65,8 +64,7 @@ fn a_store_needing_a_newer_sqlite_is_refused_by_name() {
 }
 
 #[test]
-fn a_store_written_before_the_floor_existed_still_opens() -> Result<(), Box<dyn Error + Send + Sync>>
-{
+fn a_store_written_before_the_floor_existed_still_opens() -> anyhow::Result<()> {
     let path = TempPath::new("sqlite_floor_zero");
     let file = path.path().with_extension("db");
 

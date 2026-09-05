@@ -66,6 +66,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 directories = { workspace = true }
 indexmap = { workspace = true }
 inventory = { workspace = true }
+dashmap = { workspace = true }
 futures-core = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 toml_edit = { workspace = true, optional = true }
@@ -79,6 +80,7 @@ uuid = { workspace = true, features = [ "v4", "js", "serde"] }
 
 [dev-dependencies]
 amethystate = { path = ".", features = ["redb", "sqlite", "json", "toml", "ron", "test-utils"] }
+anyhow = { workspace = true }
 amethystate-test-macros = { path = "../../test/amethystate-test-macros" }
 insta.workspace = true
 serde_json = { workspace = true }

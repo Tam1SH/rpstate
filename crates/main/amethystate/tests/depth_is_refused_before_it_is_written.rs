@@ -17,7 +17,7 @@
     feature = "ron"
 ))]
 
-use amethystate::store::StorageError;
+use amethystate::store::WriteValue;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -83,17 +83,15 @@ fn the_ceiling_is_the_codec_s(backend: Backend, label: &str) {
         .set(at, &Ladder((ceiling - 1) as u32))
         .expect_err("a value past the codec's ceiling was taken");
 
-    assert_eq!(
-        report.current_context(),
-        &StorageError::Codec,
-        "a value the codec cannot read back is a codec refusal"
-    );
+    let WriteValue::WillNotEncode { why: report, .. } = &report else {
+        panic!("a value the codec cannot read back is a codec refusal, got {report}")
+    };
 
     // The whole report rather than a phrase out of it. What the refusal has to
     // say - the ceiling, what the path spent of it, and why a deeper value is
     // not merely inconvenient - is the thing being pinned, and a `contains` on
     // any one number would be satisfied by a line number in the same dump.
-    insta::assert_snapshot!(named("refuses_past_the_ceiling", backend), shape(&report));
+    insta::assert_snapshot!(named("refuses_past_the_ceiling", backend), shape(report));
 }
 
 /// The store keeps working after refusing. A write that was never accepted must
@@ -141,13 +139,11 @@ fn a_key_depth_cap_is_the_store_s_own(backend: Backend, label: &str) {
         .set(["a", "b", "c", "d"], &1u32)
         .expect_err("a path past the store's own cap was accepted");
 
-    assert_eq!(
-        report.current_context(),
-        &StorageError::Depth,
-        "every name is a name a store can hold; there are too many of them"
-    );
+    let WriteValue::TooDeep { why: report, .. } = &report else {
+        panic!("every name is a name a store can hold; there are too many of them: {report}")
+    };
 
-    insta::assert_snapshot!(named("refuses_past_the_key_cap", backend), shape(&report));
+    insta::assert_snapshot!(named("refuses_past_the_key_cap", backend), shape(report));
 
     assert_eq!(
         store.get::<u32>(["a", "b", "c", "d"]).unwrap(),
@@ -176,7 +172,11 @@ fn a_portable_store_holds_to_the_strictest_engine_it_named() {
     // The ceiling in this snapshot is ron's, not the running engine's, which is
     // the whole claim - and a snapshot says so where a `contains` on a number
     // would not distinguish the two.
-    insta::assert_snapshot!("refuses_at_the_strictest_named", shape(&report));
+    let WriteValue::WillNotEncode { why: report, .. } = &report else {
+        panic!("{report}")
+    };
+
+    insta::assert_snapshot!("refuses_at_the_strictest_named", shape(report));
 
     let plain = StoreBuilder::new(TempPath::new("depth_unportable").path())
         .backend(Backend::Redb)

@@ -52,7 +52,7 @@ fn the_font_size_moved(old: AmeData<was::Editor>) -> MigrationResult<AmeData<Edi
     })
 }
 
-fn open_it(at: &TempPath) -> StorageResult<(Store, Editor)> {
+fn open_it(at: &TempPath) -> anyhow::Result<(Store, Editor)> {
     let store = StoreBuilder::new(at.path())
         .backend(Backend::Json)
         .rules(|r| r.on_unreadable(OnUnreadable::UseDefault))
@@ -72,13 +72,13 @@ fn watch(editor: &Editor) -> ReactiveScope {
     scope
 }
 
-fn reach_around(store: &Store, at: &StorePath) -> StorageResult<Option<u32>> {
+fn reach_around(store: &Store, at: &StorePath) -> anyhow::Result<Option<u32>> {
     store.set(at, &1280u32)?;
     store.save_now()?;
-    store.get::<u32>(at)
+    Ok(store.get::<u32>(at)?)
 }
 
-fn explain(why: &Report<StorageError>) -> String {
+fn explain(why: &impl std::fmt::Debug) -> String {
     format!("{why:?}")
 }
 
