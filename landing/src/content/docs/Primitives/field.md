@@ -25,11 +25,15 @@ answers with the default its declaration gave it.
 
 ```rust
 fn get(&self) -> T
-fn try_get(&self) -> ReactiveFieldResult<T>
-fn set(&self, value: T) -> ReactiveFieldResult<()>
-fn update<F: FnOnce(T) -> T>(&self, f: F) -> ReactiveFieldResult<T>
-fn modify<F: FnOnce(&mut T)>(&self, f: F) -> ReactiveFieldResult<()>
+fn try_get(&self) -> Result<T, Disagreement>
+fn set(&self, value: T) -> Result<(), WriteValue>
+fn update<F: FnOnce(T) -> T>(&self, f: F) -> Result<T, WriteValue>
+fn modify<F: FnOnce(&mut T)>(&self, f: F) -> Result<(), WriteValue>
 ```
+
+The two `Err` types are different on purpose. A write can fail; a read cannot,
+because the field always holds something. `try_get`'s `Err` is not a failure of
+the asking - it is what this field and the store do not agree about.
 
 ## Reading when the answer might not be the store's
 

@@ -40,17 +40,30 @@ let _ui = Ui::new_with(&store)?;
 let refused =
     Panels::new_with(&store).expect_err("`ui.panels.left.visible` is spelled by both of them");
 
-assert_eq!(refused.current_context(), &StorageError::Claimed);
+let OpenStruct::Claimed(taken) = &refused else {
+    panic!("{refused}")
+};
 
-for claim in all::<Claimed, _>(&refused) {
-    println!("{} claims {}", claim.by, claim.path);
-}
+let Taken {
+    at,
+    wanted_by,
+    held_at,
+    held_by,
+} = &**taken;
+
+println!("{wanted_by} wants {at}, which {held_by} already holds at {held_at}");
 ```
 <!-- /shown -->
 
-The failure is `StorageError::Claimed`, and the report carries a `Claimed` fact
-for each side: the path, and the schema that wanted it. Reading them out of the
-report is by type rather than by searching the rendered text.
+The failure is `OpenStruct::Claimed`, and it names both sides at both paths:
+`at` and `wanted_by` for the declaration that was turned down, `held_at` and
+`held_by` for the one standing. The two paths differ whenever one declaration
+reaches the other through an ancestor - `root.b` holding `root.b.x` - and the
+pair is the whole diagnosis.
+
+Nothing has to be searched out of a rendered message, and nothing can be missed
+by a `match` that had a `_` arm: the variant is one of five a constructor can
+answer with, and [Errors](/amethystate/concepts/errors/) has the rest.
 
 Refusing is the cheaper end of the same collision. Two structs writing the same
 path is one struct silently overwriting the other's value on every save, and
@@ -90,6 +103,75 @@ That is as close as two can get: `Ui` holds `ui.panels.left.visible` and
 `RightPanel` holds `ui.panels.right.visible`. They part on the last level they
 share, neither path starts the other, and both open in the same store. `Panels`,
 which aimed at `ui.panels`, was refused because its place started `Ui`'s.
+
+## What each kind of place owns
+
+Three laws, and everything above follows from them.
+
+**A leaf owns its path and everything under it, and should have nothing under
+it.** The subtree is not for holding things; owning it is what stops somebody
+nesting under a scalar.
+
+**A map owns its path and everything under it, and uses one level of it.** Its
+keys are made while the program runs, so nobody can declare them - and if the
+space beneath it were open, every entry it has not written yet would be
+contestable.
+
+**A struct owns nothing at its prefix. Its fields do.** All of its paths are
+declared, so what is not declared is not its business, and the level it sits on
+stays open.
+
+That last one is the asymmetry worth holding on to. One declaration:
+
+<!-- shown: a map and a leaf under one prefix -->
+```rust
+#[amethystate(prefix = "ui")]
+pub struct Panels {
+    #[amestate(default = {})]
+    pub open: ReactiveMap<String, u32>,
+
+    #[amestate(default = "dark".to_string())]
+    pub theme: String,
+}
+```
+<!-- /shown -->
+
+and the space it leaves behind:
+
+```
+ui                       ·  nobody's - a prefix is not claimed
+├─ theme                 ▪  Panels declared it; nothing may go under it
+├─ open                  ▪  Panels declared it, as a map
+│  ├─ left               ▪    an entry, named while the program ran
+│  └─ right              ▪    an entry
+└─ myplugin              ·  nobody's - an extension may write here
+```
+
+`ui.myplugin` is free because `ui` was never claimed. `ui.open.myplugin` is not,
+because `ui.open` was:
+
+```
+under a struct's prefix            under a map's prefix
+  ui                                 ui.open
+  ├─ theme       declared            ├─ left       an entry
+  ├─ open        declared            ├─ right      an entry
+  └─ myplugin    allowed             └─ myplugin   refused
+```
+
+A map owning the whole subtree and using one level of it are two different
+statements, and both are enforced. `ui.open.left` is an entry; `ui.open.left.px`
+is inside the map's space and is not an entry, so it is refused as a place a map
+does not reach rather than as a place nobody owns.
+
+**A value's own depth is not the store's.** An entry holds whatever its type is,
+encoded, at one path - so a structure nested five deep is one key and not five
+levels:
+
+```
+tree.roots.one           ▪  one key, one stored value
+                            { name: "a", children: [ { … }, { … } ] }
+                            the depth in here belongs to the codec
+```
 
 ## The claim outlives the handle
 

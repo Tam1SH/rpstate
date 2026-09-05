@@ -100,7 +100,7 @@ These are `Rc` and `Weak`, and not by analogy: what a cell keeps is an
 `cell()` and `entry_cell()` make a **view** - the `Weak`. The cell holds its
 source weakly and reads `None` once the last real handle to that source goes.
 Like a `Weak`, the cell itself is fine; what fails is the upgrade inside it,
-which is where the `None` comes from and the `WriteError::SourceGone` on a
+which is where the `None` comes from and the `WriteValue::SourceGone` on a
 write.
 
 `into_cell()` and `into_entry_cell()` make a cell that **owns** its source -

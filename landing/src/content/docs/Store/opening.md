@@ -313,9 +313,15 @@ if let Err(report) = store.close() {
 ```
 <!-- /shown -->
 
-Afterwards every read and write on that store answers `StorageError::Closed`,
-and so does every clone of it - there is one file between them. Calling it twice
-is fine, and the drop that follows does nothing.
+Afterwards every read, write, scan and flush on that store answers `Closed` -
+`ReadValue::Closed`, `WriteValue::Closed`, `ScanKeys::Closed`, `Flush::Closed`,
+each naming the place it was asked about - and so does every clone of it, since
+there is one file between them. Calling it twice is fine, and the drop that
+follows does nothing.
+
+A field is the exception, and on purpose: it goes on answering `get` from
+memory, and says so through `try_get`, whose `Reason::Closed` means *this is the
+last thing I heard* rather than *this failed*.
 
 This is what to call when something else needs the file: another process, a
 backup, a rename. What that buys differs by engine, and each engine gives up

@@ -97,9 +97,7 @@ impl fmt::Display for KvWrite {
             } => {
                 write!(f, "{at} is inside {declared_at}, which {by} declares")
             }
-            Self::TooDeep { at, why } => {
-                write!(f, "{at} is deeper than this store reads: {}", one_line(why))
-            }
+            Self::TooDeep { at, .. } => write!(f, "{at} is deeper than this store reads back"),
             Self::WillNotEncode { at, why } => {
                 write!(
                     f,

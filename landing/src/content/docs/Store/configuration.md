@@ -79,6 +79,11 @@ above is the useful one: a full disk is usually someone about to delete
 something, and waiting it out is right, while a document the codec cannot
 render is in the same state on every attempt.
 
+It arrives as a `Report<StorageError>` rather than as one of the
+[error sets](/amethystate/concepts/errors/), and deliberately: this runs on the debouncer's
+thread with nobody's call to answer, so it is the engine's report rather than a
+boundary's. Nothing here is being handed back to a caller.
+
 Reads carry on in every case, and what is buffered stays buffered - which is
 also the catch. Retrying is unconditional: the same flush is attempted every
 `Disk::retry_every` until it lands or the store is dropped, whatever failed.

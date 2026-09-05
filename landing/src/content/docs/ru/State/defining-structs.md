@@ -27,9 +27,11 @@ pub struct NetworkState { ... }
 
 Структура без `prefix` — вложенная: её встраивают в другую через `nested`.
 
-`prefix` занимает место, которое называет, и всё под ним. Поэтому две структуры
-над одним местом не уживутся — вторая при открытии получит отказ. Отсюда же
-растёт то, как ведут себя `prefix` и составное имя с точками:
+Сам `prefix` не занимает ничего — занимают поля под ним, каждое свой путь.
+Поэтому две структуры над одним префиксом прекрасно уживаются, пока не сойдутся
+два их пути; вторая, открывающаяся над занятым путём, получит отказ. Исключение
+— карта: она владеет всем под собой, потому что её ключи возникают во время
+работы. Отсюда же растёт то, как ведут себя `prefix` и составное имя с точками:
 [Кто владеет каким местом](/amethystate/ru/concepts/claims/).
 
 ### Атрибуты поля
@@ -282,37 +284,38 @@ let store = StoreBuilder::new(settings)
 `UseDefault` берёт значение из `default`, оставляет сохранённое на диске и
 отвечает на `try_get` через `Err`, пока не пройдёт какое-нибудь изменение.
 
-Провалившееся построение отдаёт путь и причину фактами — типами, а не
-предложением, — так что один отказ отличают от другого, не читая текст:
+Провалившееся построение отдаёт `OpenStruct` — пять способов упасть, которые у
+конструктора есть, и никаких других, — так что один отказ отличают от другого по
+варианту, а не по тексту:
 
 <!-- shown: telling one refused open from another -->
 ```rust
-let refused = StrictUi::new_with(&store).unwrap_err();
-
-let failed_at = facts::all::<Key, _>(&refused).next();
-let said = facts::all::<Refused, _>(&refused).next();
-
-match (refused.current_context(), failed_at, said) {
-    (StorageError::Read, Some(Key(at)), Some(Refused(why))) => {
-        eprintln!("{at} will not do: {why}")
+match StrictUi::new_with(&store) {
+    Ok(_) => {}
+    Err(OpenStruct::Refused { at, said }) => eprintln!("{at} will not do: {said}"),
+    Err(OpenStruct::WillNotRead { at, why }) => eprintln!("{at} is unreadable: {why}"),
+    Err(OpenStruct::Claimed(taken)) => {
+        eprintln!("{} already holds {}", taken.held_by, taken.at)
     }
-    _ => return Err(refused.into()),
+    Err(other) => return Err(other.into()),
 }
 ```
 <!-- /shown -->
 
-При `UseDefault` ничего не падает, и те же два факта приходят через поле:
+При `UseDefault` ничего не падает, и то же место с той же причиной приходят
+через поле — как `Disagreement`: это не провал самого вопроса, а то, о чём поле
+и store не договорились.
 
 <!-- shown: asking a field what the store disagrees with -->
 ```rust
 let held = match ui.font_size().try_get() {
     Ok(size) => size,
-    Err(unread) => {
-        let said = facts::all::<Refused, _>(&unread).next();
-
-        match said {
-            Some(Refused(why)) => eprintln!("running on the default: {why}"),
-            None => eprintln!("the stored bytes will not decode"),
+    Err(no) => {
+        match no.reason {
+            Reason::Refused(said) => eprintln!("running on the default: {said}"),
+            Reason::WillNotRead(said) => eprintln!("{} will not decode: {said}", no.at),
+            Reason::Occupied(said) => eprintln!("{} was already taken: {said}", no.at),
+            _ => eprintln!("{} is not what the store has", no.at),
         }
 
         ui.font_size().get()
@@ -321,11 +324,16 @@ let held = match ui.font_size().try_get() {
 ```
 <!-- /shown -->
 
-`Refused` появляется только там, где значение завернула объявленная проверка.
-Байты, которые не декодировались, несут `Key`, а под ним — фразу самого кодека.
-Поле закрытого store отвечает `WriteError::Closed` — это третий, отдельный
-случай: значение в нём последнее, что оно слышало. Что ещё можно спросить у
-отчёта: [Ошибки](/amethystate/ru/concepts/errors/).
+`Reason::Refused` появляется только там, где значение завернула объявленная
+проверка. Байты, которые не декодировались, приходят как `WillNotRead` — с
+фразой самого кодека, — а поле, так и не записавшее свой `default`, потому что
+store уже что-то там держал, как `Occupied`. Поле закрытого store отвечает
+`Reason::Closed` — это четвёртый, отдельный случай: значение в нём последнее,
+что оно слышало.
+
+`Reason` помечен `#[non_exhaustive]` — это список того, о чём поле бывает не
+договорилось, и он растёт, — поэтому `match` по нему держит ветку `_`. Наборы
+её не держат, и [Ошибки](/amethystate/ru/concepts/errors/) объясняют почему.
 
 ### Правило про структуру, а не про значение
 

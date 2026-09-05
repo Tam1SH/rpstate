@@ -28,10 +28,12 @@ pub struct NetworkState { ... }
 
 Structs without `prefix` are nested components, intended to be embedded in other structs via `nested`.
 
-A `prefix` claims the place it names and everything under it, so two structs
-cannot be declared over the same place - the second one to open is refused. That
-is a whole subject of its own, and the one that decides how a `prefix` and a
-dotted stored name interact:
+A `prefix` claims nothing by itself - the fields under it do, each its own path.
+So two structs over the same prefix live together happily until two of their
+paths meet, and the second one to open over a taken path is refused. A map is
+the exception and owns everything beneath it, because its keys are made while
+the program runs. That is a whole subject of its own, and the one that decides
+how a `prefix` and a dotted stored name interact:
 [Who owns which place](/amethystate/concepts/claims/).
 
 ### Field attributes
@@ -286,38 +288,38 @@ answered the same way: `Refuse` fails construction naming the path and the
 reason, `UseDefault` takes the declared default, leaves the stored value on disk
 and answers `try_get` with `Err` until a change passes.
 
-A construction that fails hands over the path and the reason as facts, so a
-caller can tell one refusal from another without reading the sentence:
+A construction that fails hands back an `OpenStruct` - the five ways a
+constructor can fail and no others - so a caller tells one refusal from another
+by its variant rather than by reading the sentence:
 
 <!-- shown: telling one refused open from another -->
 ```rust
-let refused = StrictUi::new_with(&store).unwrap_err();
-
-let failed_at = facts::all::<Key, _>(&refused).next();
-let said = facts::all::<Refused, _>(&refused).next();
-
-match (refused.current_context(), failed_at, said) {
-    (StorageError::Read, Some(Key(at)), Some(Refused(why))) => {
-        eprintln!("{at} will not do: {why}")
+match StrictUi::new_with(&store) {
+    Ok(_) => {}
+    Err(OpenStruct::Refused { at, said }) => eprintln!("{at} will not do: {said}"),
+    Err(OpenStruct::WillNotRead { at, why }) => eprintln!("{at} is unreadable: {why}"),
+    Err(OpenStruct::Claimed(taken)) => {
+        eprintln!("{} already holds {}", taken.held_by, taken.at)
     }
-    _ => return Err(refused.into()),
+    Err(other) => return Err(other.into()),
 }
 ```
 <!-- /shown -->
 
-Under `UseDefault` nothing fails, and the same two facts arrive through the
-field instead:
+Under `UseDefault` nothing fails, and the same place and reason arrive through
+the field instead - as a `Disagreement`, which is what the field and the store
+do not agree about rather than a failure of the asking:
 
 <!-- shown: asking a field what the store disagrees with -->
 ```rust
 let held = match ui.font_size().try_get() {
     Ok(size) => size,
-    Err(unread) => {
-        let said = facts::all::<Refused, _>(&unread).next();
-
-        match said {
-            Some(Refused(why)) => eprintln!("running on the default: {why}"),
-            None => eprintln!("the stored bytes will not decode"),
+    Err(no) => {
+        match no.reason {
+            Reason::Refused(said) => eprintln!("running on the default: {said}"),
+            Reason::WillNotRead(said) => eprintln!("{} will not decode: {said}", no.at),
+            Reason::Occupied(said) => eprintln!("{} was already taken: {said}", no.at),
+            _ => eprintln!("{} is not what the store has", no.at),
         }
 
         ui.font_size().get()
@@ -326,11 +328,16 @@ let held = match ui.font_size().try_get() {
 ```
 <!-- /shown -->
 
-`Refused` is there only when a declared check turned the value down; bytes that
-would not decode carry `Key` and the codec's own sentence. A field whose store
-has closed answers `WriteError::Closed`, which is a different thing from either
-and says the value is the last one it heard. What else a report can be asked
-for: [Errors](/amethystate/concepts/errors/).
+`Reason::Refused` is there only when a declared check turned the value down;
+bytes that would not decode arrive as `WillNotRead` with the codec's own
+sentence, and a field that never got to write its default because the store
+already held something arrives as `Occupied`. A field whose store has closed
+answers `Reason::Closed`, which is none of those three and says the value is the
+last one it heard.
+
+`Reason` is `#[non_exhaustive]` - it is a list of what a field can be found
+disagreeing about, and it grows - so a `match` over it keeps a `_` arm. The
+sets do not, and [Errors](/amethystate/concepts/errors/) is why.
 
 ### A rule about the struct, not the value
 

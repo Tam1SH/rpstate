@@ -1,10 +1,12 @@
 use amethystate::errors::StorageError;
 use amethystate::errors::facts::{self, Entry, Key, Prefix};
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::store::{OpenStruct, StorageResult};
+use amethystate::store::{OpenStruct, StorageResult, WriteValue};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
+use error_stack::Report;
 use std::error::Error;
+use std::fmt;
 
 mod common;
 
@@ -55,6 +57,48 @@ fn as_printed(report: &impl std::fmt::Debug) -> String {
     }
 
     kept.join("\n")
+}
+
+fn refusal(said: &impl fmt::Display, tree: Option<&Report<StorageError>>) -> String {
+    let Some(report) = tree else {
+        return said.to_string();
+    };
+
+    let printed = as_printed(report);
+    let said = said.to_string();
+
+    match printed.starts_with(&said) {
+        true => printed,
+        false => format!("{said}\n\n{printed}"),
+    }
+}
+
+#[backends(all)]
+fn a_constructor_fails_with_the_set_that_is_possible_there(backend: Backend) -> anyhow::Result<()> {
+    let (store, _path) = open(backend, "book_err_set")?;
+
+    //@show telling one refusal from another
+    let refused = match Panel::new_with(&store) {
+        Ok(panel) => return Ok(drop(panel)),
+        Err(why) => why,
+    };
+
+    let said = match refused {
+        OpenStruct::Refused { at, said } => format!("{at} was turned down: {said}"),
+        OpenStruct::WillNotRead { at, why } => format!("{at} holds something else: {why}"),
+        OpenStruct::Claimed(taken) => format!("{} already holds it", taken.held_by),
+        OpenStruct::NotAPath(why) => format!("that is not a path: {why}"),
+        OpenStruct::Store(disk) => format!("the store: {disk}"),
+    };
+    //@show-end
+
+    unreachable!("nothing here refuses the panel: {said}")
+}
+
+#[amethystate::amethystate(prefix = "panel")]
+pub struct Panel {
+    #[amestate(default = 800u32)]
+    pub width: u32,
 }
 
 #[backends(all)]
@@ -131,6 +175,28 @@ fn the_whole_chain_is_in_the_debug_form(backend: Backend) -> anyhow::Result<()> 
 }
 
 #[backends(all)]
+fn a_variant_that_classified_a_report_still_holds_it(backend: Backend) -> anyhow::Result<()> {
+    let (store, _path) = open(backend, "book_err_classified")?;
+    store.set(["port"], &"not a number".to_string())?;
+
+    //@show the report under a variant that named the failure
+    let refused = store.get::<u16>(["port"]).unwrap_err();
+
+    let amethystate::store::ReadValue::WillNotRead { at, why } = refused else {
+        panic!("the bytes are there and they are not a u16")
+    };
+    //@show-end
+
+    assert_eq!(at.as_str(), "port");
+    assert!(
+        format!("{why:?}").contains("key: port"),
+        "the report the variant classified is still whole: {why:?}"
+    );
+
+    Ok(())
+}
+
+#[backends(all)]
 fn into_error_keeps_what_the_report_carried(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_into")?;
     store.set(["ports", "http"], &1u64)?;
@@ -176,21 +242,34 @@ fn what_different_refusals_look_like(backend: Backend) -> anyhow::Result<()> {
     let too_deep = shallow.set(["a", "b", "c", "d", "e"], &1u32).unwrap_err();
     //@show-end
 
+    let OpenStruct::Store(disk) = &undecodable else {
+        panic!("{undecodable}")
+    };
+    let WriteValue::TooDeep { why: budget, .. } = &too_deep else {
+        panic!("{too_deep}")
+    };
+
     common::measured(&[
         ("what failed", "a refusal"),
-        ("an entry that will not decode", &as_printed(&undecodable)),
-        ("a name that cannot be a level", &as_printed(&empty_level)),
-        ("a path past the cap it was given", &as_printed(&too_deep)),
+        (
+            "an entry that will not decode",
+            &refusal(&undecodable, Some(disk)),
+        ),
+        ("a name that cannot be a level", &refusal(&empty_level, None)),
+        (
+            "a path past the cap it was given",
+            &refusal(&too_deep, Some(budget)),
+        ),
     ]);
 
     Ok(())
 }
 
 #[backends(all)]
-fn a_report_travels_as_a_boxed_error(backend: Backend) -> anyhow::Result<()> {
+fn a_refusal_travels_as_whatever_the_caller_already_uses(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_err_boxed")?;
 
-    //@show handing a report to whatever the caller's crate uses
+    //@show letting the caller's own error type take it
     fn with_anyhow(store: &amethystate::Store) -> anyhow::Result<()> {
         store.set(["ui", "width"], &800u32)?;
         Ok(())

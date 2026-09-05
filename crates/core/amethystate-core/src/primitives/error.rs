@@ -107,9 +107,7 @@ impl fmt::Display for WriteValue {
             }
             Self::Absent { at } => write!(f, "nothing is stored at {at}"),
             Self::NotAPath(why) => write!(f, "the write was given no path to land at: {why}"),
-            Self::TooDeep { at, why } => {
-                write!(f, "{at} is deeper than this store reads: {}", one_line(why))
-            }
+            Self::TooDeep { at, .. } => write!(f, "{at} is deeper than this store reads back"),
             Self::WillNotEncode { at, why } => {
                 write!(
                     f,

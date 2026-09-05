@@ -25,11 +25,15 @@ state.port().modify(|port| *port += 1)?;
 
 ```rust
 fn get(&self) -> T
-fn try_get(&self) -> ReactiveFieldResult<T>
-fn set(&self, value: T) -> ReactiveFieldResult<()>
-fn update<F: FnOnce(T) -> T>(&self, f: F) -> ReactiveFieldResult<T>
-fn modify<F: FnOnce(&mut T)>(&self, f: F) -> ReactiveFieldResult<()>
+fn try_get(&self) -> Result<T, Disagreement>
+fn set(&self, value: T) -> Result<(), WriteValue>
+fn update<F: FnOnce(T) -> T>(&self, f: F) -> Result<T, WriteValue>
+fn modify<F: FnOnce(&mut T)>(&self, f: F) -> Result<(), WriteValue>
 ```
+
+Типы в `Err` разные, и это нарочно. Запись упасть может; чтение — нет, поле
+всегда что-то держит. `Err` у `try_get` — это не провал самого вопроса, а то, о
+чём поле и store не договорились.
 
 ## Чтение, когда ответ может быть и не из store
 
