@@ -191,7 +191,6 @@ pub fn migrate_impl_inner(
                 dependencies: <#new_ty as #crate_name::migration::fields::AmeStateFields>::MIGRATION_DEPS,
                 description: #description,
                 struct_name: #struct_name,
-                schema_hash: <#new_ty as #crate_name::migration::fields::AmeStateFields>::SCHEMA_HASH,
                 fields: <#new_ty as #crate_name::migration::fields::AmeStateFields>::FIELDS,
                 run: |ctx| {
                     use #crate_name::migration::fields::AmeStateFields;
@@ -203,13 +202,13 @@ pub fn migrate_impl_inner(
                     for field in <#old_ty as AmeStateFields>::FIELDS {
                         let is_renamed = <#new_ty as MigrateFrom<#old_ty>>::RENAMES
                             .iter()
-                            .any(|(old_k, _)| *old_k == field.name);
+                            .any(|(old_k, _)| *old_k == field.name.as_str());
                         let is_kept = <#new_ty as AmeStateFields>::FIELDS
                             .iter()
                             .any(|f| f.name == field.name);
 
                         if is_renamed || !is_kept {
-                            ctx.delete(field.name)?;
+                            ctx.delete(field.name.as_str())?;
                         }
                     }
 

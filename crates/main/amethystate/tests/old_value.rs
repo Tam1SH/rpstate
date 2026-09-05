@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +16,7 @@ pub struct Cfg {
 /// the text backends and quietly did not on redb and sqlite.
 #[backends(all)]
 fn an_update_reports_the_value_that_was_there_before(backend: Backend) {
-    let path = unique_path("old_value");
+    let path = TempPath::new("old_value");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
@@ -49,7 +49,7 @@ fn an_update_reports_the_value_that_was_there_before(backend: Backend) {
 
 #[backends(all)]
 fn an_unflushed_write_is_the_old_value_for_the_next_one(backend: Backend) {
-    let path = unique_path("old_value_buffered");
+    let path = TempPath::new("old_value_buffered");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
@@ -76,7 +76,7 @@ fn an_unflushed_write_is_the_old_value_for_the_next_one(backend: Backend) {
 
 #[backends(all)]
 fn a_removal_reports_the_flushed_value(backend: Backend) {
-    let path = unique_path("old_value_remove");
+    let path = TempPath::new("old_value_remove");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 

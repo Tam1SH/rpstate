@@ -7,7 +7,6 @@ pub struct SchemaEntry {
     pub prefix: Option<StorePath>,
     pub struct_name: &'static str,
     pub version: u32,
-    pub schema_hash: u32,
     pub fields: &'static [FieldDescriptor],
 }
 

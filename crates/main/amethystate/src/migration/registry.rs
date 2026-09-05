@@ -1,18 +1,17 @@
 use crate::MigrationContext;
 use crate::migration::fields::FieldDescriptor;
 use crate::store::StateScope;
-use crate::store::StorageResult;
+use crate::store::{StaticPath, StorageResult};
 use std::collections::BTreeSet;
 
 #[derive(Clone)]
 pub struct MigrationStepEntry {
-    pub prefix: &'static str,
+    pub prefix: StaticPath,
     pub target_version: u32,
     pub description: &'static str,
     pub dependencies: &'static [&'static str],
     pub struct_name: &'static str,
     pub fields: &'static [FieldDescriptor],
-    pub schema_hash: u32,
     pub run: fn(&mut MigrationContext) -> StorageResult<()>,
 }
 

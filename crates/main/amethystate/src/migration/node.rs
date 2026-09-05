@@ -20,10 +20,6 @@ pub trait AmeStateNode: Sized {
     /// value type never goes through a constructor at all - those values are
     /// decoded. So the edges are the unconditional ones, and only those.
     ///
-    /// Kept apart from `TYPE_HASH` on purpose. The hash says what a struct
-    /// stores, and folding a linked node's shape into it would send a struct
-    /// through a migration because something it only reads from changed.
-    ///
     /// Required rather than defaulted: an impl written by hand would otherwise
     /// take an empty default and opt out without saying so, and what it opts
     /// out of is a crash with no message.

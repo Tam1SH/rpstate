@@ -1,5 +1,5 @@
 use amethystate::{ReactiveMap, StoreBuilder, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use std::time::Duration;
 
 #[amethystate(prefix = "durable")]
@@ -29,9 +29,8 @@ pub struct Volatile {
 /// thing this field never does.
 #[test]
 fn a_volatile_field_is_already_durable() {
-    let store = StoreBuilder::new(unique_path("durable_volatile"))
-        .build()
-        .unwrap();
+    let at = TempPath::new("durable_volatile");
+    let store = StoreBuilder::new(&at).build().unwrap();
     let state = Volatile::new_with(&store).unwrap();
 
     state.scratch().durable().set(3).unwrap();
@@ -46,7 +45,8 @@ fn a_volatile_field_is_already_durable() {
 
 #[test]
 fn nothing_happens_until_the_future_is_polled() {
-    let store = StoreBuilder::new(unique_path("durable_visible"))
+    let at = TempPath::new("durable_visible");
+    let store = StoreBuilder::new(&at)
         .disk(|d| d.debounce(Duration::from_secs(60)))
         .build()
         .unwrap();
@@ -79,7 +79,7 @@ mod on_disk {
 
     #[test]
     fn set_durable_commits_before_it_returns() {
-        let path = unique_path("durable_blocking");
+        let path = TempPath::new("durable_blocking");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))
@@ -106,7 +106,7 @@ mod on_disk {
 
     #[test]
     fn set_durable_async_commits_before_it_resolves() {
-        let path = unique_path("durable_async");
+        let path = TempPath::new("durable_async");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))
@@ -125,7 +125,7 @@ mod on_disk {
 
     #[test]
     fn a_durable_map_write_commits_before_it_returns() {
-        let path = unique_path("durable_map_set");
+        let path = TempPath::new("durable_map_set");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))
@@ -143,7 +143,7 @@ mod on_disk {
 
     #[test]
     fn a_durable_removal_commits_before_it_returns() {
-        let path = unique_path("durable_map_remove");
+        let path = TempPath::new("durable_map_remove");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))
@@ -167,7 +167,7 @@ mod on_disk {
 
     #[test]
     fn a_durable_kv_write_commits_before_it_returns() {
-        let path = unique_path("durable_kv");
+        let path = TempPath::new("durable_kv");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))
@@ -188,7 +188,7 @@ mod on_disk {
 
     #[test]
     fn a_cell_over_a_field_commits() {
-        let path = unique_path("durable_cell");
+        let path = TempPath::new("durable_cell");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))
@@ -207,7 +207,7 @@ mod on_disk {
 
     #[test]
     fn a_cell_over_a_map_entry_commits() {
-        let path = unique_path("durable_entry");
+        let path = TempPath::new("durable_entry");
         let store = StoreBuilder::new(&path)
             .backend(amethystate::store::builder::Backend::Json)
             .disk(|d| d.debounce(Duration::from_secs(60)))

@@ -10,8 +10,8 @@ pub mod node;
 pub mod provided;
 pub mod registry;
 pub mod set;
-pub mod types;
 
+use crate::store::moved::Moved;
 use crate::store::{StorageError, StorageResult, meta, one_line};
 pub use context::MigrationContext;
 pub use error::MigrationError;
@@ -31,9 +31,15 @@ pub struct SchemaDiff {
 #[derive(Debug, Clone)]
 pub struct NaggingRecord {
     pub prefix: String,
-    pub old_hash: u32,
-    pub new_hash: u32,
     pub diff: Option<SchemaDiff>,
+
+    /// Every difference between the places declared last time and the places
+    /// declared now, with what each one amounts to.
+    ///
+    /// What raised the complaint is in here: the record exists because one of
+    /// these breaks, and the rest are carried so a person can see the change
+    /// whole rather than the one part of it that failed.
+    pub moved: Vec<Moved>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

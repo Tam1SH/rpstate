@@ -2,7 +2,7 @@
 
 use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use std::time::Duration;
 
 mod common;
@@ -22,7 +22,7 @@ pub struct Cfg {
 /// one of them must survive.
 #[test]
 fn a_write_is_never_rolled_back_by_the_watcher() {
-    let path = unique_path("watcher_race");
+    let path = TempPath::new("watcher_race");
     let store = StoreBuilder::new(&path)
         .backend(text_backend())
         .disk(|d| {
@@ -56,7 +56,7 @@ fn a_write_is_never_rolled_back_by_the_watcher() {
 /// pending and the next persist picks it up.
 #[test]
 fn a_write_during_a_persist_still_reaches_the_file() {
-    let path = unique_path("watcher_persist");
+    let path = TempPath::new("watcher_persist");
 
     {
         let store = StoreBuilder::new(&path)

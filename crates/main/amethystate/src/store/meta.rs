@@ -1,10 +1,10 @@
 use crate::migration::fields::{FieldDescriptor, Role};
+use crate::store::StorePath;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct PrefixMeta {
     pub version: u32,
-    pub hash: u32,
 }
 
 /// What the type said a declared path is, written down.
@@ -51,22 +51,36 @@ impl StoredShape {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct StoredFieldEntry {
-    pub name: String,
+    /// Where the field sits under its holder, as a path rather than as the
+    /// string it was written as.
+    ///
+    /// A name is not always one level - `path = "ui.theme"` writes one that is
+    /// two - so the difference between a level and a name holding a separator
+    /// has to survive the round trip, and only the type keeps it. Written by
+    /// the macro and so valid when it is written; read back through
+    /// [`StorePath`]'s own `Deserialize`, which refuses a nameless level or a
+    /// dangling escape at the document rather than downstream.
+    pub name: StorePath,
 
     /// How the type was spelled, for a person reading the file or the
     /// inspector. A spelling changes when a rename or an alias does while the
-    /// type stays what it was, so drift is judged by the hashes and nothing
-    /// compares this.
+    /// type stays what it was, so nothing compares this: drift is judged by
+    /// where the declared places sit, and a leaf's contents are answered where
+    /// they are read.
     pub type_name: String,
 
     /// What the path is, as the type answered when it was written.
     pub shape: StoredShape,
 }
 
+/// The only place a stored entry is made, and the reason its name needs no
+/// checking anywhere else: the macro writes `FieldDescriptor::name` and refuses
+/// a nameless level or an escape where the path is written, so what arrives
+/// here is a path the compiler already agreed to.
 impl From<&FieldDescriptor> for StoredFieldEntry {
     fn from(field: &FieldDescriptor) -> Self {
         Self {
-            name: field.name.to_string(),
+            name: field.name.path(),
             type_name: field.type_name.to_string(),
             shape: StoredShape {
                 role: field.role,
@@ -82,6 +96,5 @@ impl From<&FieldDescriptor> for StoredFieldEntry {
 pub struct SchemaSnapshot {
     pub version: u32,
     pub struct_name: Option<String>,
-    pub schema_hash: u32,
     pub fields: Vec<StoredFieldEntry>,
 }

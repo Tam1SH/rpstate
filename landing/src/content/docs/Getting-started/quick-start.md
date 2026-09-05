@@ -38,7 +38,7 @@ pub struct NetworkState {
 ```
 <!-- /shown -->
 
-Defaults, nested structs, volatile fields, `AmeType`, read policies, and serde
+Defaults, nested structs, volatile fields, read policies, and serde
 interaction: [Defining structs](/amethystate/state/defining-structs/).
 
 ## Open the store
@@ -89,7 +89,7 @@ one at a time.
 
 <!-- shown: a map whose keys are not known up front -->
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, Default, AmeType)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AlertThresholds {
     pub warning: u64,
     pub critical: u64,

@@ -105,7 +105,7 @@ fn snapshot_of(backend: Backend, path: &TempPath) -> SchemaSnapshot {
 fn field<'a>(fields: &'a [StoredFieldEntry], name: &str) -> &'a StoredFieldEntry {
     fields
         .iter()
-        .find(|f| f.name == name)
+        .find(|f| f.name.as_str() == name)
         .unwrap_or_else(|| panic!("no field named {name} in the snapshot"))
 }
 
@@ -145,7 +145,7 @@ fn the_snapshot_names_the_path_rather_than_the_field(backend: Backend) {
         "the snapshot must name the stored path"
     );
     assert!(
-        !snapshot.fields.iter().any(|f| f.name == "bind"),
+        !snapshot.fields.iter().any(|f| f.name.as_str() == "bind"),
         "the snapshot names the Rust field, which nothing on disk is called"
     );
 

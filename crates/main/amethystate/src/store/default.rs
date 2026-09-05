@@ -21,7 +21,7 @@ use crate::store::traits::StoreLayout;
 use crate::store::{
     InitState, StorageResult, StoreBackend, StoreCallback, StoreExt, SubscriptionId, to_path,
 };
-use amethystate_core::path::{IntoStorePath, StorePath};
+use amethystate_core::path::{IntoStorePath, PathRef, StorePath};
 use std::sync::Arc;
 
 /// A handle on an open store.
@@ -304,7 +304,7 @@ impl StoreBackend for Store {
     fn visit_prefix(
         &self,
         prefix: &StorePath,
-        visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
+        visit: &mut dyn FnMut(PathRef<'_>, &[u8]) -> StorageResult<()>,
     ) -> StorageResult<()> {
         self.backend.visit_prefix(prefix, visit)
     }

@@ -18,7 +18,6 @@ pub(crate) struct PrefixPlan {
     migrator: MigrationPlan,
     dependencies: BTreeSet<String>,
     pub(crate) fields: &'static [FieldDescriptor],
-    pub(crate) schema_hash: u32,
 }
 
 pub struct PrefixMigrationBuilder<'a> {
@@ -61,14 +60,13 @@ impl MigrationBuilder {
         steps: impl IntoIterator<Item = &'a MigrationStepEntry>,
     ) -> &mut Self {
         use std::collections::HashSet;
-        let mut groups: HashMap<&'static str, Vec<&'a MigrationStepEntry>> = HashMap::new();
+        let mut groups: HashMap<&'a str, Vec<&'a MigrationStepEntry>> = HashMap::new();
 
         for entry in steps {
-            groups.entry(entry.prefix).or_default().push(entry);
+            groups.entry(entry.prefix.as_str()).or_default().push(entry);
         }
 
         for (prefix, steps) in groups {
-            let mut latest_hash = 0;
             let mut max_v = 0;
             let mut latest_fields: &'static [FieldDescriptor] = &[];
             let mut merged_deps = HashSet::new();
@@ -76,7 +74,6 @@ impl MigrationBuilder {
             for step in &steps {
                 if step.target_version >= max_v {
                     max_v = step.target_version;
-                    latest_hash = step.schema_hash;
                     latest_fields = step.fields;
                 }
 
@@ -91,7 +88,6 @@ impl MigrationBuilder {
             }
 
             let plan = self.prefix_plan(prefix);
-            plan.schema_hash = latest_hash;
             plan.fields = latest_fields;
             for dep in merged_deps {
                 plan.dependencies.insert(dep.to_string());
@@ -135,7 +131,7 @@ impl MigrationBuilder {
 
         for (prefix, plan) in prefixes {
             let deps: Vec<&str> = plan.dependencies.iter().map(|s| s.as_str()).collect();
-            set = set.add(prefix, plan.migrator, plan.schema_hash, plan.fields, &deps);
+            set = set.add(prefix, plan.migrator, plan.fields, &deps);
         }
 
         set.take_provided(self.provided);

@@ -1,28 +1,8 @@
-use crate::amethystate::generate::path_literal;
+use crate::amethystate::generate::{path_literal, static_path_literal};
 use crate::amethystate::model::{Field, Mode, OnUnreadable, Placement, Schema, Shape};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-
-/// What a leaf hashes as on disk.
-///
-/// A field with a `with` pair is not stored as its type is: the pair decides,
-/// and the type's own hash would be describing bytes it never wrote. What is
-/// left to name it by is the type's spelling - which also means a type from
-/// another crate can be a leaf, having no impl of ours to carry a hash.
-fn leaf_hash(crate_name: &TokenStream2, field: &Field) -> TokenStream2 {
-    let ty = &field.ty;
-
-    match &field.shape {
-        Shape::Leaf {
-            stored_as: Some(_), ..
-        } => {
-            let spelled = quote!(#ty).to_string().replace(" ", "");
-            quote! { #crate_name::migration::types::fnv1a(#spelled.as_bytes()) }
-        }
-        _ => quote! { <#ty as #crate_name::migration::types::AmeType>::TYPE_HASH },
-    }
-}
 
 pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
     let (vis, name, attrs) = (&schema.vis, &schema.name, &schema.forwarded);
@@ -59,7 +39,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
     let version_val = schema.version;
 
     let field_descriptors = p_fields.iter().map(|field| {
-        let fname_str = &field.stored.value;
+        let fname_str = static_path_literal(crate_name, &field.stored.value);
         let declared = field.ident.to_string();
         let ty = &field.ty;
         let type_name = quote!(#ty).to_string().replace(" ", "");
@@ -69,7 +49,6 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 #crate_name::migration::fields::FieldDescriptor {
                     name: #fname_str,
                     declared: #declared,
-                    type_hash: 0xDEADBEEF ^ < <#ty as #crate_name::AmeState>::Data as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
                     role: #crate_name::migration::fields::Role::Node,
                     optional: false,
@@ -77,11 +56,10 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                     flattened: #flattened,
                 }
             },
-            Shape::Map { key, value, .. } => quote! {
+            Shape::Map { .. } => quote! {
                 #crate_name::migration::fields::FieldDescriptor {
                     name: #fname_str,
                     declared: #declared,
-                    type_hash: <::std::collections::HashMap<#key, #value> as #crate_name::migration::types::AmeType>::TYPE_HASH,
                     type_name: #type_name,
                     role: <#crate_name::shape::Probe<#ty>>::ROLE,
                     optional: <#crate_name::shape::Probe<#ty>>::OPTIONAL,
@@ -90,12 +68,10 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 }
             },
             _ => {
-                let hash = leaf_hash(crate_name, field);
                 quote! {
                     #crate_name::migration::fields::FieldDescriptor {
                         name: #fname_str,
-                    declared: #declared,
-                        type_hash: #hash,
+                        declared: #declared,
                         type_name: #type_name,
                         role: <#crate_name::shape::Probe<#ty>>::ROLE,
                         optional: <#crate_name::shape::Probe<#ty>>::OPTIONAL,
@@ -348,30 +324,9 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
         }
     });
 
-    let fields_for_hash = p_fields
-        .iter()
-        .map(|field| {
-            let fname_str = field.ident.to_string();
-            let ty = &field.ty;
-            let hash = match &field.shape {
-                Shape::Node { .. } => quote! {
-                    < <#ty as #crate_name::AmeState>::Data
-                        as #crate_name::migration::types::AmeType>::TYPE_HASH
-                },
-                Shape::Map { key, value, .. } => quote! {
-                    <::std::collections::HashMap<#key, #value>
-                        as #crate_name::migration::types::AmeType>::TYPE_HASH
-                },
-                _ => leaf_hash(crate_name, field),
-            };
-            (fname_str, hash)
-        })
-        .collect::<Vec<_>>();
-
-    let recursive_hash_expr = crate::hash::gen_recursive_type_hash(crate_name, fields_for_hash);
-
     let prefix_expr = prefix.clone().unwrap_or_default();
     let prefix_path = path_literal(crate_name, &prefix_expr);
+    let prefix_static = static_path_literal(crate_name, &prefix_expr);
     let is_root = prefix.is_some();
 
     let persistent_wrapper_tokens = match mode {
@@ -591,11 +546,6 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             #load_save_helpers
         }
 
-        impl #crate_name::migration::types::AmeType for #data_struct_name {
-            const TYPE_HASH: u32 = #recursive_hash_expr;
-            const TYPE_NAME: &'static str = stringify!(#data_struct_name);
-        }
-
        impl #crate_name::migration::fields::AmeStateFields for #data_struct_name {
             const FIELDS: &'static [#crate_name::migration::fields::FieldDescriptor] = {
                 #[allow(unused_imports)]
@@ -609,8 +559,7 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
                 ]
             };
             const VERSION: u32 = #version_val;
-            const SCHEMA_HASH: u32 = #crate_name::migration::types::schema_hash(Self::FIELDS);
-            const PARENT_PREFIX: &'static str = #prefix_expr;
+            const PARENT_PREFIX: #crate_name::store::StaticPath = #prefix_static;
             const MIGRATION_DEPS: &'static [&'static str] = &[];
 
             fn load_struct(ctx: &mut #crate_name::MigrationContext) -> #crate_name::StorageResult<Self> {

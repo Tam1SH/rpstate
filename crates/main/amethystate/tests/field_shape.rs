@@ -55,7 +55,7 @@ pub struct Shaped {
 fn field(name: &str) -> &'static amethystate::migration::fields::FieldDescriptor {
     <Shaped_Data as AmeStateFields>::FIELDS
         .iter()
-        .find(|f| f.name == name)
+        .find(|f| f.name.as_str() == name)
         .unwrap_or_else(|| panic!("no field named {name}"))
 }
 

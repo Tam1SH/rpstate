@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +12,7 @@ pub struct Cfg {
 
 #[backends(all)]
 fn a_deleted_key_falls_back_to_the_default(backend: Backend) {
-    let path = unique_path("field_delete");
+    let path = TempPath::new("field_delete");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
@@ -27,7 +27,7 @@ fn a_deleted_key_falls_back_to_the_default(backend: Backend) {
 
 #[backends(all)]
 fn a_delete_notifies_subscribers(backend: Backend) {
-    let path = unique_path("field_delete_notify");
+    let path = TempPath::new("field_delete_notify");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 
@@ -45,7 +45,7 @@ fn a_delete_notifies_subscribers(backend: Backend) {
 
 #[backends(all)]
 fn writing_again_after_a_delete_works(backend: Backend) {
-    let path = unique_path("field_delete_rewrite");
+    let path = TempPath::new("field_delete_rewrite");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 

@@ -5,6 +5,7 @@ use crate::migration::{AppliedStep, ComponentOutcome, ComponentResult, NaggingRe
 use crate::observability::SchemaEntry;
 use crate::store::MigrationBackendAdapter;
 use crate::store::facts::Facts;
+use crate::store::moved::{self, Moved, Verdict};
 use crate::store::{StorageError, StorageResult};
 use crate::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
 use amethystate_core::path::StorePath;
@@ -63,7 +64,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                     Some(s) => {
                         s.struct_name.as_deref() != Some(entry.struct_name)
                             || s.version != entry.version
-                            || s.schema_hash != entry.schema_hash
+                            || !moved::between(&s.fields, entry.fields).is_empty()
                     }
                 };
 
@@ -74,7 +75,6 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                             &SchemaSnapshot {
                                 version: entry.version,
                                 struct_name: Some(entry.struct_name.to_string()),
-                                schema_hash: entry.schema_hash,
                                 fields: entry.fields.iter().map(StoredFieldEntry::from).collect(),
                             },
                         )
@@ -147,10 +147,16 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         for prefix in prefixes {
             let meta = storage.get_meta(&group_path(prefix)?)?;
             let current_v = meta.as_ref().map(|m| m.version).unwrap_or(0);
-            let current_h = meta.as_ref().map(|m| m.hash).unwrap_or(0);
-            let (target_v, target_h, _) = mset.get_target(prefix);
+            let (target_v, target_fields) = mset.get_target(prefix);
 
-            if target_v != current_v || (target_h != 0 && target_h != current_h) {
+            if target_v != current_v {
+                return Ok(true);
+            }
+
+            if !self
+                .places_that_moved(storage, prefix, target_fields)?
+                .is_empty()
+            {
                 return Ok(true);
             }
         }
@@ -175,6 +181,24 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         Ok((all_steps, all_nagging))
     }
 
+    /// Where the declared places sit now against where they sat when this
+    /// prefix was last written.
+    ///
+    /// Empty when nothing was written before: a store being opened for the
+    /// first time has nothing to have moved from.
+    fn places_that_moved(
+        &self,
+        storage: &mut dyn MigrationBackendAdapter,
+        prefix: &str,
+        current_fields: &[FieldDescriptor],
+    ) -> StorageResult<Vec<Moved>> {
+        let Some(old) = storage.get_schema_snapshot(&group_path(prefix)?)? else {
+            return Ok(Vec::new());
+        };
+
+        Ok(moved::between(&old.fields, current_fields))
+    }
+
     fn calculate_drift(
         &self,
         storage: &mut dyn MigrationBackendAdapter,
@@ -191,14 +215,14 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             removed: vec![],
         };
 
-        let mut old_fields: HashMap<String, StoredFieldEntry> = old
+        let mut old_fields: HashMap<StorePath, StoredFieldEntry> = old
             .fields
             .into_iter()
             .map(|f| (f.name.clone(), f))
             .collect();
 
         for f in current_fields {
-            if old_fields.remove(f.name).is_none() {
+            if old_fields.remove(f.name.as_str()).is_none() {
                 diff.added.push(StoredFieldEntry::from(f));
             }
         }
@@ -218,7 +242,7 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
         prefix: &str,
         mset: &MigrationSet,
     ) -> StorageResult<(Vec<AppliedStep>, Vec<NaggingRecord>)> {
-        let (target_v, target_hash, target_fields) = mset.get_target(prefix);
+        let (target_v, target_fields) = mset.get_target(prefix);
         let prefix_path = group_path(prefix)?;
 
         let meta_opt = storage.get_meta(&prefix_path)?;
@@ -233,20 +257,11 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
                     .unwrap_or(target_v);
 
                 if start_v == target_v {
-                    storage.set_meta(
-                        &prefix_path,
-                        &PrefixMeta {
-                            version: target_v,
-                            hash: target_hash,
-                        },
-                    )?;
+                    storage.set_meta(&prefix_path, &PrefixMeta { version: target_v })?;
                     return Ok((vec![], vec![]));
                 }
 
-                PrefixMeta {
-                    version: start_v,
-                    hash: 0,
-                }
+                PrefixMeta { version: start_v }
             }
         };
 
@@ -261,15 +276,18 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             .change_context(StorageError::Migrate));
         }
 
-        if target_hash != 0 && target_v == meta.version && target_hash != meta.hash {
-            let diff = self.calculate_drift(storage, prefix, target_fields)?;
+        if target_v == meta.version {
+            let moved = self.places_that_moved(storage, prefix, target_fields)?;
 
-            nagging.push(NaggingRecord {
-                prefix: prefix.to_string(),
-                old_hash: meta.hash,
-                new_hash: target_hash,
-                diff,
-            });
+            if moved.iter().any(|one| one.verdict() == Verdict::Breaks) {
+                let diff = self.calculate_drift(storage, prefix, target_fields)?;
+
+                nagging.push(NaggingRecord {
+                    prefix: prefix.to_string(),
+                    diff,
+                    moved,
+                });
+            }
         }
 
         let mut applied_steps = Vec::new();
@@ -287,13 +305,14 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
             )?;
 
             if !applied_steps.is_empty() {
-                meta.hash = target_hash;
                 storage.set_meta(&prefix_path, &meta)?;
                 storage.set_migration_log(&prefix_path, &history)?;
             }
         }
 
-        if meta.version == target_v && !target_fields.is_empty() {
+        let unanswered = !nagging.is_empty() && applied_steps.is_empty();
+
+        if meta.version == target_v && !target_fields.is_empty() && !unanswered {
             let struct_name = inventory::iter::<SchemaEntry>
                 .into_iter()
                 .find(|e| e.prefix.as_ref() == Some(&prefix_path))
@@ -301,7 +320,6 @@ impl<'a, P: StorageProvider> MigrationEngine<'a, P> {
 
             let new_snapshot = SchemaSnapshot {
                 version: target_v,
-                schema_hash: meta.hash,
                 struct_name,
                 fields: target_fields.iter().map(StoredFieldEntry::from).collect(),
             };
@@ -486,7 +504,6 @@ mod tests {
         let mset = MigrationSet::default().add(
             "ui",
             MigrationPlan::new().step(1, "init", |_| Ok(())),
-            0,
             EMPTY_FIELDS,
             &[],
         );
@@ -497,7 +514,6 @@ mod tests {
         assert!(!report.has_failures());
         let meta = storage.borrow().get_meta(&p("ui")).unwrap().unwrap();
         assert_eq!(meta.version, 1);
-        assert_eq!(meta.hash, 0);
     }
 
     #[test]
@@ -505,19 +521,12 @@ mod tests {
         let storage = RefCell::new(InMemoryStorage::default());
         storage
             .borrow_mut()
-            .set_meta(
-                &p("app"),
-                &PrefixMeta {
-                    version: 1,
-                    hash: 100,
-                },
-            )
+            .set_meta(&p("app"), &PrefixMeta { version: 1 })
             .unwrap();
 
         let mset = MigrationSet::default().add(
             "app",
             MigrationPlan::new().step(3, "v3", |_| Ok(())),
-            0,
             EMPTY_FIELDS,
             &[],
         );
@@ -548,63 +557,16 @@ mod tests {
     }
 
     #[test]
-    fn test_hashless_target_ignores_saved_hash() {
-        let storage = RefCell::new(InMemoryStorage::default());
-        storage
-            .borrow_mut()
-            .set_meta(
-                &p("net"),
-                &PrefixMeta {
-                    version: 1,
-                    hash: 100,
-                },
-            )
-            .unwrap();
-
-        let mset = MigrationSet::default().add(
-            "net",
-            MigrationPlan::new().step(1, "init", |_| Ok(())),
-            0,
-            EMPTY_FIELDS,
-            &[],
-        );
-
-        let engine = MigrationEngine::new(&storage);
-        let report = engine.run(mset).unwrap();
-
-        assert!(matches!(
-            report.components[0].outcome,
-            ComponentOutcome::Skipped
-        ));
-
-        assert!(
-            report.components[0].nagging.is_empty(),
-            "Nagging must remain empty for a hashless target"
-        );
-
-        let meta = storage.borrow().get_meta(&p("net")).unwrap().unwrap();
-        assert_eq!(meta.version, 1);
-        assert_eq!(meta.hash, 100);
-    }
-
-    #[test]
     fn test_downgrade_error() {
         let storage = RefCell::new(InMemoryStorage::default());
         storage
             .borrow_mut()
-            .set_meta(
-                &p("app"),
-                &PrefixMeta {
-                    version: 5,
-                    hash: 500,
-                },
-            )
+            .set_meta(&p("app"), &PrefixMeta { version: 5 })
             .unwrap();
 
         let mset = MigrationSet::default().add(
             "app",
             MigrationPlan::new().step(4, "v4", |_| Ok(())),
-            0,
             EMPTY_FIELDS,
             &[],
         );
@@ -636,7 +598,6 @@ mod tests {
             .add(
                 "a",
                 MigrationPlan::new().step(1, "ok", |ctx| ctx.set("v", &1)),
-                0,
                 EMPTY_FIELDS,
                 &[],
             )
@@ -645,7 +606,6 @@ mod tests {
                 MigrationPlan::new().step(1, "fail", |_| {
                     Err(MigrationError::Custom("err".into()).into_report())
                 }),
-                0,
                 EMPTY_FIELDS,
                 &[],
             );
@@ -662,13 +622,7 @@ mod tests {
         let storage = RefCell::new(InMemoryStorage::default());
         storage
             .borrow_mut()
-            .set_meta(
-                &p("app"),
-                &PrefixMeta {
-                    version: 1,
-                    hash: 0,
-                },
-            )
+            .set_meta(&p("app"), &PrefixMeta { version: 1 })
             .unwrap();
         let val = encode(storage.borrow().deref(), &1).unwrap();
 
@@ -677,7 +631,6 @@ mod tests {
         let mset = MigrationSet::default().add(
             "app",
             MigrationPlan::new().step(1, "init", |_| Ok(())),
-            0,
             EMPTY_FIELDS,
             &[],
         );
@@ -696,13 +649,7 @@ mod tests {
         let storage = RefCell::new(InMemoryStorage::default());
         storage
             .borrow_mut()
-            .set_meta(
-                &p("a"),
-                &PrefixMeta {
-                    version: 1,
-                    hash: 0,
-                },
-            )
+            .set_meta(&p("a"), &PrefixMeta { version: 1 })
             .unwrap();
 
         let a_calls = Arc::new(AtomicUsize::new(0));
@@ -718,7 +665,6 @@ mod tests {
                     a_cap.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 }),
-                0,
                 EMPTY_FIELDS,
                 &[],
             )
@@ -728,7 +674,6 @@ mod tests {
                     b_cap.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 }),
-                0,
                 EMPTY_FIELDS,
                 &["a"],
             );
@@ -757,7 +702,6 @@ mod tests {
                     s.push('3');
                     ctx.set("log", &s)
                 }),
-            0,
             EMPTY_FIELDS,
             &[],
         );
@@ -774,13 +718,7 @@ mod tests {
         let storage = RefCell::new(InMemoryStorage::default());
         storage
             .borrow_mut()
-            .set_meta(
-                &p("app"),
-                &PrefixMeta {
-                    version: 1,
-                    hash: 0,
-                },
-            )
+            .set_meta(&p("app"), &PrefixMeta { version: 1 })
             .unwrap();
 
         let val = encode(storage.borrow().deref(), &"1").unwrap();
@@ -795,7 +733,6 @@ mod tests {
                     s.push('2');
                     ctx.set("log", &s)
                 }),
-            0,
             EMPTY_FIELDS,
             &[],
         );
@@ -808,19 +745,13 @@ mod tests {
     }
 
     #[test]
-    fn test_drift_detection_field_added() {
+    fn a_field_added_beside_the_others_is_not_drift() {
         let storage = RefCell::new(InMemoryStorage::default());
         let prefix = &p("profile");
 
         storage
             .borrow_mut()
-            .set_meta(
-                prefix,
-                &PrefixMeta {
-                    version: 1,
-                    hash: 111,
-                },
-            )
+            .set_meta(prefix, &PrefixMeta { version: 1 })
             .unwrap();
         storage
             .borrow_mut()
@@ -829,26 +760,24 @@ mod tests {
                 &SchemaSnapshot {
                     version: 1,
                     fields: vec![StoredFieldEntry {
-                        name: "name".to_string(),
+                        name: StorePath::segment("name"),
                         type_name: "String".to_string(),
                         shape: StoredShape::field(),
                     }],
-                    schema_hash: 0,
                     struct_name: None,
                 },
             )
             .unwrap();
 
         static CURRENT_FIELDS: &[FieldDescriptor] = &[
-            FieldDescriptor::leaf("name", 1, "String"),
-            FieldDescriptor::leaf("age", 2, "u32"),
+            FieldDescriptor::leaf(&["name"], "name", "String"),
+            FieldDescriptor::leaf(&["age"], "age", "u32"),
         ];
         let current_fields = CURRENT_FIELDS;
 
         let mset = MigrationSet::default().add(
             prefix.as_str(),
             MigrationPlan::new().step(1, "v1", |_| Ok(())),
-            222,
             current_fields,
             &[],
         );
@@ -856,33 +785,80 @@ mod tests {
         let engine = MigrationEngine::new(&storage);
         let report = engine.run(mset).unwrap();
 
-        assert!(report.has_drift());
-        let nag = &report.components[0].nagging[0];
-        assert_eq!(nag.diff.as_ref().unwrap().added.len(), 1);
-        assert_eq!(nag.diff.as_ref().unwrap().added[0].name, "age");
+        assert!(
+            !report.has_drift(),
+            "`age` takes a place nothing declared before, and nothing that was \
+             written has moved out from under anything"
+        );
     }
 
-    /// A field whose type changed under the same name is drift the store
-    /// notices and the diff cannot describe. The hashes disagree, so the run
-    /// nags; the diff compares names, and the name did not move.
-    ///
-    /// Pinned because it is the limit of this comparison rather than a gap in
-    /// it: what a path is now lives in the snapshot per field, and reading it
-    /// is a diff of two schema documents.
     #[test]
-    fn a_type_that_changed_under_one_name_nags_without_a_diff() {
+    fn a_field_no_longer_declared_is_drift() {
+        use crate::store::moved::What;
+
+        let storage = RefCell::new(InMemoryStorage::default());
+        let prefix = &p("profile");
+
+        storage
+            .borrow_mut()
+            .set_meta(prefix, &PrefixMeta { version: 1 })
+            .unwrap();
+        storage
+            .borrow_mut()
+            .set_schema_snapshot(
+                prefix,
+                &SchemaSnapshot {
+                    version: 1,
+                    fields: vec![
+                        StoredFieldEntry {
+                            name: StorePath::segment("name"),
+                            type_name: "String".to_string(),
+                            shape: StoredShape::field(),
+                        },
+                        StoredFieldEntry {
+                            name: StorePath::segment("nickname"),
+                            type_name: "String".to_string(),
+                            shape: StoredShape::field(),
+                        },
+                    ],
+                    struct_name: None,
+                },
+            )
+            .unwrap();
+
+        static CURRENT_FIELDS: &[FieldDescriptor] =
+            &[FieldDescriptor::leaf(&["name"], "name", "String")];
+
+        let mset = MigrationSet::default().add(
+            prefix.as_str(),
+            MigrationPlan::new().step(1, "v1", |_| Ok(())),
+            CURRENT_FIELDS,
+            &[],
+        );
+
+        let report = MigrationEngine::new(&storage).run(mset).unwrap();
+
+        assert!(report.has_drift());
+
+        let moved = &report.components[0].nagging[0].moved;
+        let released: Vec<&str> = moved
+            .iter()
+            .filter(|one| one.what == What::Released)
+            .map(|one| one.at.as_str())
+            .collect();
+
+        assert_eq!(released, ["nickname"], "and it names the place: {moved:?}");
+        assert!(moved.iter().any(|one| one.verdict() == Verdict::Breaks));
+    }
+
+    #[test]
+    fn a_type_that_changed_under_one_name_is_the_readers_business() {
         let storage = RefCell::new(InMemoryStorage::default());
         let prefix = &p("settings");
 
         storage
             .borrow_mut()
-            .set_meta(
-                prefix,
-                &PrefixMeta {
-                    version: 1,
-                    hash: 10,
-                },
-            )
+            .set_meta(prefix, &PrefixMeta { version: 1 })
             .unwrap();
         storage
             .borrow_mut()
@@ -891,23 +867,22 @@ mod tests {
                 &SchemaSnapshot {
                     version: 1,
                     fields: vec![StoredFieldEntry {
-                        name: "port".to_string(),
+                        name: StorePath::segment("port"),
                         type_name: "u16".to_string(),
                         shape: StoredShape::field(),
                     }],
-                    schema_hash: 0,
                     struct_name: None,
                 },
             )
             .unwrap();
 
-        static CURRENT_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("port", 200, "u32")];
+        static CURRENT_FIELDS: &[FieldDescriptor] =
+            &[FieldDescriptor::leaf(&["port"], "port", "u32")];
         let current_fields = CURRENT_FIELDS;
 
         let mset = MigrationSet::default().add(
             prefix.as_str(),
             MigrationPlan::new().step(1, "v1", |_| Ok(())),
-            20,
             current_fields,
             &[],
         );
@@ -915,12 +890,10 @@ mod tests {
         let engine = MigrationEngine::new(&storage);
         let report = engine.run(mset).unwrap();
 
-        let nag = &report.components[0].nagging[0];
-        assert_eq!(nag.old_hash, 10);
-        assert_eq!(nag.new_hash, 20);
         assert!(
-            nag.diff.is_none(),
-            "no path was added or removed, so there is nothing this comparison can say"
+            !report.has_drift(),
+            "`port` is where it was; that it holds a different type is answered \
+             where it is read, not here"
         );
     }
 
@@ -931,13 +904,7 @@ mod tests {
 
         storage
             .borrow_mut()
-            .set_meta(
-                prefix,
-                &PrefixMeta {
-                    version: 1,
-                    hash: 1,
-                },
-            )
+            .set_meta(prefix, &PrefixMeta { version: 1 })
             .unwrap();
         storage
             .borrow_mut()
@@ -945,21 +912,23 @@ mod tests {
                 prefix,
                 &SchemaSnapshot {
                     version: 1,
-                    fields: vec![],
-                    schema_hash: 0,
+                    fields: vec![StoredFieldEntry {
+                        name: StorePath::segment("old"),
+                        type_name: "i32".to_string(),
+                        shape: StoredShape::field(),
+                    }],
                     struct_name: None,
                 },
             )
             .unwrap();
 
-        static NEW_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("new", 9, "i32")];
+        static NEW_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf(&["new"], "new", "i32")];
         let fields = NEW_FIELDS;
 
         {
             let mset = MigrationSet::default().add(
                 prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
-                99,
                 fields,
                 &[],
             );
@@ -972,7 +941,6 @@ mod tests {
             let mset = MigrationSet::default().add(
                 prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
-                99,
                 fields,
                 &[],
             );
@@ -990,7 +958,6 @@ mod tests {
                 MigrationPlan::new()
                     .step(1, "v1", |_| Ok(()))
                     .step(2, "ack_drift", |_| Ok(())),
-                99,
                 fields,
                 &[],
             );
@@ -1006,7 +973,6 @@ mod tests {
 
         let meta = storage.borrow().get_meta(prefix).unwrap().unwrap();
         assert_eq!(meta.version, 2);
-        assert_eq!(meta.hash, 99);
     }
 
     #[test]
@@ -1016,13 +982,7 @@ mod tests {
 
         storage
             .borrow_mut()
-            .set_meta(
-                prefix,
-                &PrefixMeta {
-                    version: 1,
-                    hash: 111,
-                },
-            )
+            .set_meta(prefix, &PrefixMeta { version: 1 })
             .unwrap();
         storage
             .borrow_mut()
@@ -1031,23 +991,21 @@ mod tests {
                 &SchemaSnapshot {
                     version: 1,
                     fields: vec![StoredFieldEntry {
-                        name: "old_f".into(),
+                        name: StorePath::segment("old_f"),
                         type_name: "u8".into(),
                         shape: StoredShape::field(),
                     }],
-                    schema_hash: 0,
                     struct_name: None,
                 },
             )
             .unwrap();
 
-        static V2_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf("new_f", 2, "u16")];
+        static V2_FIELDS: &[FieldDescriptor] = &[FieldDescriptor::leaf(&["new_f"], "new_f", "u16")];
         let v2_fields = V2_FIELDS;
 
         let mset = MigrationSet::default().add(
             prefix.as_str(),
             MigrationPlan::new().step(2, "v2", |ctx| ctx.set("new_f", &10u16)),
-            222,
             v2_fields,
             &[],
         );
@@ -1067,7 +1025,7 @@ mod tests {
             .unwrap();
         assert_eq!(snap.version, 2);
         assert_eq!(snap.fields.len(), 1);
-        assert_eq!(snap.fields[0].name, "new_f");
+        assert_eq!(snap.fields[0].name.as_str(), "new_f");
         assert_eq!(snap.fields[0].type_name, "u16");
     }
 
@@ -1079,16 +1037,14 @@ mod tests {
 
         {
             static FIELDS_V1: &[FieldDescriptor] = &[
-                FieldDescriptor::leaf("port", 10, "u16"),
-                FieldDescriptor::leaf("host", 20, "String"),
+                FieldDescriptor::leaf(&["port"], "port", "u16"),
+                FieldDescriptor::leaf(&["host"], "host", "String"),
             ];
             let fields_v1 = FIELDS_V1;
-            let hash_v1 = 111;
 
             let mset = MigrationSet::default().add(
                 prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
-                hash_v1,
                 fields_v1,
                 &[],
             );
@@ -1099,16 +1055,14 @@ mod tests {
 
         {
             static FIELDS_V2: &[FieldDescriptor] = &[
-                FieldDescriptor::leaf("port", 30, "u32"),
-                FieldDescriptor::leaf("timeout", 40, "Duration"),
+                FieldDescriptor::leaf(&["port"], "port", "u32"),
+                FieldDescriptor::leaf(&["timeout"], "timeout", "Duration"),
             ];
             let fields_v2 = FIELDS_V2;
-            let hash_v2 = 222;
 
             let mset = MigrationSet::default().add(
                 prefix.as_str(),
                 MigrationPlan::new().step(1, "v1", |_| Ok(())),
-                hash_v2,
                 fields_v2,
                 &[],
             );

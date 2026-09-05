@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_core::test_utils::{TempPath, unique_path};
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ pub struct Cfg {
 /// buffered and hide the loss.
 #[backends(all)]
 fn a_write_during_a_commit_is_not_dropped(backend: Backend) {
-    let path = unique_path("debounce_loss");
+    let path = TempPath::new("debounce_loss");
     let store = StoreBuilder::new(&path)
         .backend(backend)
         .disk(|d| d.debounce(Duration::from_millis(25)))
@@ -48,7 +48,7 @@ fn a_write_during_a_commit_is_not_dropped(backend: Backend) {
 
 #[backends(all)]
 fn a_burst_of_writes_settles_on_the_last_one(backend: Backend) {
-    let path = unique_path("debounce_burst");
+    let path = TempPath::new("debounce_burst");
 
     {
         let store = StoreBuilder::new(&path)

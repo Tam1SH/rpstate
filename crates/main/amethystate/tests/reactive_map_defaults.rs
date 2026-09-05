@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 mod v1 {
@@ -27,7 +27,7 @@ pub struct AppConfig {
 
 #[backends(all)]
 fn test_map_defaults_applied_only_on_first_init(backend: Backend) {
-    let path = unique_path("first_init");
+    let path = TempPath::new("first_init");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -56,7 +56,7 @@ fn test_map_defaults_applied_only_on_first_init(backend: Backend) {
 
 #[backends(all)]
 fn test_deleted_map_key_does_not_resurrect(backend: Backend) {
-    let path = unique_path("no_resurrect");
+    let path = TempPath::new("no_resurrect");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -73,7 +73,7 @@ fn test_deleted_map_key_does_not_resurrect(backend: Backend) {
 
 #[backends(all)]
 fn test_new_defaults_applied_on_version_upgrade(backend: Backend) {
-    let path = unique_path("version_upgrade");
+    let path = TempPath::new("version_upgrade");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -99,7 +99,7 @@ fn test_new_defaults_applied_on_version_upgrade(backend: Backend) {
 
 #[backends(all)]
 fn test_user_set_value_not_overwritten_by_defaults(backend: Backend) {
-    let path = unique_path("no_overwrite");
+    let path = TempPath::new("no_overwrite");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

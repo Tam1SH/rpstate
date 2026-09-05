@@ -149,11 +149,13 @@ impl<'a> MigrationContext<'a> {
         let new_data = TNew::migrate(old_data, &mut sub_ctx)?;
 
         for old_f in TOld::FIELDS {
-            let is_renamed = TNew::RENAMES.iter().any(|(ok, _)| *ok == old_f.name);
+            let is_renamed = TNew::RENAMES
+                .iter()
+                .any(|(ok, _)| *ok == old_f.name.as_str());
             let is_kept = TNew::FIELDS.iter().any(|nf| nf.name == old_f.name);
 
             if is_renamed || !is_kept {
-                sub_ctx.delete(old_f.name)?;
+                sub_ctx.delete(old_f.name.as_str())?;
             }
         }
         Ok(new_data)
@@ -383,10 +385,7 @@ impl<'a> MigrationContext<'a> {
         let mut map = IndexMap::new();
 
         for (path, bytes) in raw {
-            let below = amethystate_core::path::level_under(path.as_str(), &full_prefix)
-                .change_context(StorageError::Path)
-                .attach_prefix(&full_prefix)
-                .attach_raw_key(path.as_str())?;
+            let below = path.level_under(&full_prefix);
 
             let name = match below {
                 amethystate_core::path::Level::Entry(name) => name.into_owned(),

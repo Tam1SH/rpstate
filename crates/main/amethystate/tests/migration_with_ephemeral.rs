@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate, migrate_field};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 
@@ -66,7 +66,7 @@ fn migrate_system_config_v1_to_v2(
 
 #[backends(all)]
 fn test_nested_and_ephemeral_integration(backend: Backend) {
-    let path = unique_path("amethystate_ephemeral_test");
+    let path = TempPath::new("amethystate_ephemeral_test");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

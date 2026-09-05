@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
@@ -37,7 +37,7 @@ where
 
 #[backends(all)]
 fn clear_reports_once_to_every_handle(backend: Backend) {
-    let path = unique_path("clear_one_event");
+    let path = TempPath::new("clear_one_event");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let a = Cfg::new_with(&store).unwrap();
@@ -54,7 +54,7 @@ fn clear_reports_once_to_every_handle(backend: Backend) {
 
 #[backends(all)]
 fn clear_empties_every_handle(backend: Backend) {
-    let path = unique_path("clear_empties");
+    let path = TempPath::new("clear_empties");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let a = Cfg::new_with(&store).unwrap();
@@ -70,7 +70,7 @@ fn clear_empties_every_handle(backend: Backend) {
 
 #[backends(all)]
 fn clear_survives_a_store_rebuild(backend: Backend) {
-    let path = unique_path("clear_persists");
+    let path = TempPath::new("clear_persists");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -88,7 +88,7 @@ fn clear_survives_a_store_rebuild(backend: Backend) {
 
 #[backends(all)]
 fn clear_carries_the_provenance_of_the_handle_that_issued_it(backend: Backend) {
-    let path = unique_path("clear_source");
+    let path = TempPath::new("clear_source");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 

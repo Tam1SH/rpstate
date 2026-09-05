@@ -1523,18 +1523,18 @@ fn attributes_that_hand_serde_arbitrary_code() {
     table("attributes that hand serde arbitrary code", &rows);
 }
 
-/// A declared struct whose fields carry serde names beside their Rust ones.
+/// A declared struct whose fields name their own place beside their Rust name.
 ///
-/// The macro reads the serde name as the name the field is stored under, so
-/// what this asks is whether the store, the schema or both come back saying it.
+/// `#[serde(rename)]` is refused on a declared field - `serde_renames_a_field`
+/// pins that - so a field that sits somewhere other than its own name says so
+/// with `path`. What this asks is whether the store, the schema or both come
+/// back saying the written name rather than the Rust one.
 #[amethystate(prefix = "serde_named", version = 1)]
 pub struct SerdeNamed {
-    #[serde(rename = "renamed_port")]
-    #[amestate(default = 8080)]
+    #[amestate(path = "renamed_port", default = 8080)]
     pub port: u16,
 
-    #[serde(rename = "renamed_host")]
-    #[amestate(default = "h".to_string())]
+    #[amestate(path = "renamed_host", default = "h".to_string())]
     pub host: String,
 }
 
@@ -1543,7 +1543,7 @@ fn serde_names_on_a_declared_struct() {
     let mut rows = Vec::new();
 
     for (engine, backend) in engines() {
-        probe!(rows, engine, "declared struct with serde renames", {
+        probe!(rows, engine, "declared struct with a written path", {
             let file = TempPath::new("probe_serde_decl");
 
             {
@@ -1552,7 +1552,7 @@ fn serde_names_on_a_declared_struct() {
                     Err(e) => {
                         return Row {
                             engine: engine.to_string(),
-                            probe: "declared struct with serde renames".to_string(),
+                            probe: "declared struct with a written path".to_string(),
                             wrote: "-".to_string(),
                             write: "-".to_string(),
                             read: "-".to_string(),
@@ -1603,16 +1603,16 @@ fn serde_names_on_a_declared_struct() {
 
             let verdict = match (&by_rust, &by_serde) {
                 (Ok(Some(_)), Ok(None)) => {
-                    "the Rust name won; the serde name named nothing".to_string()
+                    "the Rust name won; the written path named nothing".to_string()
                 }
-                (Ok(None), Ok(Some(_))) => "the serde name won".to_string(),
+                (Ok(None), Ok(Some(_))) => "the written path won".to_string(),
                 (Ok(Some(_)), Ok(Some(_))) => "RESIDUE: both names hold a value".to_string(),
                 _ => "neither name holds a value".to_string(),
             };
 
             Row {
                 engine: engine.to_string(),
-                probe: "declared struct with serde renames".to_string(),
+                probe: "declared struct with a written path".to_string(),
                 wrote: "port=9999 host=\"written\"".to_string(),
                 write: "Ok".to_string(),
                 read: brief(&format!(
@@ -1745,7 +1745,13 @@ fn snapshot_names(file: &TempPath, backend: Backend) -> Option<Vec<String>> {
     snapshots
         .into_iter()
         .find(|(prefix, _)| prefix.contains("serde_named"))
-        .map(|(_, snapshot)| snapshot.fields.iter().map(|f| f.name.clone()).collect())
+        .map(|(_, snapshot)| {
+            snapshot
+                .fields
+                .iter()
+                .map(|f| f.name.as_str().to_string())
+                .collect()
+        })
 }
 
 /// Whether the shape the inspector could not show is in the file at all.

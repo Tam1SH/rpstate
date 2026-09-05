@@ -1,7 +1,7 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
@@ -14,16 +14,15 @@ pub struct Typed {
     pub port: u16,
 }
 
-fn store(backend: Backend) -> amethystate::Store {
-    StoreBuilder::new(unique_path("kv"))
-        .backend(backend)
-        .build()
-        .unwrap()
+fn store(backend: Backend) -> (amethystate::Store, TempPath) {
+    let at = TempPath::new("kv");
+    let store = StoreBuilder::new(&at).backend(backend).build().unwrap();
+    (store, at)
 }
 
 #[backends(all)]
 fn raw_round_trip(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     kv.set("theme", &"dark".to_string()).unwrap();
@@ -35,7 +34,7 @@ fn raw_round_trip(backend: Backend) {
 
 #[backends(all)]
 fn a_cell_is_an_ordinary_reactive_cell(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
 
     //@show opening a cell without a schema
     let kv = store.kv();
@@ -59,7 +58,7 @@ fn a_cell_is_an_ordinary_reactive_cell(backend: Backend) {
 
 #[backends(all)]
 fn a_map_takes_a_key_set_that_is_not_known_up_front(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     let flags = kv.map::<String, bool>("flags").unwrap();
@@ -71,7 +70,7 @@ fn a_map_takes_a_key_set_that_is_not_known_up_front(backend: Backend) {
 
 #[backends(all)]
 fn keys_are_sorted_and_scoped_to_the_prefix(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     let ui = kv.namespace("ui");
@@ -96,7 +95,7 @@ fn keys_are_sorted_and_scoped_to_the_prefix(backend: Backend) {
 /// declared, but a map there would take the level `typed.port` lives on.
 #[backends(all)]
 fn writing_into_a_declared_path_is_refused(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     let err = kv
@@ -121,7 +120,7 @@ fn writing_into_a_declared_path_is_refused(backend: Backend) {
 
 #[backends(all)]
 fn a_path_next_to_a_declared_prefix_is_allowed(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     kv.namespace("typedish").set("port", &1u16).unwrap();
@@ -136,7 +135,7 @@ fn a_path_next_to_a_declared_prefix_is_allowed(backend: Backend) {
 /// the file - and none of that collides with a declared field.
 #[backends(all)]
 fn a_path_beside_a_declared_field_is_allowed(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let typed = store.kv().namespace("typed");
 
     typed.set("colour", &"blue".to_string()).unwrap();
@@ -163,7 +162,7 @@ fn a_path_beside_a_declared_field_is_allowed(backend: Backend) {
 /// report names the value, not just the two type names.
 #[backends(all)]
 fn the_same_path_cannot_be_two_types(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     let _width = kv.namespace("ui").cell("width", 800u32).unwrap();
@@ -177,7 +176,7 @@ fn the_same_path_cannot_be_two_types(backend: Backend) {
 
 #[backends(all)]
 fn asking_for_the_same_path_and_type_twice_is_fine(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     let a = kv.namespace("ui").cell("width", 800u32).unwrap();
@@ -192,7 +191,7 @@ fn asking_for_the_same_path_and_type_twice_is_fine(backend: Backend) {
 /// matched `String` - and refused the second ask for anything but a primitive.
 #[backends(all)]
 fn the_same_path_and_type_twice_is_fine_for_a_type_that_is_not_a_primitive(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let kv = store.kv();
 
     kv.cell("text", String::new()).unwrap();
@@ -206,7 +205,7 @@ fn the_same_path_and_type_twice_is_fine_for_a_type_that_is_not_a_primitive(backe
 
 #[backends(all)]
 fn values_survive_a_reopen(backend: Backend) {
-    let path = unique_path("kv_reopen");
+    let path = TempPath::new("kv_reopen");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

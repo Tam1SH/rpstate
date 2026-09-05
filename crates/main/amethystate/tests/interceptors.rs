@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{MapChange, ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ pub struct Cfg {
 }
 
 fn cfg(backend: Backend) -> (amethystate::Store, Cfg) {
-    let path = unique_path("interceptors");
+    let path = TempPath::new("interceptors");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
     (store, cfg)

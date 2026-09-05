@@ -39,7 +39,7 @@ pub struct NetworkState {
 ```
 <!-- /shown -->
 
-Значения по умолчанию, вложенные структуры, volatile-поля, `AmeType`, политики
+Значения по умолчанию, вложенные структуры, volatile-поля, политики
 чтения и serde:
 [Объявление структур](/amethystate/ru/state/defining-structs/).
 
@@ -92,7 +92,7 @@ state.port().set(9090)?;
 
 <!-- shown: a map whose keys are not known up front -->
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, Default, AmeType)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AlertThresholds {
     pub warning: u64,
     pub critical: u64,

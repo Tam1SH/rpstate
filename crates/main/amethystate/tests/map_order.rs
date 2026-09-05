@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "ord")]
@@ -22,7 +22,7 @@ fn seeded(backend: Backend, path: &std::path::Path) -> (amethystate::Store, Cfg)
 
 #[backends(all)]
 fn entries_are_sorted_by_key(backend: Backend) {
-    let path = unique_path("order_sorted");
+    let path = TempPath::new("order_sorted");
     let (_store, cfg) = seeded(backend, &path);
 
     assert_eq!(
@@ -37,7 +37,7 @@ fn entries_are_sorted_by_key(backend: Backend) {
 /// listing them reordered itself mid-session, differently on every run.
 #[backends(all)]
 fn entry_order_survives_a_flush(backend: Backend) {
-    let path = unique_path("order_flush");
+    let path = TempPath::new("order_flush");
     let (store, cfg) = seeded(backend, &path);
 
     let before: Vec<String> = cfg.items().keys().collect();
@@ -49,7 +49,7 @@ fn entry_order_survives_a_flush(backend: Backend) {
 
 #[backends(all)]
 fn entries_and_keys_agree(backend: Backend) {
-    let path = unique_path("order_agree");
+    let path = TempPath::new("order_agree");
     let (_store, cfg) = seeded(backend, &path);
 
     let from_entries: Vec<String> = cfg.items().entries().map(|(k, _)| k).collect();
@@ -61,7 +61,7 @@ fn entries_and_keys_agree(backend: Backend) {
 /// that are still only in the write buffer.
 #[backends(all)]
 fn keys_sees_unflushed_writes(backend: Backend) {
-    let path = unique_path("order_unflushed");
+    let path = TempPath::new("order_unflushed");
     let (_store, cfg) = seeded(backend, &path);
 
     cfg.items().insert("zzz".to_string(), &1).unwrap();
@@ -75,7 +75,7 @@ fn keys_sees_unflushed_writes(backend: Backend) {
 
 #[backends(all)]
 fn keys_forgets_a_removed_entry(backend: Backend) {
-    let path = unique_path("order_removed");
+    let path = TempPath::new("order_removed");
     let (store, cfg) = seeded(backend, &path);
 
     store.save_now().unwrap();

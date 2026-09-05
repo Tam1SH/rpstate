@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,7 +28,7 @@ pub struct AppState {
 
 #[backends(all)]
 fn test_slice_subscribe_all(backend: Backend) {
-    let path = unique_path("slice_sub_all");
+    let path = TempPath::new("slice_sub_all");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = AppState::new_with(&store).unwrap();
 
@@ -62,7 +62,7 @@ fn test_slice_subscribe_all(backend: Backend) {
 
 #[backends(all)]
 fn test_slice_subscribe_all_external(backend: Backend) {
-    let path = unique_path("slice_sub_all_ext");
+    let path = TempPath::new("slice_sub_all_ext");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let state = AppState::new_with(&store).unwrap();

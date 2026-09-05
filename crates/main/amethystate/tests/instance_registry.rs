@@ -1,7 +1,7 @@
 use amethystate::amethystate;
 use amethystate::observability::resolve_instance;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use uuid::Uuid;
 
@@ -11,16 +11,15 @@ pub struct Tracked {
     pub port: u16,
 }
 
-fn store(backend: Backend, tag: &str) -> amethystate::Store {
-    StoreBuilder::new(unique_path(tag))
-        .backend(backend)
-        .build()
-        .unwrap()
+fn store(backend: Backend, tag: &str) -> (amethystate::Store, TempPath) {
+    let at = TempPath::new(tag);
+    let store = StoreBuilder::new(&at).backend(backend).build().unwrap();
+    (store, at)
 }
 
 #[backends(all)]
 fn an_instance_leaves_the_registry_when_it_drops(backend: Backend) {
-    let s = store(backend, "drop");
+    let (s, _at) = store(backend, "drop");
     let id = Uuid::new_v4();
 
     {
@@ -33,7 +32,7 @@ fn an_instance_leaves_the_registry_when_it_drops(backend: Backend) {
 
 #[backends(all)]
 fn a_clone_keeps_the_instance_alive(backend: Backend) {
-    let s = store(backend, "clone");
+    let (s, _at) = store(backend, "clone");
     let id = Uuid::new_v4();
 
     let state = Tracked::new_with_id(&s, id).unwrap();
@@ -51,7 +50,7 @@ fn a_clone_keeps_the_instance_alive(backend: Backend) {
 
 #[backends(all)]
 fn repeated_construction_does_not_accumulate(backend: Backend) {
-    let s = store(backend, "churn");
+    let (s, _at) = store(backend, "churn");
     let ids: Vec<Uuid> = (0..64).map(|_| Uuid::new_v4()).collect();
 
     for id in &ids {

@@ -46,7 +46,7 @@ pub use store::{
 
 pub use migration::{MigrationContext, MigrationError, MigrationPlan, MigrationReport};
 
-pub use amethystate_macros::{AmeType, amethystate, migrate};
+pub use amethystate_macros::{amethystate, migrate};
 
 pub mod prelude;
 pub use global::*;

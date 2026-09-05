@@ -1,5 +1,5 @@
+use amethystate::ReactiveMap;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate::{AmeType, ReactiveMap};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub struct KeptSettings {
 //@show-end
 
 //@show a map whose keys are not known up front
-#[derive(Debug, Clone, Serialize, Deserialize, Default, AmeType)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AlertThresholds {
     pub warning: u64,
     pub critical: u64,

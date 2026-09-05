@@ -30,6 +30,18 @@ pub(crate) fn path_literal(crate_name: &TokenStream2, dotted: &str) -> TokenStre
     }
 }
 
+/// The same path as [`path_literal`], for the places a declaration carries it:
+/// a `const` item, and a `static` whose other fields are filled in around it.
+///
+/// Not wrapped in a `const` block, because it is already written into one.
+pub(crate) fn static_path_literal(crate_name: &TokenStream2, dotted: &str) -> TokenStream2 {
+    let (segments, joined) = path_parts(dotted);
+
+    quote! {
+        #crate_name::store::StaticPath::new(&[#(#segments),*], #joined)
+    }
+}
+
 pub(crate) const SEPARATOR: char = '.';
 pub(crate) const ESCAPE: char = '\\';
 pub(crate) const ROOT: &str = ".";

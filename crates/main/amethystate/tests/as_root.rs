@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 #[amethystate(as_root)]
 pub struct AppConfig {
@@ -13,7 +13,7 @@ pub struct AppConfig {
 
 #[backends(all)]
 fn test_as_root_global_namespace(backend: Backend) {
-    let path = unique_path("as_root_test");
+    let path = TempPath::new("as_root_test");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let config = AppConfig::new_with(&store).unwrap();

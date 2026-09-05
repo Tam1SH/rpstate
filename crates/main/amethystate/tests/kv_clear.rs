@@ -7,7 +7,7 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "app")]
@@ -28,11 +28,10 @@ pub struct Panel {
     pub visible: bool,
 }
 
-fn store(backend: Backend) -> amethystate::Store {
-    StoreBuilder::new(unique_path("kv_clear"))
-        .backend(backend)
-        .build()
-        .unwrap()
+fn store(backend: Backend) -> (amethystate::Store, TempPath) {
+    let at = TempPath::new("kv_clear");
+    let store = StoreBuilder::new(&at).backend(backend).build().unwrap();
+    (store, at)
 }
 
 fn at(joined: &str) -> StorePath {
@@ -41,7 +40,7 @@ fn at(joined: &str) -> StorePath {
 
 #[backends(all)]
 fn clearing_takes_what_no_schema_declared_and_leaves_the_rest(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let app = App::new_with(&store).unwrap();
     let kv = store.kv().namespace("app");
 
@@ -90,7 +89,7 @@ fn clearing_takes_what_no_schema_declared_and_leaves_the_rest(backend: Backend) 
 /// immortal.
 #[backends(all)]
 fn clearing_descends_past_a_level_that_holds_a_declared_path(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let app = App::new_with(&store).unwrap();
     let panel = store.kv().namespace("app").namespace("panel");
 
@@ -118,7 +117,7 @@ fn clearing_descends_past_a_level_that_holds_a_declared_path(backend: Backend) {
 /// its change.
 #[backends(all)]
 fn clearing_does_not_restore_a_declared_default(backend: Backend) {
-    let store = store(backend);
+    let (store, _at) = store(backend);
     let app = App::new_with(&store).unwrap();
     app.width().set(640).unwrap();
 
@@ -134,7 +133,7 @@ fn clearing_does_not_restore_a_declared_default(backend: Backend) {
 /// are gone rather than reset.
 #[backends(all)]
 fn resetting_puts_the_declared_defaults_back_on_the_next_build(backend: Backend) {
-    let path = unique_path("kv_reset");
+    let path = TempPath::new("kv_reset");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

@@ -10,6 +10,7 @@ pub mod facts;
 pub mod format;
 pub mod kv;
 pub mod meta;
+pub mod moved;
 pub mod owners;
 mod primitives_factory;
 mod rules;
@@ -20,7 +21,7 @@ mod traits;
 mod types;
 pub mod util;
 
-pub use amethystate_core::path::{IntoStorePath, StorePath, StorePathError};
+pub use amethystate_core::path::{IntoStorePath, PathRef, StaticPath, StorePath, StorePathError};
 pub use check::{
     Check, CheckContext, Invalid, refused, refused_or_default, refused_struct_or_kept,
     refused_under,

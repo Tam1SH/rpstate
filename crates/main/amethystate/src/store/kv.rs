@@ -477,25 +477,23 @@ pub enum Collision {
 /// [`Collision::Holds`] naming one of them.
 fn collision(at: &StorePath, fields: &[FieldDescriptor], path: &StorePath) -> Option<Collision> {
     for field in fields {
-        let Ok(declared) = at.try_push(field.name) else {
-            continue;
-        };
-
-        if declared.starts_with(path) && &declared != path {
-            return Some(Collision::Holds(declared));
-        }
-
-        match field.role {
-            Role::Node => {
-                if path.starts_with(&declared)
-                    && let Some(found) = collision(&declared, field.children, path)
-                {
-                    return Some(found);
+        match field.owns(at) {
+            Some(owned) => {
+                if owned.starts_with(path) && owned != *path {
+                    return Some(Collision::Holds(owned));
+                }
+                if path.starts_with(&owned) {
+                    return Some(Collision::Owned(owned));
                 }
             }
-            Role::Field | Role::Map => {
-                if path.starts_with(&declared) {
-                    return Some(Collision::Owned(declared));
+            // Owns nothing itself, so it can only be met through what is under
+            // it - at the level `below` puts them, which is this one when the
+            // node is flattened.
+            None => {
+                let below = field.below(at);
+
+                if let Some(found) = collision(&below, field.children, path) {
+                    return Some(found);
                 }
             }
         }
@@ -529,9 +527,7 @@ fn seeded_namespaces_under(at: &StorePath) -> Vec<StorePath> {
 
 fn collect_seeded(at: &StorePath, fields: &[FieldDescriptor], found: &mut Vec<StorePath>) {
     for field in fields {
-        let Ok(path) = at.try_push(field.name) else {
-            continue;
-        };
+        let path = at.join(&field.name.path());
 
         match field.role {
             Role::Node => {

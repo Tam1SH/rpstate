@@ -2,7 +2,7 @@ use amethystate::migration::ComponentOutcome;
 use amethystate::store::IntoStorageReport;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, MigrationError, migrate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 use tracing_test::traced_test;
@@ -242,7 +242,7 @@ fn migrate_telemetry_v1_to_v2(
 #[backends(all)]
 #[traced_test]
 fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backend) {
-    let path = unique_path("complex-migration");
+    let path = TempPath::new("complex-migration");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

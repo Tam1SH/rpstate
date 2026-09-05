@@ -1,7 +1,7 @@
 use amethystate::observability;
 use amethystate::store::builder::Backend;
 use amethystate::{StoreBuilder, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use tracing_test::traced_test;
 
@@ -42,7 +42,7 @@ fn a_field_named_with_a_separator_is_registered_under_that_name() {
 
 #[backends(all)]
 fn instance_registered_on_new(backend: Backend) {
-    let path = unique_path("obs_instance_reg");
+    let path = TempPath::new("obs_instance_reg");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let _state = ObsState::new_with(&store).unwrap();
 
@@ -58,7 +58,7 @@ fn instance_registered_on_new(backend: Backend) {
 
 #[backends(all)]
 fn fields_registered_in_schema_registry(backend: Backend) {
-    let path = unique_path("obs_schema_reg");
+    let path = TempPath::new("obs_schema_reg");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let _state = ObsState::new_with(&store).unwrap();
 
@@ -85,7 +85,7 @@ fn fields_registered_in_schema_registry(backend: Backend) {
 #[backends(all)]
 #[traced_test]
 fn field_set_emits_trace(backend: Backend) {
-    let path = unique_path("obs_write_trace");
+    let path = TempPath::new("obs_write_trace");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = ObsState::new_with(&store).unwrap();
 
@@ -101,7 +101,7 @@ fn field_set_emits_trace(backend: Backend) {
 #[backends(all)]
 #[traced_test]
 fn field_set_trace_contains_source_name(backend: Backend) {
-    let path = unique_path("obs_source_name");
+    let path = TempPath::new("obs_source_name");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = ObsState::new_with(&store).unwrap();
 
@@ -116,7 +116,7 @@ fn field_set_trace_contains_source_name(backend: Backend) {
 #[backends(all)]
 #[traced_test]
 fn subscription_fire_emits_trace_with_location(backend: Backend) {
-    let path = unique_path("obs_sub_trace");
+    let path = TempPath::new("obs_sub_trace");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = ObsState::new_with(&store).unwrap();
 
@@ -139,7 +139,7 @@ fn subscription_fire_emits_trace_with_location(backend: Backend) {
 #[backends(all)]
 #[traced_test]
 fn a_built_subscription_traces_the_call_site_and_not_the_builder(backend: Backend) {
-    let path = unique_path("obs_watch_trace");
+    let path = TempPath::new("obs_watch_trace");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = ObsState::new_with(&store).unwrap();
 
@@ -163,7 +163,7 @@ fn a_built_subscription_traces_the_call_site_and_not_the_builder(backend: Backen
 #[backends(all)]
 #[traced_test]
 fn named_subscription_appears_in_trace(backend: Backend) {
-    let path = unique_path("obs_named_sub");
+    let path = TempPath::new("obs_named_sub");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = ObsState::new_with(&store).unwrap();
 
@@ -179,7 +179,7 @@ fn named_subscription_appears_in_trace(backend: Backend) {
 #[backends(all)]
 #[traced_test]
 fn forked_write_traces_with_source(backend: Backend) {
-    let path = unique_path("obs_fork_trace");
+    let path = TempPath::new("obs_fork_trace");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let state = ObsState::new_with(&store).unwrap();
     let fork = state.fork();

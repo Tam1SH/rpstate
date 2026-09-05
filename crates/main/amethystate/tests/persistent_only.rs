@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::{Backend, StoreBuilder};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 #[amethystate(prefix = "network", mode = "both")]
@@ -14,7 +14,7 @@ pub struct NetworkState {
 
 #[backends(all)]
 fn persistent_only_load_save_and_mutate(backend: Backend) {
-    let path = unique_path("persistent-only");
+    let path = TempPath::new("persistent-only");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let state = NetworkState::new_with(&store).unwrap();

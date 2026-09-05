@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 
@@ -37,7 +37,7 @@ fn migrate_broken_v1_to_v2(
 /// prefix that needed it was gone for good.
 #[backends(all)]
 fn a_failed_migration_leaves_the_snapshot_for_the_next_run(backend: Backend) {
-    let path = unique_path("failed_migration_snapshot");
+    let path = TempPath::new("failed_migration_snapshot");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

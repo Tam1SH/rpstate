@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,7 +38,7 @@ where
 #[backends(all)]
 fn a_map_subscriber_may_write_to_the_map_it_watches(backend: Backend) {
     within("map subscriber writing to its own map", move || {
-        let path = unique_path("reentrancy_map");
+        let path = TempPath::new("reentrancy_map");
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         let items = cfg.items();
@@ -67,7 +67,7 @@ fn a_map_subscriber_may_write_to_the_map_it_watches(backend: Backend) {
 #[backends(all)]
 fn a_keyed_subscriber_may_write_to_the_map_it_watches(backend: Backend) {
     within("keyed subscriber writing to its own map", move || {
-        let path = unique_path("reentrancy_key");
+        let path = TempPath::new("reentrancy_key");
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         let items = cfg.items();
@@ -90,7 +90,7 @@ fn a_keyed_subscriber_may_write_to_the_map_it_watches(backend: Backend) {
 #[backends(all)]
 fn a_subscriber_may_add_another_subscription_while_being_notified(backend: Backend) {
     within("subscriber subscribing during a notification", move || {
-        let path = unique_path("reentrancy_sub");
+        let path = TempPath::new("reentrancy_sub");
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         let cfg = Cfg::new_with(&store).unwrap();
         let items = cfg.items();
@@ -119,7 +119,7 @@ fn a_subscriber_may_add_another_subscription_while_being_notified(backend: Backe
 /// later subscribe panicked and every later notify silently delivered nothing.
 #[backends(all)]
 fn a_panicking_subscriber_does_not_disable_the_map(backend: Backend) {
-    let path = unique_path("reentrancy_panic");
+    let path = TempPath::new("reentrancy_panic");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
     let items = cfg.items();

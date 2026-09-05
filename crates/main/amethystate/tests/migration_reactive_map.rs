@@ -1,11 +1,11 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, ReactiveMap, migrate};
-use amethystate_core::test_utils::unique_path;
-use amethystate_macros::{AmeType, amethystate};
+use amethystate_core::test_utils::TempPath;
+use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, AmeType)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProxyEndpoint {
     pub url: String,
     pub timeout_ms: u32,
@@ -60,7 +60,7 @@ fn migrate_proxy_config_v1_to_v2(
 
 #[backends(all)]
 fn test_embedded_map_migration(backend: Backend) {
-    let path = unique_path("amethystate_embedded_map");
+    let path = TempPath::new("amethystate_embedded_map");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

@@ -7,7 +7,7 @@ use amethystate::store::StorageError;
 use amethystate::store::SubscriptionKind;
 use amethystate::store::config::StoreConfig;
 use amethystate_core::path::StorePath;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,8 +16,8 @@ const EMPTY_FIELDS: &[FieldDescriptor] = &[];
 
 #[test]
 fn test_set_get_immediate() {
-    let path = unique_path("immediate");
-    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let path = TempPath::new("immediate");
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
 
     store.set(["user", "name"], &"Alice".to_string()).unwrap();
 
@@ -27,8 +27,8 @@ fn test_set_get_immediate() {
 
 #[test]
 fn test_local_reactivity() {
-    let path = unique_path("reactivity");
-    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let path = TempPath::new("reactivity");
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
 
     let hit = Arc::new(Mutex::new(false));
     let hit_inner = hit.clone();
@@ -49,7 +49,7 @@ fn test_local_reactivity() {
 
 #[test]
 fn test_delete_flow() {
-    let path = unique_path("delete");
+    let path = TempPath::new("delete");
     {
         let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
         store.set(["temp", "key"], &1).unwrap();
@@ -66,8 +66,8 @@ fn test_delete_flow() {
 
 #[test]
 fn bytes_that_are_not_the_type_are_an_error_rather_than_a_default() {
-    let path = unique_path("recovery");
-    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let path = TempPath::new("recovery");
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
     let garbage = vec![0x00, 0x01, 0x02];
 
     let err = store.decode::<String>(&garbage).unwrap_err();
@@ -77,7 +77,7 @@ fn bytes_that_are_not_the_type_are_an_error_rather_than_a_default() {
 
 #[test]
 fn test_deterministic_closure_and_reopen() {
-    let path = unique_path("closure");
+    let path = TempPath::new("closure");
     {
         let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
         store.set(["test", "key"], &"hello".to_string()).unwrap();
@@ -92,7 +92,7 @@ fn test_deterministic_closure_and_reopen() {
 
 #[test]
 fn test_drop_behavior_is_deterministic() {
-    let path = unique_path("drop_logic");
+    let path = TempPath::new("drop_logic");
     {
         let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
         store.set(["drop", "test"], &42u32).unwrap();
@@ -109,7 +109,7 @@ fn test_drop_behavior_is_deterministic() {
 
 #[test]
 fn test_close_saves_pending_data() {
-    let path = unique_path("save_on_close");
+    let path = TempPath::new("save_on_close");
     let mut config = StoreConfig::new(&path);
     config.save_debounce = Duration::from_secs(3600);
 
@@ -129,15 +129,15 @@ fn ns(joined: &str) -> StorePath {
 
 #[test]
 fn test_is_initialized_false_on_fresh_store() {
-    let path = unique_path("init_fresh");
-    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let path = TempPath::new("init_fresh");
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
     assert!(!store.is_initialized(&ns("settings")).unwrap());
 }
 
 #[test]
 fn test_mark_and_is_initialized() {
-    let path = unique_path("init_mark");
-    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let path = TempPath::new("init_mark");
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
     assert!(!store.is_initialized(&ns("settings")).unwrap());
     store.mark_initialized(&ns("settings")).unwrap();
     assert!(store.is_initialized(&ns("settings")).unwrap());
@@ -145,8 +145,8 @@ fn test_mark_and_is_initialized() {
 
 #[test]
 fn test_initialized_namespaces_are_independent() {
-    let path = unique_path("init_namespaces");
-    let (store, _) = Store::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+    let path = TempPath::new("init_namespaces");
+    let (store, _) = Store::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
     store.mark_initialized(&ns("settings")).unwrap();
     assert!(store.is_initialized(&ns("settings")).unwrap());
     assert!(!store.is_initialized(&ns("other")).unwrap());
@@ -154,7 +154,7 @@ fn test_initialized_namespaces_are_independent() {
 
 #[test]
 fn test_component_atomic_rollback() {
-    let path = unique_path("rollback");
+    let path = TempPath::new("rollback");
     let mut cfg = StoreConfig::new(&path);
     cfg.save_debounce = Duration::from_millis(50);
     {
@@ -167,7 +167,6 @@ fn test_component_atomic_rollback() {
         .add(
             "net",
             MigrationPlan::new().step(1, "ok", |ctx| ctx.set("ip", &"8.8.8.8".to_string())),
-            0,
             EMPTY_FIELDS,
             &[],
         )
@@ -176,7 +175,6 @@ fn test_component_atomic_rollback() {
             MigrationPlan::new().step(1, "fail", |_| {
                 Err(MigrationError::Custom("crash".into()).into_report())
             }),
-            0,
             EMPTY_FIELDS,
             &["net"],
         );

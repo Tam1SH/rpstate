@@ -8,7 +8,7 @@ use crate::store::rules::{OnDelete, OnUnreadable, ReadRules};
 use crate::store::traits::{StoreExt as _, StoredAs};
 use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
 use crate::{ReactiveMapKey, ReactiveMapValue};
-use amethystate_core::path::{IntoStorePath, Level, StorePath};
+use amethystate_core::path::{IntoStorePath, Level, PathRef, StorePath};
 use amethystate_core::{FieldCore, MapChange, ReactiveMapCore, Signal};
 use error_stack::{Report, ResultExt};
 use indexmap::IndexMap;
@@ -308,7 +308,7 @@ where
                 .par_iter()
                 .with_min_len(PARALLEL_MIN_LEN)
                 .filter_map(|(stored, bytes)| {
-                    decode_entry(store, path, stored.as_str(), bytes).transpose()
+                    decode_entry(store, path, PathRef::from(stored), bytes).transpose()
                 })
                 .collect::<StorageResult<Vec<_>>>()?;
 
@@ -317,7 +317,7 @@ where
 
         let mut entries = IndexMap::with_capacity(scanned.len());
         for (stored, bytes) in &scanned {
-            if let Some((key, value)) = decode_entry(store, path, stored.as_str(), bytes)? {
+            if let Some((key, value)) = decode_entry(store, path, PathRef::from(stored), bytes)? {
                 entries.insert(key, value);
             }
         }
@@ -340,17 +340,14 @@ const PARALLEL_MIN_LEN: usize = 1024;
 fn decode_entry<K, V>(
     store: &Store,
     path: &StorePath,
-    stored: &str,
+    stored: PathRef<'_>,
     bytes: &[u8],
 ) -> StorageResult<Option<(K, V)>>
 where
     K: ReactiveMapKey,
     V: ReactiveMapValue,
 {
-    let below = amethystate_core::path::level_under(stored, path)
-        .change_context(StorageError::Path)
-        .attach_prefix(path)
-        .attach_raw_key(stored)?;
+    let below = stored.level_under(path);
 
     let name = match &below {
         Level::Entry(name) => name.as_ref(),
@@ -358,7 +355,7 @@ where
         Level::Deeper(name) => {
             return Err(Report::new(StorageError::Path)
                 .attach(Prefix(path.clone()))
-                .attach(RawKey(stored.to_owned()))
+                .attach(RawKey(stored.as_str().to_owned()))
                 .attach(Entry(name.to_string()))
                 .attach(
                     "a map owns the level below it and nothing further, so this key \
@@ -368,7 +365,7 @@ where
         Level::Outside => {
             return Err(Report::new(StorageError::Path)
                 .attach(Prefix(path.clone()))
-                .attach(RawKey(stored.to_owned()))
+                .attach(RawKey(stored.as_str().to_owned()))
                 .attach("the key is not under the map it was scanned from"));
         }
     };

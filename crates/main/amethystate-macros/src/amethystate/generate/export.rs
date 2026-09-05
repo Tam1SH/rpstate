@@ -32,7 +32,6 @@ pub(crate) fn entries(crate_name: &TokenStream2, schema: &Schema) -> TokenStream
                 prefix: #at,
                 struct_name: #named,
                 version: #version,
-                schema_hash: <#data_struct_name as #crate_name::migration::types::AmeType>::TYPE_HASH,
                 fields: <#data_struct_name as #crate_name::migration::fields::AmeStateFields>::FIELDS,
             }
         }

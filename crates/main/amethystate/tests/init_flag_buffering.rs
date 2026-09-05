@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 /// A namespace named the way a key on disk spells it.
@@ -10,10 +10,8 @@ fn ns(joined: &str) -> StorePath {
 
 #[backends(all)]
 fn a_mark_is_visible_before_it_reaches_disk(backend: Backend) {
-    let store = StoreBuilder::new(unique_path("readback"))
-        .backend(backend)
-        .build()
-        .unwrap();
+    let at = TempPath::new("readback");
+    let store = StoreBuilder::new(&at).backend(backend).build().unwrap();
 
     assert!(!store.is_initialized(&ns("settings")).unwrap());
     store.mark_initialized(&ns("settings")).unwrap();
@@ -26,18 +24,15 @@ fn a_mark_is_visible_before_it_reaches_disk(backend: Backend) {
 
 #[backends(all)]
 fn a_mark_survives_a_flush_and_reopen(backend: Backend) {
-    let path = unique_path("persist");
+    let path = TempPath::new("persist");
 
     {
-        let store = StoreBuilder::new(path.clone())
-            .backend(backend)
-            .build()
-            .unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         store.mark_initialized(&ns("settings")).unwrap();
         store.save_now().unwrap();
     }
 
-    let store = StoreBuilder::new(path).backend(backend).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     assert!(store.is_initialized(&ns("settings")).unwrap());
 }
 
@@ -50,20 +45,17 @@ fn a_mark_survives_a_flush_and_reopen(backend: Backend) {
 /// `durability_crash.rs` does.
 #[backends(all)]
 fn a_prefix_flush_carries_the_mark_for_that_namespace(backend: Backend) {
-    let path = unique_path("prefix");
+    let path = TempPath::new("prefix");
 
     {
-        let store = StoreBuilder::new(path.clone())
-            .backend(backend)
-            .build()
-            .unwrap();
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
         store.set(["settings", "port"], &8080u16).unwrap();
         store.mark_initialized(&ns("settings")).unwrap();
 
         store.flush_prefix(["settings"]).unwrap();
     }
 
-    let store = StoreBuilder::new(path).backend(backend).build().unwrap();
+    let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     assert!(
         store.is_initialized(&ns("settings")).unwrap(),
         "the mark is selected by the same prefix rule as its values"
@@ -73,10 +65,8 @@ fn a_prefix_flush_carries_the_mark_for_that_namespace(backend: Backend) {
 
 #[backends(all)]
 fn a_mark_does_not_show_up_as_data(backend: Backend) {
-    let store = StoreBuilder::new(unique_path("notdata"))
-        .backend(backend)
-        .build()
-        .unwrap();
+    let at = TempPath::new("notdata");
+    let store = StoreBuilder::new(&at).backend(backend).build().unwrap();
 
     store.mark_initialized(&ns("settings")).unwrap();
     store.set(["settings", "port"], &1u16).unwrap();

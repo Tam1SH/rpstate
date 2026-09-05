@@ -979,7 +979,7 @@ mod tests {
     use super::*;
 
     use crate::store::StoreExt;
-    use amethystate_core::test_utils::unique_path;
+    use amethystate_core::test_utils::TempPath;
     use serial_test::serial;
     use std::thread;
     use std::time::Duration;
@@ -987,9 +987,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_debouncer_persistence() {
-        let path = unique_path("debounce");
+        let path = TempPath::new("debounce");
 
-        let mut config = StoreConfig::new(path);
+        let mut config = StoreConfig::new(&path);
         config.save_debounce = Duration::from_millis(50);
 
         let (store, _) = SqliteStore::open(config, MigrationSet::default()).unwrap();
@@ -1017,9 +1017,9 @@ mod tests {
 
     #[test]
     fn test_delete_flow() {
-        let path = unique_path("delete");
+        let path = TempPath::new("delete");
         let (store, _) =
-            SqliteStore::open(StoreConfig::new(path), MigrationSet::default()).unwrap();
+            SqliteStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
 
         store.set(["temp", "key"], &1).unwrap();
 
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[test]
     fn test_close_saves_pending_data() {
-        let path = unique_path("save_on_close");
+        let path = TempPath::new("save_on_close");
         let mut config = StoreConfig::new(&path);
         config.save_debounce = Duration::from_secs(3600);
 
@@ -1057,7 +1057,7 @@ mod tests {
 
     #[test]
     fn test_granular_flush_prefix_drains_buffer() {
-        let path = unique_path("granular_flush");
+        let path = TempPath::new("granular_flush");
         let mut config = StoreConfig::new(&path);
 
         config.save_debounce = Duration::from_secs(3600);

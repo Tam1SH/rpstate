@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 
@@ -48,7 +48,7 @@ fn migrate_profile_v1_to_v2(
 
 #[backends(all)]
 fn migration_builder_mixes_codegen_and_manual_steps(backend: Backend) {
-    let path = unique_path("migration-builder");
+    let path = TempPath::new("migration-builder");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

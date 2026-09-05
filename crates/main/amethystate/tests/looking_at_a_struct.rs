@@ -12,7 +12,7 @@ pub struct Window {
 }
 
 /// A type nobody can print, to prove a field holding one is still listed.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize, AmeType)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Unprintable(pub u8);
 
 #[amethystate(prefix = "editor", rename_all = "camelCase")]

@@ -219,14 +219,14 @@ mod tests {
     use crate::store::config::StoreConfig;
     use crate::stores::RedbStore;
     use amethystate_core::path::StorePath;
-    use amethystate_core::test_utils::unique_path;
+    use amethystate_core::test_utils::TempPath;
     use serial_test::serial;
     use std::time::Duration;
 
     #[test]
     #[serial]
     fn the_database_can_be_traded_for_a_fresh_one_under_a_live_store() {
-        let path = unique_path("redb_reopen");
+        let path = TempPath::new("redb_reopen");
         let (store, _) = RedbStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
 
         store
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     #[serial]
     fn a_disk_that_fails_for_real_is_recovered_by_trading_the_handle() {
-        let path = unique_path("redb_previous_io");
+        let path = TempPath::new("redb_previous_io");
         let _disk = arm_failing_disk(&path);
 
         let (store, _) = RedbStore::open(StoreConfig::new(&path), MigrationSet::default()).unwrap();
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     #[serial]
     fn a_buffered_write_survives_the_reopen() {
-        let path = unique_path("redb_reopen_buffered");
+        let path = TempPath::new("redb_reopen_buffered");
         let mut config = StoreConfig::new(&path);
         config.save_debounce = Duration::from_secs(60);
 

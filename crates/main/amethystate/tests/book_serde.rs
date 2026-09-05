@@ -1,4 +1,3 @@
-use amethystate::AmeType;
 use amethystate::amethystate;
 use amethystate::store::builder::StoreBuilder;
 use amethystate_core::test_utils::TempPath;
@@ -80,7 +79,7 @@ fn a_flattened_child_writes_at_its_holders_level() -> Result<(), Box<dyn Error +
 }
 
 //@show a leaf, where serde answers to nobody here
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, AmeType)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Endpoint {
     pub host_name: String,

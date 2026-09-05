@@ -371,6 +371,19 @@ impl StorePath {
         self.segment_at(self.len().checked_sub(1)?)
     }
 
+    /// Where this path sits under `prefix`, and the level it sits at.
+    ///
+    /// The method [`level_under`] would be if it had nothing to check. That
+    /// one takes a key an engine read off a disk and can refuse it; a path has
+    /// already been through that, so this only reads.
+    ///
+    /// Which is what lets the rest of the library ask the question without
+    /// holding a key: an entry one level down and one two levels down are
+    /// different answers, and telling them apart is a map's whole business.
+    pub fn level_under(&self, prefix: &StorePath) -> Level<'_> {
+        level_below(self.as_str(), prefix.as_str(), prefix.is_root())
+    }
+
     /// The level that follows `prefix`, read straight off the joined form.
     ///
     /// The same answer as `starts_with(prefix)` followed by
@@ -409,6 +422,98 @@ impl StorePath {
             segments: Segments::Deferred,
             joined: Joined::Owned(Arc::from(joined)),
         })
+    }
+}
+
+/// A path that borrows its joined form instead of owning one.
+///
+/// What an engine has in hand when it reads a key out of its own page: the
+/// bytes are there, spelled the way [`StorePath::as_str`] spells them, and
+/// building a `StorePath` per key would allocate once for every entry on the
+/// hot path of loading a map.
+///
+/// It carries the same checked-ness as an owned path and can be had no other
+/// way: either [`PathRef::parse`] walked the key, or it borrows a path that
+/// was walked already. So a caller holding one needs no opinion about how a
+/// path is spelled, which is the whole point - the alternative is passing
+/// `&str` and hoping every reader remembers what it is.
+///
+/// `Copy`, because it is one pointer and a length, and it is passed per entry.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PathRef<'a> {
+    joined: &'a str,
+}
+
+impl<'a> PathRef<'a> {
+    /// Reads a key an engine holds, refusing one this library did not write.
+    ///
+    /// The same walk [`StorePath::parse_joined`] makes, without the
+    /// allocation that follows it.
+    pub fn parse(joined: &'a str) -> Result<Self, StorePathError> {
+        validate_joined(joined)?;
+
+        Ok(Self { joined })
+    }
+
+    /// The whole path as one string, which is what it was built from.
+    pub fn as_str(&self) -> &'a str {
+        self.joined
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.joined.is_empty()
+    }
+
+    /// Where this sits under `prefix`, and the level it sits at. See
+    /// [`StorePath::level_under`], which answers the same question of an owned
+    /// path.
+    pub fn level_under(&self, prefix: &StorePath) -> Level<'a> {
+        level_below(self.joined, prefix.as_str(), prefix.is_root())
+    }
+
+    /// The level directly under `prefix`, or `None` when `prefix` does not
+    /// hold this path. See [`StorePath::name_under`].
+    pub fn name_under(&self, prefix: &StorePath) -> Option<Cow<'a, str>> {
+        match self.level_under(prefix) {
+            Level::Entry(name) | Level::Deeper(name) => Some(name),
+            Level::Prefix | Level::Outside => None,
+        }
+    }
+
+    /// An owned copy, for a caller that has to keep it past the borrow.
+    ///
+    /// This is where the allocation the type exists to avoid is finally paid,
+    /// so it is paid by whoever actually keeps the path.
+    pub fn to_path(&self) -> StorePath {
+        StorePath::parse_joined(self.joined).expect("a borrowed path was checked when it was made")
+    }
+}
+
+/// Borrowing a path costs nothing and checks nothing: it has been through the
+/// check already.
+impl<'a> From<&'a StorePath> for PathRef<'a> {
+    fn from(path: &'a StorePath) -> Self {
+        Self {
+            joined: path.as_str(),
+        }
+    }
+}
+
+impl fmt::Debug for PathRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PathRef({:?})", self.joined)
+    }
+}
+
+impl fmt::Display for PathRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.joined)
+    }
+}
+
+impl PartialEq<StorePath> for PathRef<'_> {
+    fn eq(&self, other: &StorePath) -> bool {
+        self.joined == other.as_str()
     }
 }
 
@@ -819,6 +924,45 @@ impl<'a> Subtree<'a> {
         (self.prefix, Some(high))
     }
 
+    /// Whether a walk over paths in order, having reached `key`, might still
+    /// meet something under this one.
+    ///
+    /// Wider than [`Subtree::contains`] on purpose, and the two are not the
+    /// same question. Sorted, the keys between a path and its children include
+    /// names held by neither, so a walk that stopped at the first one not
+    /// contained would stop short:
+    ///
+    /// ```text
+    ///   pot          the subtree starts here
+    ///   pot!luck     not contained, and the walk must go on
+    ///   pot.ato      contained
+    ///   potato       past it - nothing after this can be under `pot`
+    /// ```
+    ///
+    /// For callers that hold paths rather than keys, so that walking a sorted
+    /// set of them needs no opinion about how one is spelled.
+    pub fn may_still_reach(&self, key: &StorePath) -> bool {
+        match &self.bound {
+            // The root has no top: everything is under it.
+            None => true,
+            Some(_) => {
+                let key = key.as_str();
+                match key.strip_prefix(self.prefix) {
+                    // Inside the prefix's own run, so the byte after it
+                    // decides: a child carries the separator, and anything
+                    // below it is a name that sorts between.
+                    Some(rest) => match rest.as_bytes().first() {
+                        None => true,
+                        Some(next) => *next <= SEPARATOR_BYTE,
+                    },
+                    // Not in the run: only what sorts before the prefix is
+                    // still to come.
+                    None => key < self.prefix,
+                }
+            }
+        }
+    }
+
     /// Where the children begin; `None` at the root.
     pub fn child_bound(&self) -> Option<&str> {
         self.bound.as_deref()
@@ -862,6 +1006,108 @@ impl fmt::Display for StorePath {
 impl AsRef<str> for StorePath {
     fn as_ref(&self) -> &str {
         self.as_str()
+    }
+}
+
+/// A path both of whose halves the compiler knows: the levels and the joined
+/// form, checked against each other where they are written.
+///
+/// [`StorePath`] holds a run-time path behind an `Arc`, which costs two things
+/// a declaration cannot pay. It has a destructor, so a `static` built from one
+/// cannot use `..` to fill in the rest of a struct; and its joined form cannot
+/// be read in a `const`, which is where the checks over a declaration run.
+/// This type has neither: it is `Copy`, it owns nothing, and everything about
+/// it is available while the code is compiled.
+///
+/// It is what a declaration carries. Turn it into a `StorePath` with
+/// [`StaticPath::path`] wherever a run-time path is wanted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct StaticPath {
+    segments: &'static [&'static str],
+    joined: &'static str,
+}
+
+impl StaticPath {
+    /// # Panics
+    ///
+    /// If any level is empty, or if `joined` is not the joined form of
+    /// `segments` - at compile time, which is the only place this is meant to
+    /// be called. See [`StorePath::from_static`], which checks the same pair.
+    pub const fn new(segments: &'static [&'static str], joined: &'static str) -> Self {
+        check_static(segments, joined);
+
+        Self { segments, joined }
+    }
+
+    /// The path that is under nothing.
+    pub const fn root() -> Self {
+        Self {
+            segments: &[],
+            joined: "",
+        }
+    }
+
+    /// The whole path as one string, where a `const` can read it.
+    pub const fn as_str(&self) -> &'static str {
+        self.joined
+    }
+
+    pub const fn is_root(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// The same path, as the type the store addresses by. Allocates nothing:
+    /// both halves are already `'static`.
+    pub fn path(&self) -> StorePath {
+        StorePath::from_static(self.segments, self.joined)
+    }
+}
+
+impl From<StaticPath> for StorePath {
+    fn from(at: StaticPath) -> Self {
+        at.path()
+    }
+}
+
+impl PartialEq<str> for StaticPath {
+    fn eq(&self, other: &str) -> bool {
+        self.joined == other
+    }
+}
+
+impl AsRef<str> for StaticPath {
+    fn as_ref(&self) -> &str {
+        self.joined
+    }
+}
+
+impl fmt::Debug for StaticPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StaticPath({:?})", self.joined)
+    }
+}
+
+impl fmt::Display for StaticPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.joined)
+    }
+}
+
+/// Written as the joined form, which is the only form a document holds.
+impl serde::Serialize for StorePath {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Read back through [`StorePath::parse_joined`], so the invariants are checked
+/// where the document is read rather than wherever somebody first asks for a
+/// level: a key with a nameless level or a dangling escape is refused here and
+/// cannot reach anything that would have to answer for it later.
+impl<'de> serde::Deserialize<'de> for StorePath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let joined = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        StorePath::parse_joined(&joined).map_err(serde::de::Error::custom)
     }
 }
 
@@ -1252,6 +1498,82 @@ mod tests {
         }
 
 
+        /// A borrowed path answers what the owned one answers. It exists to
+        /// skip the allocation and nothing else, so any difference between the
+        /// two is a defect rather than a trade.
+        #[test]
+        fn a_borrowed_path_answers_like_the_owned_one(
+            key in path_strategy(),
+            prefix in path_strategy()
+        ) {
+            let owned = StorePath::from_segments(&key);
+            let under = StorePath::from_segments(&prefix);
+            let borrowed = PathRef::from(&owned);
+
+            prop_assert_eq!(borrowed.as_str(), owned.as_str());
+            prop_assert_eq!(borrowed.is_root(), owned.is_root());
+            prop_assert_eq!(borrowed.level_under(&under), owned.level_under(&under));
+            prop_assert_eq!(borrowed.name_under(&under), owned.name_under(&under));
+            prop_assert_eq!(borrowed.to_path(), owned);
+        }
+
+        /// And it is had no other way: a key that would not parse into a path
+        /// does not borrow as one either, so the two doors are the same door.
+        #[test]
+        fn a_key_borrows_exactly_when_it_parses(key in key_strategy()) {
+            prop_assert_eq!(
+                PathRef::parse(&key).is_ok(),
+                StorePath::parse_joined(&key).is_ok(),
+                "key: {:?}", key
+            );
+
+            if let Ok(borrowed) = PathRef::parse(&key) {
+                let owned = borrowed.to_path();
+
+                prop_assert_eq!(borrowed.as_str(), key.as_str());
+                prop_assert_eq!(owned.as_str(), key.as_str());
+            }
+        }
+
+        /// `may_still_reach` is the top of `range` asked without building it,
+        /// so a caller walking sorted paths needs no opinion about how one is
+        /// spelled.
+        #[test]
+        fn a_walk_stops_exactly_where_the_range_does(
+            head in path_strategy(),
+            other in path_strategy()
+        ) {
+            let prefix = StorePath::from_segments(&head);
+            let key = StorePath::from_segments(&other);
+
+            let by_the_range = match prefix.subtree().range() {
+                (_, Some(high)) => key.as_str() < high.as_str(),
+                (_, None) => true,
+            };
+
+            prop_assert_eq!(
+                prefix.subtree().may_still_reach(&key),
+                by_the_range,
+                "{} against the subtree of {}", key, prefix
+            );
+        }
+
+        /// And it never stops short: everything the subtree holds is still to
+        /// come while the walk is inside it.
+        #[test]
+        fn a_walk_never_stops_before_what_the_subtree_holds(
+            head in path_strategy(),
+            tail in prop::collection::vec(segment_strategy(), 0..4)
+        ) {
+            let prefix = StorePath::from_segments(&head);
+            let under = prefix.join(&StorePath::from_segments(&tail));
+
+            prop_assert!(
+                prefix.subtree().may_still_reach(&under),
+                "{} is under {} and the walk stopped before it", under, prefix
+            );
+        }
+
         /// What a flat engine has to do with `as_str`, in both directions: a key
         /// is strictly under a path exactly when it starts with that path's key
         /// and a separator. The forward half is the escaping; the backward half
@@ -1407,6 +1729,31 @@ mod tests {
         assert_eq!(
             StorePath::from_segments(["dark", "mode"]).as_str(),
             "dark.mode"
+        );
+    }
+
+    /// The case the method exists for: sorted, a name can sit between a path
+    /// and its children while belonging to neither, so a walk that stopped at
+    /// the first one not contained would never reach the child.
+    #[test]
+    fn a_name_sorting_between_a_path_and_its_child_does_not_end_the_walk() {
+        let pot = StorePath::segment("pot");
+        let subtree = pot.subtree();
+
+        let luck = StorePath::segment("pot!luck");
+        let ato = StorePath::from_segments(["pot", "ato"]);
+        let potato = StorePath::segment("potato");
+
+        assert!(!subtree.contains(luck.as_str()), "`pot` does not hold it");
+        assert!(subtree.may_still_reach(&luck), "and the walk goes on");
+
+        assert!(subtree.contains(ato.as_str()));
+        assert!(subtree.may_still_reach(&ato));
+
+        assert!(!subtree.contains(potato.as_str()));
+        assert!(
+            !subtree.may_still_reach(&potato),
+            "nothing after `potato` can be under `pot`"
         );
     }
 

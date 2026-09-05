@@ -11,8 +11,7 @@ pub struct WindowState {
 
 #[amethystate(prefix = "net")]
 pub struct NetState {
-    #[serde(rename = "listen_port")]
-    #[amestate(default = 8080u16)]
+    #[amestate(path = "listen_port", default = 8080u16)]
     pub port: u16,
 }
 
@@ -78,10 +77,8 @@ fn a_written_prefix_keeps_the_levels_it_names() {
 /// which is why a store written by the macro reads back through `StorePath`.
 #[backends(all)]
 fn a_field_key_names_a_level_under_the_prefix(backend: Backend) {
-    let store = StoreBuilder::new(amethystate_core::test_utils::unique_path("prefix_path_key"))
-        .backend(backend)
-        .build()
-        .unwrap();
+    let at = amethystate_core::test_utils::TempPath::new("prefix_path_key");
+    let store = StoreBuilder::new(&at).backend(backend).build().unwrap();
 
     let net = NetState::new_with(&store).unwrap();
     net.port().set(9090).unwrap();

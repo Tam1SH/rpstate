@@ -1,6 +1,6 @@
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveMap, amethystate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 mod before {
@@ -27,7 +27,7 @@ pub struct Cfg {
 /// anyone already running - it came up empty with nothing to say why.
 #[backends(all)]
 fn a_map_added_later_still_gets_its_defaults(backend: Backend) {
-    let path = unique_path("map_defaults_added");
+    let path = TempPath::new("map_defaults_added");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -53,7 +53,7 @@ fn a_map_added_later_still_gets_its_defaults(backend: Backend) {
 /// version change.
 #[backends(all)]
 fn reopening_does_not_restore_a_removed_entry(backend: Backend) {
-    let path = unique_path("map_defaults_removed");
+    let path = TempPath::new("map_defaults_removed");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -75,7 +75,7 @@ fn reopening_does_not_restore_a_removed_entry(backend: Backend) {
 
 #[backends(all)]
 fn a_fresh_store_seeds_every_map(backend: Backend) {
-    let path = unique_path("map_defaults_fresh");
+    let path = TempPath::new("map_defaults_fresh");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let cfg = Cfg::new_with(&store).unwrap();
 

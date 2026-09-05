@@ -18,7 +18,7 @@
 //! on disk. A prelude that carried those would be a second crate root.
 
 /// Turning a struct into stored state, and moving what an older build wrote.
-pub use crate::{AmeData, AmeType, amethystate, migrate};
+pub use crate::{AmeData, amethystate, migrate};
 
 /// Opening a store, and reaching the one this process installed.
 pub use crate::store::builder::{Backend, StoreBuilder};

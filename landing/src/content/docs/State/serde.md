@@ -64,7 +64,7 @@ back, and what it is told in between is between you and serde:
 
 <!-- shown: a leaf, where serde answers to nobody here -->
 ```rust
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, AmeType)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Endpoint {
     pub host_name: String,

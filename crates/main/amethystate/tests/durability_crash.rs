@@ -11,7 +11,7 @@
 use amethystate::StoreBuilder;
 use amethystate::store::builder::Backend;
 use amethystate::store::field_with_path;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use std::path::Path;
 use std::time::Duration;
 
@@ -46,12 +46,12 @@ fn crash_then_reopen(test_name: &str, backend: Backend) {
         write_then_abort(backend, Path::new(&child_path));
     }
 
-    let path = unique_path(test_name);
+    let path = TempPath::new(test_name);
 
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg(test_name)
-        .env(CHILD, &path)
+        .env(CHILD, path.path())
         .output()
         .expect("spawning the writer failed");
 

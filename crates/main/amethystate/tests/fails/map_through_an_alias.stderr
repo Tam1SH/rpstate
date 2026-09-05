@@ -191,23 +191,6 @@ error[E0599]: the method `get` exists for struct `amethystate::Field<amethystate
           which is required by `amethystate::ReactiveMap<std::string::String, std::string::String>: FieldValue`
   = note: this error originates in the attribute macro `amethystate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `amethystate::ReactiveMap<std::string::String, std::string::String>: AmeType` is not satisfied
- --> tests/fails/map_through_an_alias.rs:9:19
-  |
-9 |     pub sessions: Sessions,
-  |                   ^^^^^^^^ the trait `AmeType` is not implemented for `amethystate::ReactiveMap<std::string::String, std::string::String>`
-  |
-  = help: the following other types implement trait `AmeType`:
-            HashMap<K, V>
-            State_Data
-            Vec<T>
-            bool
-            f32
-            f64
-            i128
-            i16
-          and $N others
-
 error[E0080]: evaluation panicked: field `sessions` is a ReactiveMap, and was taken for a plain value because the type is not written as one - spell it `ReactiveMap<K, V>` at the field rather than through an alias
  --> tests/fails/map_through_an_alias.rs:6:1
   |

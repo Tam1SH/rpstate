@@ -1,6 +1,6 @@
 use amethystate::amethystate;
 use amethystate::store::builder::Backend;
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
 #[amethystate]
@@ -26,7 +26,7 @@ pub struct ProcessSettings {
 
 #[backends(all)]
 fn reactive_map_inside_nested_struct_seeds_defaults(backend: Backend) {
-    let path = unique_path("nested_reactive_map");
+    let path = TempPath::new("nested_reactive_map");
     let store = amethystate::StoreBuilder::new(&path)
         .backend(backend)
         .build()
@@ -40,7 +40,7 @@ fn reactive_map_inside_nested_struct_seeds_defaults(backend: Backend) {
 
 #[backends(all)]
 fn reactive_map_inside_nested_struct_seeds_defaults_only_once(backend: Backend) {
-    let path = unique_path("nested_reactive_map_once");
+    let path = TempPath::new("nested_reactive_map_once");
 
     {
         let store = amethystate::StoreBuilder::new(&path)

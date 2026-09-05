@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 64123afa26737ad9dabcb37a73f1443970be01710c1183d80f8d83bb4c291a2d # shrinks to tree = [Decl { levels: ["a"], role: Node, optional: false, flattened: false, children: [Decl { levels: ["a"], role: Field, optional: false, flattened: false, children: [] }] }]
+cc c2b25d03e8ea2549bba277b166fbfdd6eac205c5131eb333a059967980a4bd6a # shrinks to a = [Decl { levels: ["a"], role: Node, optional: false, flattened: true, children: [] }], b = []
+cc 2e65e3314fe6766e26cea68817b522d9ff6971471c2a3bb15bd7fd569062a29e # shrinks to was = [Decl { levels: ["dark.mode"], role: Node, optional: true, flattened: true, children: [] }], now = [Decl { levels: ["dark.mode"], role: Node, optional: false, flattened: true, children: [] }]
+cc 3f742d8ced2ccc45f8a424dc89d24c4e22e125bf602256e19f76b087f8e18aa9 # shrinks to was = [Decl { levels: ["a"], role: Node, optional: false, flattened: false, children: [] }], now = [Decl { levels: ["a"], role: Node, optional: false, flattened: true, children: [Decl { levels: ["a"], role: Node, optional: false, flattened: true, children: [Decl { levels: ["a"], role: Field, optional: false, flattened: false, children: [] }] }] }]

@@ -9,7 +9,7 @@
 use amethystate::migration::ComponentOutcome;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 
@@ -56,7 +56,7 @@ fn migrate_settings_v1_to_v2(
 /// The value reaches the step, and the step's output is what lands.
 #[backends(all)]
 fn a_provided_value_reaches_a_migration_step(backend: Backend) {
-    let path = unique_path("migration_provided");
+    let path = TempPath::new("migration_provided");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -94,7 +94,7 @@ fn a_value_that_is_not_send_can_still_be_provided(backend: Backend) {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    let path = unique_path("migration_provided_not_send");
+    let path = TempPath::new("migration_provided_not_send");
     let seen: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
 
     {
@@ -121,7 +121,7 @@ fn a_value_that_is_not_send_can_still_be_provided(backend: Backend) {
 /// happily on a report that names the type and explains nothing.
 #[backends(all)]
 fn a_step_that_needs_something_nobody_provided_says_which(backend: Backend) {
-    let path = unique_path("migration_provided_missing");
+    let path = TempPath::new("migration_provided_missing");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();

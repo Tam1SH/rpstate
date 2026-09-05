@@ -10,7 +10,7 @@
 
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{AmeData, migrate};
-use amethystate_core::test_utils::unique_path;
+use amethystate_core::test_utils::TempPath;
 use amethystate_macros::amethystate;
 use amethystate_test_macros::backends;
 
@@ -53,7 +53,7 @@ fn a_store_at_v1(backend: Backend, path: &std::path::Path) {
 /// one is not in the sweep.
 #[backends(all)]
 fn an_explicit_step_is_not_collected_from_the_linker(backend: Backend) {
-    let path = unique_path("migration_explicit_uncollected");
+    let path = TempPath::new("migration_explicit_uncollected");
     a_store_at_v1(backend, &path);
 
     let (store, _report) = StoreBuilder::new(&path)
@@ -72,7 +72,7 @@ fn an_explicit_step_is_not_collected_from_the_linker(backend: Backend) {
 /// Named and handed over, it does what any other step does.
 #[backends(all)]
 fn an_explicit_step_runs_when_it_is_handed_over(backend: Backend) {
-    let path = unique_path("migration_explicit_handed_over");
+    let path = TempPath::new("migration_explicit_handed_over");
     a_store_at_v1(backend, &path);
 
     let (store, report) = StoreBuilder::new(&path)

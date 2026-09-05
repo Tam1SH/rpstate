@@ -1,5 +1,5 @@
 use crate::MigrationContext;
-use crate::store::StorageResult;
+use crate::store::{StaticPath, StorageResult, StorePath};
 
 /// What a declared path is, as far as the store is concerned.
 ///
@@ -60,16 +60,21 @@ impl TryFrom<String> for Role {
 
 #[derive(Clone)]
 pub struct FieldDescriptor {
-    /// Where it is stored, which is its own name unless `path` or `rename_all`
-    /// said otherwise. A dot in it is a level.
-    pub name: &'static str,
+    /// Where it is stored under its holder, which is its own name unless
+    /// `path` or `rename_all` said otherwise.
+    ///
+    /// A path rather than a string, because a name is not always one level and
+    /// a level is not always one name: `path = "ui.theme"` writes two levels,
+    /// and a field whose name holds a separator writes one level that escapes
+    /// it. The macro builds both halves and [`StaticPath`] checks they agree
+    /// while the code is compiled.
+    pub name: StaticPath,
 
     /// The name in the source, which is what the code calls it. Told apart
     /// from [`name`](FieldDescriptor::name) because a person editing the file
     /// and a person reading the code are looking at different words.
     pub declared: &'static str,
 
-    pub type_hash: u32,
     pub type_name: &'static str,
 
     pub role: Role,
@@ -102,11 +107,48 @@ pub struct FieldDescriptor {
 
 impl FieldDescriptor {
     /// A path holding one value, which is what most declared paths are.
-    pub const fn leaf(name: &'static str, type_hash: u32, type_name: &'static str) -> Self {
+    ///
+    /// Both halves of the path are written out, because a `const` cannot build
+    /// the levels from the joined form: [`StaticPath`] checks they agree, and a
+    /// pair that does not is a compile error.
+    /// The place this declaration owns, under `at`, or `None` when it owns
+    /// none.
+    ///
+    /// A node is not a place. Nothing is stored at one,
+    /// [`Owners::claim`](crate::store::owners::Owners::claim) is never called
+    /// for one, and a write beside its fields belongs to whoever wrote it - it
+    /// is the way to the paths below it and nothing else. A leaf owns its path
+    /// and whatever is inside its value; a map owns its path and every entry
+    /// under it.
+    ///
+    /// The one place this question is answered, so that a walk over
+    /// declarations cannot answer it differently from the next walk.
+    pub fn owns(&self, at: &StorePath) -> Option<StorePath> {
+        match self.role {
+            Role::Node => None,
+            Role::Field | Role::Map => Some(at.join(&self.name.path())),
+        }
+    }
+
+    /// The level the paths under this declaration sit at.
+    ///
+    /// Its own, unless it is flattened - then its fields sit where it does,
+    /// and it lends them no segment.
+    pub fn below(&self, at: &StorePath) -> StorePath {
+        match self.flattened {
+            true => at.clone(),
+            false => at.join(&self.name.path()),
+        }
+    }
+
+    pub const fn leaf(
+        segments: &'static [&'static str],
+        joined: &'static str,
+        type_name: &'static str,
+    ) -> Self {
         Self {
-            name,
-            declared: name,
-            type_hash,
+            name: StaticPath::new(segments, joined),
+            declared: joined,
             type_name,
             role: Role::Field,
             optional: false,
@@ -143,7 +185,7 @@ pub const fn brings(fields: &[FieldDescriptor], name: &str) -> bool {
             if brings(fields[i].children, name) {
                 return true;
             }
-        } else if same(fields[i].name, name) {
+        } else if same(fields[i].name.as_str(), name) {
             return true;
         }
         i += 1;
@@ -160,7 +202,7 @@ pub const fn overlap(a: &[FieldDescriptor], b: &[FieldDescriptor]) -> bool {
             if overlap(a[i].children, b) {
                 return true;
             }
-        } else if brings(b, a[i].name) {
+        } else if brings(b, a[i].name.as_str()) {
             return true;
         }
         i += 1;
@@ -183,8 +225,16 @@ pub const fn brings_any(fields: &[FieldDescriptor], names: &[&str]) -> bool {
 pub trait AmeStateFields: Sized {
     const FIELDS: &'static [FieldDescriptor];
     const VERSION: u32;
-    const SCHEMA_HASH: u32;
-    const PARENT_PREFIX: &'static str;
+
+    /// Where this struct's fields live: the prefix it was declared under, and
+    /// the root for a struct declared `as_root`.
+    ///
+    /// The macro takes the levels apart while it expands, so what is written
+    /// here has already been read as a path. `as_root` and `prefix` therefore
+    /// arrive as the same kind of thing, and nothing downstream has to know
+    /// which one was spelled.
+    const PARENT_PREFIX: StaticPath;
+
     const MIGRATION_DEPS: &'static [&'static str];
 
     fn load_struct(ctx: &mut MigrationContext) -> StorageResult<Self>;

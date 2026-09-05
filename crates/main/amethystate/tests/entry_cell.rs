@@ -5,7 +5,7 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::{ReactiveMap, amethystate};
 
 mod common;
-use amethystate_core::test_utils::{TempPath, unique_path};
+use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 use common::shape;
 
@@ -23,7 +23,7 @@ pub struct TableConfig {
 
 #[backends(all)]
 fn entry_cell_reads_existing_value(backend: Backend) {
-    let path = unique_path("entry_existing");
+    let path = TempPath::new("entry_existing");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -36,7 +36,7 @@ fn entry_cell_reads_existing_value(backend: Backend) {
 /// the map was never asked to hold.
 #[backends(all)]
 fn entry_cell_on_a_missing_key_is_empty_and_refuses_writes(backend: Backend) {
-    let path = unique_path("entry_default");
+    let path = TempPath::new("entry_default");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -52,7 +52,7 @@ fn entry_cell_on_a_missing_key_is_empty_and_refuses_writes(backend: Backend) {
 
 #[backends(all)]
 fn write_lands_in_store(backend: Backend) {
-    let path = unique_path("entry_write");
+    let path = TempPath::new("entry_write");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -65,7 +65,7 @@ fn write_lands_in_store(backend: Backend) {
 
 #[backends(all)]
 fn external_map_write_lands_in_cell(backend: Backend) {
-    let path = unique_path("entry_external");
+    let path = TempPath::new("entry_external");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -79,7 +79,7 @@ fn external_map_write_lands_in_cell(backend: Backend) {
 /// there, and the view will not resurrect it - that is `insert`'s job.
 #[backends(all)]
 fn removed_key_empties_the_cell(backend: Backend) {
-    let path = unique_path("entry_remove");
+    let path = TempPath::new("entry_remove");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -106,7 +106,7 @@ fn removed_key_empties_the_cell(backend: Backend) {
 /// subscription as the sole writer, both directions cost one fire.
 #[backends(all)]
 fn two_cells_on_one_key_fire_once_per_write(backend: Backend) {
-    let path = unique_path("entry_no_echo");
+    let path = TempPath::new("entry_no_echo");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -144,7 +144,7 @@ fn two_cells_on_one_key_fire_once_per_write(backend: Backend) {
 /// written into its own cache, so the cell quietly disagreed with the store.
 #[backends(all)]
 fn rejected_write_reports_and_leaves_the_cell_alone(backend: Backend) {
-    let path = unique_path("entry_rejected");
+    let path = TempPath::new("entry_rejected");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -167,7 +167,7 @@ fn rejected_write_reports_and_leaves_the_cell_alone(backend: Backend) {
 /// clone it was made from changes nothing while the struct still holds one.
 #[backends(all)]
 fn a_cell_survives_the_handle_it_was_made_from(backend: Backend) {
-    let path = unique_path("entry_keepalive");
+    let path = TempPath::new("entry_keepalive");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
     let config = TableConfig::new_with(&store).unwrap();
 
@@ -185,7 +185,7 @@ fn a_cell_survives_the_handle_it_was_made_from(backend: Backend) {
 /// stops answering instead of reporting the last value it happened to see.
 #[backends(all)]
 fn a_cell_dies_with_the_map_it_views(backend: Backend) {
-    let path = unique_path("entry_dead_map");
+    let path = TempPath::new("entry_dead_map");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let entry = {
@@ -203,7 +203,7 @@ fn a_cell_dies_with_the_map_it_views(backend: Backend) {
 /// Integration: a write through the entry cell survives a store rebuild.
 #[backends(all)]
 fn entry_cell_write_persists_across_store_rebuild(backend: Backend) {
-    let path = unique_path("entry_persist");
+    let path = TempPath::new("entry_persist");
 
     {
         let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
@@ -255,7 +255,7 @@ fn a_forgotten_cell_does_not_hold_the_store_open(backend: Backend) {
 /// form exists and says as much at the call site.
 #[backends(all)]
 fn an_owning_cell_survives_the_struct_it_came_from(backend: Backend) {
-    let path = unique_path("entry_owned");
+    let path = TempPath::new("entry_owned");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let width = {
@@ -273,7 +273,7 @@ fn an_owning_cell_survives_the_struct_it_came_from(backend: Backend) {
 
 #[backends(all)]
 fn an_owning_entry_cell_survives_the_map_it_came_from(backend: Backend) {
-    let path = unique_path("entry_owned_map");
+    let path = TempPath::new("entry_owned_map");
     let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
 
     let cpu = {

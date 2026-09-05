@@ -4,7 +4,7 @@ use crate::migration::set::MigrationSet;
 use crate::store::builder::Backend;
 use crate::store::error::{StorageError, StorageResult};
 use crate::store::facts::{Facts, ValueBytes};
-use amethystate_core::path::{IntoStorePath, StorePath};
+use amethystate_core::path::{IntoStorePath, PathRef, StorePath};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -234,19 +234,22 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// out of the engine's page. A caller that decodes each entry on the spot
     /// - which is what loading a map is - drops both immediately.
     ///
-    /// The key arrives as it is stored, joined and escaped, and has not been
-    /// checked: [`level_under`](amethystate_core::path::level_under) reads a
-    /// level out of one and refuses a key this library did not write.
+    /// A key an engine holds as a string is checked on its way in, by
+    /// [`PathRef::parse`], so what reaches the visitor is a path and nothing
+    /// above this trait has to know a key was ever spelled. Borrowed rather
+    /// than owned, because the saving is the whole reason this exists: an
+    /// owned path would allocate once per entry, which on a map is once per
+    /// entry of the map.
     ///
     /// Defaulted through `scan_prefix`, so a backend implemented outside this
     /// crate stays correct without knowing this exists.
     fn visit_prefix(
         &self,
         prefix: &StorePath,
-        visit: &mut dyn FnMut(&str, &[u8]) -> StorageResult<()>,
+        visit: &mut dyn FnMut(PathRef<'_>, &[u8]) -> StorageResult<()>,
     ) -> StorageResult<()> {
         for (path, bytes) in self.scan_prefix(prefix)? {
-            visit(path.as_str(), &bytes)?;
+            visit(PathRef::from(&path), &bytes)?;
         }
         Ok(())
     }
