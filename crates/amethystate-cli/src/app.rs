@@ -1,4 +1,4 @@
-use amethystate::observability::InspectorBackend;
+use amethystate::store::InspectorBackend;
 use amethystate::store::meta::SchemaSnapshot;
 
 pub enum ViewMode {
@@ -16,7 +16,9 @@ pub struct App {
 
 impl App {
     pub fn new(backend: Box<dyn InspectorBackend>) -> anyhow::Result<Self> {
-        let structs = backend.get_schema_snapshots()?;
+        let structs = backend
+            .get_schema_snapshots()
+            .map_err(crate::report::anyhowed)?;
 
         Ok(Self {
             backend,

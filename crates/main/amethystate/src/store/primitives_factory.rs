@@ -1,206 +1,533 @@
+use crate::observability::Reason;
 use crate::observability::register_field;
+use crate::reactive::field::Unreadable;
+use crate::store::StorageError;
 use crate::store::StorageResult;
-use crate::{
-    Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, StoreSubscription,
-    SubscriptionKind,
-};
-use amethystate_core::{AccessMode, FieldCore, MapChange, ReactiveMapCore, Signal, WritableMode};
+use crate::store::StoreSubscription;
+use crate::store::facts::{Facts, Key, Prefix, Refused};
+use crate::store::opening::OpenStruct;
+use crate::store::reading::{LoadMap, LoadMapResult};
+use crate::store::rules::{OnDelete, OnUnreadable, ReadRules};
+use crate::store::traits::{StoreExt as _, StoredAs};
+use crate::{Field, ReactiveMap, StateScope, Store, StoreBackend, StoreOp, SubscriptionKind};
+use crate::{ReactiveMapKey, ReactiveMapValue};
+use amethystate_core::path::{IntoStorePath, Level, PathRef, StorePath};
+use amethystate_core::{FieldCore, MapChange, ReactiveMapCore, Signal};
+use error_stack::{Report, ResultExt};
+use indexmap::IndexMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::hash::Hash;
-use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// A field under `TScope`'s path, at the levels `key` names.
 pub fn field<TScope, TValue>(
     store: &Store,
-    key: &str,
+    key: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue, WritableMode>>
+) -> Result<Field<TValue>, OpenStruct>
 where
     TScope: StateScope,
-    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    let path: Arc<str> = scoped_path::<TScope>(key).into();
+    let path = TScope::PATH.join(&key.into_store_path()?);
     field_with_path(store, path, default, instance_id)
 }
 
-pub fn field_with_path<TValue, M>(
+/// Records that whoever is being built owns this path, or refuses because
+/// somebody else already does.
+///
+/// The claim is the schema's own type name, which is what makes it idempotent:
+/// building the same struct twice claims the same path twice and changes
+/// nothing. An instance nobody registered claims nothing - there is no name to
+/// attribute it to, and refusing what cannot be attributed would be guessing.
+fn claim(
     store: &Store,
-    path: Arc<str>,
+    path: &StorePath,
+    instance_id: Uuid,
+) -> Result<(), Box<crate::store::owners::Taken>> {
+    let Some(by) = crate::store::instances::resolve_instance(instance_id) else {
+        return Ok(());
+    };
+
+    store.owners().take(path, by)
+}
+
+pub fn field_with_path<TValue>(
+    store: &Store,
+    path: impl IntoStorePath,
     default: TValue,
     instance_id: Uuid,
-) -> StorageResult<Field<TValue, M>>
+) -> Result<Field<TValue>, OpenStruct>
 where
-    TValue: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
-    M: AccessMode,
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    register_field(
-        Arc::clone(&path),
+    field_with_path_under(store, path, default, instance_id, ReadRules::new())
+}
+
+/// [`field_with_path`] with a say in what a value it cannot read, and a key
+/// removed under it, each do.
+pub fn field_with_path_where<TValue>(
+    store: &Store,
+    path: impl IntoStorePath,
+    default: TValue,
+    instance_id: Uuid,
+    policy: OnUnreadable,
+    on_delete: OnDelete,
+) -> Result<Field<TValue>, OpenStruct>
+where
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    field_with_path_under(
+        store,
+        path,
+        default,
         instance_id,
-        std::any::type_name::<TValue>(),
-    );
+        ReadRules::new().on_unreadable(policy).on_delete(on_delete),
+    )
+}
 
-    if store.get::<TValue>(&path)?.is_none() {
-        store.set(&path, &default)?;
-    }
+/// [`field_with_path`] under everything the field declared about disagreeing
+/// with the store.
+pub fn field_with_path_under<TValue>(
+    store: &Store,
+    path: impl IntoStorePath,
+    default: TValue,
+    instance_id: Uuid,
+    rules: ReadRules<TValue>,
+) -> Result<Field<TValue>, OpenStruct>
+where
+    TValue: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    let path = path.into_store_path()?;
+    let ReadRules {
+        on_unreadable: policy,
+        on_delete,
+        check,
+        stored_as,
+    } = rules;
 
-    let current = store
-        .get::<TValue>(&path)?
-        .unwrap_or_else(|| default.clone());
+    claim(store, &path, instance_id)?;
+    register_field::<TValue>(&path, instance_id);
+
+    let mut refused: Option<Reason> = None;
+
+    let current = match read_stored(store, &path, stored_as) {
+        Ok(Some(stored)) => match check.map(|check| check(&stored, store.context())) {
+            None | Some(Ok(())) => stored,
+            Some(Err(invalid)) => {
+                if policy == OnUnreadable::Refuse {
+                    return Err(OpenStruct::Refused {
+                        at: path.clone(),
+                        said: Arc::from(invalid.reason()),
+                    });
+                }
+
+                tracing::error!(
+                    path = %path,
+                    reason = %invalid,
+                    "a declared check refused the stored value, so the field starts on its default"
+                );
+                refused = Some(Reason::Refused(Arc::from(invalid.reason())));
+                default.clone()
+            }
+        },
+        Ok(None) => {
+            if let Some(in_the_way) = seed(store, &path, &default, stored_as)? {
+                refused = Some(Reason::Occupied(in_the_way));
+            }
+            default.clone()
+        }
+        Err(why) if policy.covers(&why) => {
+            tracing::error!(path = %path, error = %why, "decode failed while building");
+            refused = Some(Reason::WillNotRead(Arc::from(why.to_string().as_str())));
+            default.clone()
+        }
+        Err(why) => {
+            return Err(match crate::store::rules::will_not_read(&why) {
+                true => OpenStruct::WillNotRead {
+                    at: path.clone(),
+                    why,
+                },
+                false => OpenStruct::Store(why),
+            });
+        }
+    };
+
     let signal = Signal::new(current);
 
     let sig_clone = signal.clone();
     let store_clone = store.clone();
-    let path_log = Arc::clone(&path);
-    let on_delete = default.clone();
+    let path_log = path.clone();
+    let deleted = default.clone();
+
+    let unreadable = Unreadable::new(std::sync::Mutex::new(refused));
+    let unreadable_sub = unreadable.clone();
 
     let id = store.subscribe(
         SubscriptionKind::ExactPath(path.clone()),
         Arc::new(move |event| match &event.new {
-            Some(raw) => match store_clone.decode::<TValue>(raw) {
-                Ok(parsed) => sig_clone.set_forwarded(parsed, event.source),
-                Err(e) => tracing::error!(path = %path_log, error = %e, "decode failed"),
+            Some(raw) => match match stored_as.read {
+                Some(read) => store_clone.decode_with(&event.path, raw, read),
+                None => store_clone.decode::<TValue>(raw),
+            } {
+                Ok(parsed) => {
+                    if let Some(check) = check.filter(|_| event.is_external_edit())
+                        && let Err(invalid) = check(&parsed, store_clone.context())
+                    {
+                        if let Ok(mut held) = unreadable_sub.lock() {
+                            *held = Some(Reason::Refused(Arc::from(invalid.reason())));
+                        }
+
+                        return Err(Report::new(StorageError::Notify)
+                            .attach(Key(path_log.clone()))
+                            .attach(Refused(invalid.reason().to_string()))
+                            .attach("the field kept what it had"));
+                    }
+
+                    if let Ok(mut held) = unreadable_sub.lock() {
+                        *held = None;
+                    }
+                    sig_clone.set_forwarded(parsed, event.source.handle());
+                    Ok(())
+                }
+                Err(e) => {
+                    if let Ok(mut held) = unreadable_sub.lock() {
+                        *held = Some(Reason::WillNotRead(Arc::from(e.to_string().as_str())));
+                    }
+
+                    Err(e
+                        .change_context(StorageError::Notify)
+                        .attach(Key(path_log.clone())))
+                }
             },
-            // The key is gone - from `delete`, or from an edit to the file
-            // outside the process. Reporting the default is what the next
-            // startup would read, and beats holding a value the store no
-            // longer has.
-            None => sig_clone.set_forwarded(on_delete.clone(), event.source),
+            None => {
+                match on_delete {
+                    OnDelete::UseDefault => {
+                        sig_clone.set_forwarded(deleted.clone(), event.source.handle())
+                    }
+                    OnDelete::Keep => {}
+                }
+                Ok(())
+            }
         }),
     );
 
     Ok(Field {
-        core: FieldCore::new_with_signal(signal),
-        path,
-        instance_id,
-        store_sub: Some(Arc::new(StoreSubscription {
-            store: store.clone(),
-            id,
-        })),
-        _mode: std::marker::PhantomData,
+        inner: Arc::new(crate::reactive::field::FieldInner {
+            unreadable,
+            core: FieldCore::new_with_signal(signal),
+            path,
+            instance_id,
+            store_sub: Some(Arc::new(StoreSubscription::new(store.clone(), id))),
+            stored_as,
+        }),
     })
 }
 
+/// A map under `TScope`'s path, at the levels `key` names.
 pub fn reactive_map<TScope, K, V>(
     store: &Store,
-    key: &str,
+    key: impl IntoStorePath,
     default: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, WritableMode>>
+) -> LoadMapResult<ReactiveMap<K, V>>
 where
     TScope: StateScope,
-    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-    V: Serialize + DeserializeOwned + Default + Clone + Send + Sync + 'static,
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
 {
-    let path: Arc<str> = scoped_path::<TScope>(key).into();
-    reactive_map_with_path::<TScope, _, _, _>(store, path, default, instance_id)
+    let path = TScope::PATH.join(&key.into_store_path()?);
+    reactive_map_with_path::<TScope, _, _>(store, path, default, instance_id)
 }
 
-pub fn reactive_map_with_path<TScope, K, V, M>(
+pub fn reactive_map_with_path<TScope, K, V>(
     store: &Store,
-    path: Arc<str>,
+    path: impl IntoStorePath,
     defaults: HashMap<K, V>,
     instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, M>>
+) -> LoadMapResult<ReactiveMap<K, V>>
 where
     TScope: StateScope,
-    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-    V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
-    M: AccessMode,
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
 {
     reactive_map_with_path_only(store, path, defaults, instance_id)
 }
 
-pub fn reactive_map_with_path_only<K, V, M>(
+/// The value at `path`, read the way the field says rather than the way its
+/// type would.
+fn read_stored<TValue>(
     store: &Store,
-    path: Arc<str>,
-    defaults: HashMap<K, V>,
-    instance_id: Uuid,
-) -> StorageResult<ReactiveMap<K, V, M>>
+    path: &StorePath,
+    stored_as: StoredAs<TValue>,
+) -> StorageResult<Option<TValue>>
 where
-    K: FromStr + Display + Clone + Hash + Eq + Send + Sync + 'static,
-    V: Serialize + Default + DeserializeOwned + Clone + Send + Sync + 'static,
-    M: AccessMode,
+    TValue: DeserializeOwned + 'static,
 {
-    let mut known_cache = HashMap::new();
+    let Some(read) = stored_as.read else {
+        return Ok(store.get::<TValue>(path)?);
+    };
 
-    let prefix = format!("{}.", path);
-    let existing = store.scan_prefix(&prefix)?;
-    for (fpath, val) in existing {
-        if let Some(k_str) = fpath.strip_prefix(&prefix)
-            && let Ok(k) = K::from_str(k_str)
-            && let Ok(v) = store.decode::<V>(&val)
-        {
-            known_cache.insert(k, v);
+    match store.get_raw(path)? {
+        Some(bytes) => store.decode_with(path, &bytes, read).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Writes the field's declared default, and says so if it could not.
+///
+/// `Some` is what stood in the way. Building carries on - the field takes the
+/// default it was declared with - but it is now reporting something the store
+/// does not hold, so what came back here goes to [`Reason::Occupied`] and out
+/// through [`Field::try_get`](crate::Field::try_get).
+fn seed<TValue>(
+    store: &Store,
+    path: &StorePath,
+    default: &TValue,
+    stored_as: StoredAs<TValue>,
+) -> StorageResult<Option<Arc<str>>>
+where
+    TValue: Serialize + 'static,
+{
+    let written = match stored_as.write {
+        Some(write) => write(default, &mut |erased| {
+            StoreBackend::set_erased(store, path, erased, None)
+        }),
+        None => store.set(path, default).map_err(Report::from),
+    };
+
+    match written {
+        Err(report) if report.contains::<crate::store::Occupied>() => {
+            Ok(Some(Arc::from(crate::store::one_line(&report).as_str())))
         }
+        Err(other) => Err(other),
+        Ok(()) => Ok(None),
+    }
+}
+
+/// Every entry stored under `path`, keyed by the level below it.
+///
+/// A key that cannot be read back is an error rather than an absence. The path
+/// itself is not an entry.
+pub fn load_map<K, V>(store: &Store, path: &StorePath) -> LoadMapResult<IndexMap<K, V>>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+{
+    if store.parallel_reads() {
+        use rayon::prelude::*;
+
+        let scanned = StoreBackend::scan_prefix(store, path)
+            .attach_prefix(path)
+            .map_err(|why| LoadMap::from_store(path, why))?;
+
+        if scanned.len() >= PARALLEL_MIN_LEN {
+            let decoded: Vec<(K, V)> = scanned
+                .par_iter()
+                .with_min_len(PARALLEL_MIN_LEN)
+                .filter_map(|(stored, bytes)| {
+                    decode_entry(store, path, PathRef::from(stored), bytes).transpose()
+                })
+                .collect::<LoadMapResult<Vec<_>>>()?;
+
+            return Ok(decoded.into_iter().collect());
+        }
+
+        let mut entries = IndexMap::with_capacity(scanned.len());
+        for (stored, bytes) in &scanned {
+            if let Some((key, value)) = decode_entry(store, path, PathRef::from(stored), bytes)? {
+                entries.insert(key, value);
+            }
+        }
+        return Ok(entries);
     }
 
-    // Keyed on this map's own path, not on the scope. A scope is marked
-    // initialized once, when its struct is first built, so a map added to that
-    // struct later never seeded its defaults for anyone already running - it
-    // came up empty with nothing to say why.
-    //
-    // Keys already on disk count as having been seeded, so upgrading does not
-    // restore entries the user has since removed.
+    let mut entries = IndexMap::new();
+    let mut refused: Option<LoadMap> = None;
+
+    let visited = store.visit_prefix(path, &mut |key, bytes| match decode_entry(
+        store, path, key, bytes,
+    ) {
+        Ok(Some((k, v))) => {
+            entries.insert(k, v);
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(why) => {
+            let stop = Report::new(StorageError::Read).attach("an entry the map would not take");
+            refused = Some(why);
+            Err(stop)
+        }
+    });
+
+    match (refused, visited) {
+        (Some(why), _) => Err(why),
+        (None, Err(why)) => Err(LoadMap::from_store(path, why)),
+        (None, Ok(())) => Ok(entries),
+    }
+}
+
+const PARALLEL_MIN_LEN: usize = 1024;
+
+fn decode_entry<K, V>(
+    store: &Store,
+    path: &StorePath,
+    stored: PathRef<'_>,
+    bytes: &[u8],
+) -> LoadMapResult<Option<(K, V)>>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+{
+    let below = stored.level_under(path);
+
+    let name = match &below {
+        Level::Entry(name) => name.as_ref(),
+        Level::Prefix => return Ok(None),
+        Level::Deeper(_) => {
+            return Err(LoadMap::KeyIsNotAnEntry {
+                under: path.clone(),
+                stored: Arc::from(stored.as_str()),
+                said: Arc::from(
+                    "a map owns the level below it and nothing further, so this key \
+                     belongs to whatever claimed that level",
+                ),
+            });
+        }
+        Level::Outside => {
+            return Err(LoadMap::KeyIsNotAnEntry {
+                under: path.clone(),
+                stored: Arc::from(stored.as_str()),
+                said: Arc::from("the key is not under the map it was scanned from"),
+            });
+        }
+    };
+
+    let key = K::from_str(name).map_err(|_| LoadMap::KeyWillNotRead {
+        under: path.clone(),
+        entry: Arc::from(name),
+        wanted: std::any::type_name::<K>(),
+    })?;
+
+    let entry = path.join(&StorePath::segment(name));
+    let value = store
+        .decode::<V>(bytes)
+        .map_err(Report::from)
+        .attach_prefix(path)
+        .attach_entry(name)
+        .map_err(|why| LoadMap::from_store(&entry, why))?;
+
+    Ok(Some((key, value)))
+}
+
+pub fn reactive_map_with_path_only<K, V>(
+    store: &Store,
+    path: impl IntoStorePath,
+    defaults: HashMap<K, V>,
+    instance_id: Uuid,
+) -> LoadMapResult<ReactiveMap<K, V>>
+where
+    K: ReactiveMapKey,
+    V: ReactiveMapValue,
+{
+    let path = path.into_store_path()?;
+    claim(store, &path, instance_id)?;
+
+    let mut known_cache = load_map::<K, V>(store, &path)?;
+
     let seeded_before = store.is_initialized(&path)? || !known_cache.is_empty();
 
     if !seeded_before {
         for (k, v) in defaults {
-            let full_path = format!("{}.{}", path, k);
+            let full_path = path
+                .try_push(k.to_string())
+                .change_context(StorageError::Path)
+                .attach_prefix(&path)
+                .attach_entry(&k.to_string())?;
             store.set(&full_path, &v)?;
             known_cache.insert(k, v);
         }
     }
     store.mark_initialized(&path)?;
 
-    let core = ReactiveMapCore::new();
-    {
-        let mut keys = core.cache.lock().unwrap();
-        *keys = known_cache;
+    let core = ReactiveMapCore::with_capacity(known_cache.len());
+    for (k, v) in known_cache {
+        core.cache.insert(k, v);
     }
 
     let core_clone = core.clone();
-    let prefix_for_strip = format!("{}.", path);
+    let map_path = path.clone();
+    let path_for_keys = path.clone();
     let store_clone = store.clone();
-    let path_for_sub = path.clone();
-
     let id = store.subscribe(
-        SubscriptionKind::Prefix(path_for_sub),
+        SubscriptionKind::Prefix(path.clone()),
         Arc::new(move |event| {
-            if event.op == StoreOp::DeletePrefix && *event.path == *prefix_for_strip {
-                core_clone.cache.lock().unwrap().clear();
+            if event.op == StoreOp::DeletePrefix && event.path == map_path {
+                core_clone.cache.clear();
                 core_clone.notify(&MapChange::Clear {
-                    source: event.source,
+                    source: event.source.handle(),
                 });
-                return;
+                return Ok(());
             }
 
-            if let Some(key_str) = event.path.strip_prefix(&prefix_for_strip)
-                && let Ok(k) = K::from_str(key_str)
-            {
-                let source = event.source;
+            let Some(key_str) = path_for_keys.entry_name(&event.path) else {
+                return Err(Report::new(StorageError::Notify)
+                    .attach(Key(event.path.clone()))
+                    .attach(Prefix(path_for_keys.clone()))
+                    .attach("not a path this library could have written, so the map did not take it"));
+            };
 
-                let new_val = event
-                    .new
-                    .as_ref()
-                    .and_then(|b| store_clone.decode::<V>(b).ok());
-                let old_val = event
-                    .old
-                    .as_ref()
-                    .and_then(|b| store_clone.decode::<V>(b).ok());
+            let Ok(k) = K::from_str(&key_str) else {
+                return Err(Report::new(StorageError::Notify)
+                    .attach(Key(event.path.clone()))
+                    .attach(Prefix(path_for_keys.clone()))
+                    .attach(format!("does not parse as {}", std::any::type_name::<K>())));
+            };
+
+            {
+                let source = event.source.handle();
+
+                let new_val = match event.new.as_ref().map(|b| store_clone.decode::<V>(b)) {
+                    Some(Ok(value)) => Some(value),
+                    Some(Err(e)) => {
+                        return Err(e
+                            .change_context(StorageError::Notify)
+                            .attach(Key(event.path.clone()))
+                            .attach("the map kept what it had"));
+                    }
+                    None => None,
+                };
+
+                let stored_old = match event.old.as_ref().map(|b| store_clone.decode::<V>(b)) {
+                    Some(Ok(value)) => Some(value),
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            path = %event.path,
+                            "the value being replaced would not read as this map's value type, so what this map last held is what subscribers are told: {e:?}"
+                        );
+                        None
+                    }
+                    None => None,
+                };
+
+                let old_val = stored_old.or_else(|| core_clone.cache.get(&k));
 
                 let change = {
-                    let mut keys = core_clone.cache.lock().unwrap();
+                    let keys = &core_clone.cache;
 
                     match event.op {
                         StoreOp::Set => {
+                            let Some(new_value) = new_val else {
+                                return Err(Report::new(StorageError::Notify)
+                                    .attach(Key(event.path.clone()))
+                                    .attach("a set carried no value, so the map kept what it had"));
+                            };
+
                             if keys.contains_key(&k) {
-                                let old_value = old_val.unwrap_or_default();
-                                let new_value = new_val.unwrap_or_default();
+                                let old_value = old_val;
                                 keys.insert(k.clone(), new_value.clone());
                                 MapChange::Update {
                                     key: k.clone(),
@@ -209,11 +536,10 @@ where
                                     source,
                                 }
                             } else {
-                                let val = new_val.unwrap_or_default();
-                                keys.insert(k.clone(), val.clone());
+                                keys.insert(k.clone(), new_value.clone());
                                 MapChange::Insert {
                                     key: k.clone(),
-                                    value: val,
+                                    value: new_value,
                                     source,
                                 }
                             }
@@ -222,7 +548,7 @@ where
                             keys.remove(&k);
                             MapChange::Remove {
                                 key: k.clone(),
-                                old_value: old_val.unwrap_or_default(),
+                                old_value: old_val,
                                 source,
                             }
                         }
@@ -231,32 +557,18 @@ where
 
                 core_clone.notify(&change);
             }
+
+            Ok(())
         }),
     );
 
     Ok(ReactiveMap {
-        core,
-        path,
-        instance_id,
-        store: store.clone(),
-        store_sub: Arc::new(StoreSubscription {
+        inner: Arc::new(crate::reactive::map::MapInner {
+            core,
+            path,
+            instance_id,
             store: store.clone(),
-            id,
+            store_sub: Arc::new(StoreSubscription::new(store.clone(), id)),
         }),
-        _mode: std::marker::PhantomData,
     })
-}
-
-pub fn join_path(prefix: &str, key: &str) -> String {
-    let trimmed_prefix = prefix.trim_end_matches('.');
-    let trimmed_key = key.trim_start_matches('.');
-    if trimmed_prefix.is_empty() {
-        trimmed_key.to_string()
-    } else {
-        format!("{}.{}", trimmed_prefix, trimmed_key)
-    }
-}
-
-pub fn scoped_path<T: StateScope>(key: &str) -> String {
-    join_path(T::PREFIX, key)
 }

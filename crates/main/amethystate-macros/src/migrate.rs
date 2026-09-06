@@ -25,21 +25,47 @@ impl Parse for RenameMeta {
 }
 
 pub fn migrate_impl(
-    _args: proc_macro::TokenStream,
+    args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     let item_fn = parse_macro_input!(input as ItemFn);
-    match migrate_impl_inner(_args, item_fn) {
+    match migrate_impl_inner(args, item_fn) {
         Ok(ts) => ts,
         Err(e) => e.to_compile_error().into(),
     }
 }
 
+/// Whether the step opts out of being found through the linker.
+fn wants_explicit(args: proc_macro::TokenStream) -> syn::Result<bool> {
+    if args.is_empty() {
+        return Ok(false);
+    }
+
+    let args: proc_macro2::TokenStream = args.into();
+    let idents = syn::parse::Parser::parse2(
+        Punctuated::<Ident, Token![,]>::parse_terminated,
+        args.clone(),
+    )
+    .map_err(|_| syn::Error::new_spanned(&args, "expected `explicit`"))?;
+
+    for ident in &idents {
+        if ident != "explicit" {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!("unknown option `{ident}`, expected `explicit`"),
+            ));
+        }
+    }
+
+    Ok(!idents.is_empty())
+}
+
 pub fn migrate_impl_inner(
-    _args: proc_macro::TokenStream,
+    args: proc_macro::TokenStream,
     mut item_fn: ItemFn,
 ) -> syn::Result<proc_macro::TokenStream> {
     let crate_name = amethystate_crate_path();
+    let explicit = wants_explicit(args)?;
 
     let fn_name = &item_fn.sig.ident;
     let description = fn_name.to_string();
@@ -139,7 +165,7 @@ pub fn migrate_impl_inner(
                 #(#rename_tuples),*
             ];
 
-            fn migrate(old_val: #old_ty, ctx_val: &mut #crate_name::migration::MigrationContext) -> #crate_name::StorageResult<Self> {
+            fn migrate(old_val: #old_ty, ctx_val: &mut #crate_name::migration::MigrationContext) -> #crate_name::migration::StepResult<Self> {
                 #call_expr
             }
         }
@@ -158,15 +184,12 @@ pub fn migrate_impl_inner(
         ));
     };
 
-    let inventory_block = quote! {
-        #crate_name::inventory::submit! {
-            #crate_name::migration::registry::MigrationStepEntry {
+    let entry = quote! {
+        #crate_name::migration::registry::MigrationStepEntry {
                 prefix: <#new_ty as #crate_name::migration::fields::AmeStateFields>::PARENT_PREFIX,
                 target_version: <#new_ty as #crate_name::migration::fields::AmeStateFields>::VERSION,
-                dependencies: <#new_ty as #crate_name::migration::fields::AmeStateFields>::MIGRATION_DEPS,
                 description: #description,
                 struct_name: #struct_name,
-                schema_hash: <#new_ty as #crate_name::migration::fields::AmeStateFields>::SCHEMA_HASH,
                 fields: <#new_ty as #crate_name::migration::fields::AmeStateFields>::FIELDS,
                 run: |ctx| {
                     use #crate_name::migration::fields::AmeStateFields;
@@ -178,20 +201,34 @@ pub fn migrate_impl_inner(
                     for field in <#old_ty as AmeStateFields>::FIELDS {
                         let is_renamed = <#new_ty as MigrateFrom<#old_ty>>::RENAMES
                             .iter()
-                            .any(|(old_k, _)| *old_k == field.name);
+                            .any(|(old_k, _)| *old_k == field.name.as_str());
                         let is_kept = <#new_ty as AmeStateFields>::FIELDS
                             .iter()
                             .any(|f| f.name == field.name);
 
                         if is_renamed || !is_kept {
-                            ctx.delete(field.name)?;
+                            ctx.delete(field.name.as_str())?;
                         }
                     }
 
                     new_data.save_struct(ctx)?;
                     Ok(())
                 }
-            }
+        }
+    };
+
+    let registration = if explicit {
+        let const_name = Ident::new(
+            &fn_name.to_string().to_uppercase(),
+            proc_macro2::Span::call_site(),
+        );
+        quote! {
+            #[allow(non_upper_case_globals)]
+            pub const #const_name: #crate_name::migration::registry::MigrationStepEntry = #entry;
+        }
+    } else {
+        quote! {
+            #crate_name::inventory::submit! { #entry }
         }
     };
 
@@ -199,7 +236,7 @@ pub fn migrate_impl_inner(
         #item_fn
         #check_fields
         #impl_block
-        #inventory_block
+        #registration
     }
     .into())
 }

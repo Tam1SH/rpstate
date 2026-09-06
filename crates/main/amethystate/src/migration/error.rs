@@ -15,8 +15,11 @@ pub enum MigrationError {
         expected_version: u32,
     },
 
-    #[error("Migration cycle detected at prefix: {0}")]
-    Cycle(String),
+    /// A step reached into a prefix whose own migration is already running, so
+    /// neither can go first. The whole chain is named, outermost first, ending
+    /// on the prefix that closed it.
+    #[error("a migration reached round to where it started: {}", .0.join(" -> "))]
+    Cycle(Vec<String>),
 
     #[error("Migration error: {0}")]
     Custom(String),
