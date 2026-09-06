@@ -178,15 +178,17 @@ impl MigrationBackendAdapter for SqliteMigrationBackend<'_> {
         self.set_typed("metadata", prefix.as_str(), meta)
     }
 
-    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
-        self.get_typed("schema_snapshot", prefix.as_str())
+    fn get_schema_snapshots(&self, prefix: &StorePath) -> StorageResult<Vec<SchemaSnapshot>> {
+        Ok(self
+            .get_typed::<Vec<SchemaSnapshot>>("schema_snapshot", prefix.as_str())?
+            .unwrap_or_default())
     }
-    fn set_schema_snapshot(
+    fn set_schema_snapshots(
         &mut self,
         prefix: &StorePath,
-        snapshot: &SchemaSnapshot,
+        trees: &[SchemaSnapshot],
     ) -> StorageResult<()> {
-        self.set_typed("schema_snapshot", prefix.as_str(), snapshot)
+        self.set_typed("schema_snapshot", prefix.as_str(), &trees)
     }
 
     fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>> {

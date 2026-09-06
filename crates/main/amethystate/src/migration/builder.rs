@@ -1,9 +1,9 @@
 use crate::migration::fields::FieldDescriptor;
 use crate::migration::provided::Provided;
-use crate::migration::registry::{MigrationDependency, MigrationStepEntry};
+use crate::migration::registry::MigrationStepEntry;
 use crate::migration::set::MigrationSet;
 use crate::{MigrationContext, MigrationPlan, StateScope};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct MigrationBuilder {
@@ -15,7 +15,6 @@ pub struct MigrationBuilder {
 #[derive(Default)]
 pub(crate) struct PrefixPlan {
     migrator: MigrationPlan,
-    dependencies: BTreeSet<String>,
     pub(crate) fields: &'static [FieldDescriptor],
 }
 
@@ -58,7 +57,6 @@ impl MigrationBuilder {
         &mut self,
         steps: impl IntoIterator<Item = &'a MigrationStepEntry>,
     ) -> &mut Self {
-        use std::collections::HashSet;
         let mut groups: HashMap<&'a str, Vec<&'a MigrationStepEntry>> = HashMap::new();
 
         for entry in steps {
@@ -68,16 +66,11 @@ impl MigrationBuilder {
         for (prefix, steps) in groups {
             let mut max_v = 0;
             let mut latest_fields: &'static [FieldDescriptor] = &[];
-            let mut merged_deps = HashSet::new();
 
             for step in &steps {
                 if step.target_version >= max_v {
                     max_v = step.target_version;
                     latest_fields = step.fields;
-                }
-
-                for dep in step.dependencies {
-                    merged_deps.insert(*dep);
                 }
 
                 if step.target_version > 0 {
@@ -86,11 +79,7 @@ impl MigrationBuilder {
                 }
             }
 
-            let plan = self.prefix_plan(prefix);
-            plan.fields = latest_fields;
-            for dep in merged_deps {
-                plan.dependencies.insert(dep.to_string());
-            }
+            self.prefix_plan(prefix).fields = latest_fields;
         }
         self
     }
@@ -129,8 +118,7 @@ impl MigrationBuilder {
         prefixes.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         for (prefix, plan) in prefixes {
-            let deps: Vec<&str> = plan.dependencies.iter().map(|s| s.as_str()).collect();
-            set = set.add(prefix, plan.migrator, plan.fields, &deps);
+            set = set.add(prefix, plan.migrator, plan.fields);
         }
 
         set.take_provided(self.provided);
@@ -139,52 +127,6 @@ impl MigrationBuilder {
 }
 
 impl PrefixMigrationBuilder<'_> {
-    /// Declares that this prefix's steps must run after another's.
-    ///
-    /// The engine orders prefixes by these edges, so a step that reads a value
-    /// another migration produces is not left racing it. A cycle is refused
-    /// rather than resolved: opening the store fails with
-    /// [`MigrationError::Cycle`](crate::MigrationError::Cycle), naming one of
-    /// the prefixes in it.
-    ///
-    /// ```rust,ignore
-    /// #[amethystate(prefix = "net", version = 2)]
-    /// pub struct NetworkState {
-    ///     #[amestate(default = 8080)]
-    ///     pub port: u16,
-    /// }
-    ///
-    /// #[amethystate(prefix = "ui", version = 2)]
-    /// pub struct Dashboard {
-    ///     #[amestate(default = 8080)]
-    ///     pub proxy_port: u16,
-    /// }
-    ///
-    /// // `net` may itself be moving its port in this same run, so read it
-    /// // only after that has happened.
-    /// m.for_node::<Dashboard>()
-    ///     .depends_on::<NetworkState>()
-    ///     .step(2, "adopt the port the network migration settled on", |ctx| {
-    ///         let port: u16 = ctx.global_get("net.port")?.unwrap_or(8080);
-    ///         ctx.set("proxy_port", &port)
-    ///     });
-    /// ```
-    pub fn depends_on<D: MigrationDependency>(&mut self) -> &mut Self {
-        let plan = self.builder.prefix_plan(&self.prefix);
-        D::register(&mut plan.dependencies);
-        self
-    }
-
-    /// [`PrefixMigrationBuilder::depends_on`] against a prefix named as a
-    /// string, for one no type describes.
-    pub fn depends_on_raw(&mut self, dependency: impl Into<String>) -> &mut Self {
-        self.builder
-            .prefix_plan(&self.prefix)
-            .dependencies
-            .insert(dependency.into());
-        self
-    }
-
     /// Adds one step, taking the data to `target_version`.
     ///
     /// Steps run in ascending version order, and only those above the version

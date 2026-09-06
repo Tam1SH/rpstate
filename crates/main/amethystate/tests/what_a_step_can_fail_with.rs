@@ -1,8 +1,8 @@
+use amethystate::Store;
 use amethystate::amethystate;
 use amethystate::migration::{MigrationError, RunStep};
+use amethystate::store::LoadMap;
 use amethystate::store::builder::StoreBuilder;
-use amethystate::store::{LoadMap, StoreBackend};
-use amethystate::{Store, StoreExt};
 use amethystate_core::test_utils::TempPath;
 use std::error::Error;
 

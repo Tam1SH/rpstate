@@ -175,24 +175,29 @@ fn an_open_that_gives_up_leaves_the_data_where_it_was() {
     let path = seeded("tamper_rollback");
     let data_before = std::fs::read_to_string(path.path()).unwrap();
 
-    let opened =
-        StoreBuilder::new(path.path())
-            .backend(text_backend())
-            .migrations(|m| {
-                m.for_prefix("alpha")
-                    .depends_on_raw("beta")
-                    .step(1, "never runs", |_ctx| Ok(()));
-                m.for_prefix("beta")
-                    .depends_on_raw("alpha")
-                    .step(1, "never runs either", |_ctx| Ok(()));
-            })
-            .build();
+    let opened = StoreBuilder::new(path.path())
+        .backend(text_backend())
+        .migrations(|m| {
+            m.for_prefix("alpha").step(1, "reach into beta", |ctx| {
+                ctx.global_get::<u32>("beta.thing")?;
+                Ok(())
+            });
+            m.for_prefix("beta")
+                .step(1, "reach back into alpha", |ctx| {
+                    ctx.global_get::<u32>("alpha.thing")?;
+                    Ok(())
+                });
+        })
+        .build_with_migration();
+
+    let (store, report) = opened.expect("a cycle is a failed migration, not a refused open");
 
     assert!(
-        opened.is_err(),
-        "a dependency cycle between prefixes must refuse the open"
+        report.has_failures(),
+        "two prefixes reaching into each other cannot be ordered, and that has to be said"
     );
-    drop(opened);
+
+    drop(store);
     settle();
 
     assert_eq!(

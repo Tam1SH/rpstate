@@ -152,7 +152,7 @@ fn test_initialized_namespaces_are_independent() {
 }
 
 #[test]
-fn test_component_atomic_rollback() {
+fn a_failure_rolls_back_the_prefix_the_failing_step_reached_into() {
     let path = TempPath::new("rollback");
     let mut cfg = StoreConfig::new(&path);
     cfg.save_debounce = Duration::from_millis(50);
@@ -164,23 +164,25 @@ fn test_component_atomic_rollback() {
 
     let mset = MigrationSet::default()
         .add(
-            "net",
-            MigrationPlan::new().step(1, "ok", |ctx| ctx.set("ip", &"8.8.8.8".to_string())),
-            EMPTY_FIELDS,
-            &[],
-        )
-        .add(
-            "ui",
-            MigrationPlan::new().step(1, "fail", |_| {
+            "app",
+            MigrationPlan::new().step(1, "reach, then fail", |ctx| {
+                ctx.global_get::<String>("net.ip")?;
                 Err(MigrationError::Custom("crash".into()).into())
             }),
             EMPTY_FIELDS,
-            &["net"],
+        )
+        .add(
+            "net",
+            MigrationPlan::new().step(1, "ok", |ctx| ctx.set("ip", &"8.8.8.8".to_string())),
+            EMPTY_FIELDS,
         );
 
     let (store, report) = Store::open(StoreConfig::new(&path), mset).unwrap();
     assert!(report.has_failures());
 
     let val: String = store.get(["net", "ip"]).unwrap().unwrap();
-    assert_eq!(val, "1.1.1.1");
+    assert_eq!(
+        val, "1.1.1.1",
+        "`net` was migrated because `app` reached into it, so `app` failing takes it back"
+    );
 }

@@ -568,7 +568,6 @@ pub(crate) fn data_impl(crate_name: &TokenStream2, schema: &Schema) -> TokenStre
             };
             const VERSION: u32 = #version_val;
             const PARENT_PREFIX: #crate_name::store::StaticPath = #prefix_static;
-            const MIGRATION_DEPS: &'static [&'static str] = &[];
 
             fn load_struct(ctx: &mut #crate_name::MigrationContext) -> #crate_name::migration::StepResult<Self> {
                 Ok(Self {

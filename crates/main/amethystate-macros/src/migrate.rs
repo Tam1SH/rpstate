@@ -188,7 +188,6 @@ pub fn migrate_impl_inner(
         #crate_name::migration::registry::MigrationStepEntry {
                 prefix: <#new_ty as #crate_name::migration::fields::AmeStateFields>::PARENT_PREFIX,
                 target_version: <#new_ty as #crate_name::migration::fields::AmeStateFields>::VERSION,
-                dependencies: <#new_ty as #crate_name::migration::fields::AmeStateFields>::MIGRATION_DEPS,
                 description: #description,
                 struct_name: #struct_name,
                 fields: <#new_ty as #crate_name::migration::fields::AmeStateFields>::FIELDS,

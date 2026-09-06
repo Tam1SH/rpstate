@@ -45,9 +45,9 @@ fn seed(path: &std::path::Path, contents: &str) {
 /// A key with a dot in its name written by hand, beside a genuine two-level
 /// nesting. Both are separate places and both must read back.
 const DOTTED: &str = doc! {
-    json = "{\n  \"cfg\": {\n    \"a.b\": 1,\n    \"a\": { \"b\": 2 }\n  }\n}\n",
-    toml = "[cfg]\n\"a.b\" = 1\n\n[cfg.a]\nb = 2\n",
-    ron  = "{\"cfg\": {\"a.b\": 1, \"a\": {\"b\": 2}}}",
+    json = "{\n  \"cfg.a\\\\.b\": 1,\n  \"cfg.a.b\": 2\n}\n",
+    toml = "'cfg.a\\.b' = 1\n\"cfg.a.b\" = 2\n",
+    ron  = "{\"cfg.a\\\\.b\": 1, \"cfg.a.b\": 2}",
 };
 
 #[test]
@@ -150,9 +150,9 @@ fn a_prefix_delete_over_a_dotted_name_survives_a_restart() {
 fn a_key_with_no_name_survives_a_round_trip() {
     let path = TempPath::new("tamper_empty_name");
     let contents = doc! {
-        json = "{\n  \"\": 9,\n  \"cfg\": { \"width\": 1280 }\n}\n",
-        toml = "\"\" = 9\n\n[cfg]\nwidth = 1280\n",
-        ron  = "{\"\": 9, \"cfg\": {\"width\": 1280}}",
+        json = "{\n  \"\": 9,\n  \"cfg.width\": 1280\n}\n",
+        toml = "\"\" = 9\n\"cfg.width\" = 1280\n",
+        ron  = "{\"\": 9, \"cfg.width\": 1280}",
     };
     seed(path.path(), contents);
 
@@ -183,9 +183,9 @@ fn a_key_with_no_name_survives_a_round_trip() {
 fn a_key_with_no_name_costs_only_itself() {
     let path = TempPath::new("tamper_empty_scan");
     let contents = doc! {
-        json = "{\n  \"\": 9,\n  \"cfg\": { \"width\": 1280 }\n}\n",
-        toml = "\"\" = 9\n\n[cfg]\nwidth = 1280\n",
-        ron  = "{\"\": 9, \"cfg\": {\"width\": 1280}}",
+        json = "{\n  \"\": 9,\n  \"cfg.width\": 1280\n}\n",
+        toml = "\"\" = 9\n\"cfg.width\" = 1280\n",
+        ron  = "{\"\": 9, \"cfg.width\": 1280}",
     };
     seed(path.path(), contents);
 

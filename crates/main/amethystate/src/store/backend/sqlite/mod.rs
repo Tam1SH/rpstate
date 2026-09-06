@@ -13,6 +13,7 @@ use crate::store::durable::{Commit, CommitSignal, PersistHealth};
 use crate::store::error::StorageError;
 use crate::store::facts::{Facts, Key, StoreFile};
 use crate::store::format::{self, StorageFactSet};
+use crate::store::meta::SchemaSnapshot;
 use crate::store::screening::Screening;
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use crate::store::{
@@ -685,6 +686,49 @@ impl SqliteStoreInner {
         Ok(found)
     }
 
+    /// Written straight to the table rather than through the buffer.
+    ///
+    /// A schema is recorded when a struct is built, which is a handful of times
+    /// at a start rather than once a frame, and the comparison above the write
+    /// means a rebuild of the same struct costs one read.
+    fn record_schema(&self, at: &StorePath, schema: &SchemaSnapshot) -> StorageResult<()> {
+        let conn = self.conn()?;
+
+        let held: Option<Vec<u8>> = conn
+            .prepare_cached("SELECT value FROM schema_snapshot WHERE key = ?")
+            .and_then(|mut stmt| stmt.query_row([at.as_str()], |row| row.get(0)).optional())
+            .map_err(SqliteStoreError::from)
+            .doing(StorageError::Meta, &self.path)
+            .attach_key(at)?;
+
+        let mut held: Vec<SchemaSnapshot> = held
+            .map(|bytes| sonic_rs::from_slice(&bytes))
+            .transpose()
+            .map_err(CodecError::from)
+            .change_context(StorageError::Codec)
+            .attach_key(at)?
+            .unwrap_or_default();
+
+        match crate::store::moved::same_declaration_stored(&held, &schema.fields) {
+            Some(index) if held[index] == *schema => return Ok(()),
+            Some(index) => held[index] = schema.clone(),
+            None => held.push(schema.clone()),
+        }
+
+        let bytes = sonic_rs::to_vec(&held)
+            .map_err(CodecError::from)
+            .change_context(StorageError::Codec)
+            .attach_key(at)?;
+
+        conn.prepare_cached("REPLACE INTO schema_snapshot (key, value) VALUES (?, ?)")
+            .and_then(|mut stmt| stmt.execute(rusqlite::params![at.as_str(), bytes]))
+            .map_err(SqliteStoreError::from)
+            .doing(StorageError::Meta, &self.path)
+            .attach_key(at)?;
+
+        Ok(())
+    }
+
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         if state.is_seeded() && self.initialized.lock().contains(namespace.as_str()) {
             return Ok(());
@@ -971,6 +1015,10 @@ impl StoreBackend for SqliteStore {
 
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         self.inner.set_initialized(namespace, state)
+    }
+
+    fn record_schema(&self, at: &StorePath, schema: &SchemaSnapshot) -> StorageResult<()> {
+        self.inner.record_schema(at, schema)
     }
 }
 

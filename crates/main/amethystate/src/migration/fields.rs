@@ -235,8 +235,6 @@ pub trait AmeStateFields: Sized {
     /// which one was spelled.
     const PARENT_PREFIX: StaticPath;
 
-    const MIGRATION_DEPS: &'static [&'static str];
-
     fn load_struct(ctx: &mut MigrationContext) -> crate::migration::StepResult<Self>;
 
     fn save_struct(&self, ctx: &mut MigrationContext) -> crate::migration::StepResult<()>;

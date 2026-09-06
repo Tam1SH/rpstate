@@ -85,6 +85,11 @@ impl StoreBackend for TomlStore {
         Some(&self.0)
     }
 
+    #[cfg(feature = "test-utils")]
+    fn reread_from_disk(&self) {
+        self.0.reread_from_disk()
+    }
+
     fn files_layout(&self) -> Option<StoreLayout> {
         self.0.files_layout()
     }
@@ -131,12 +136,12 @@ impl StoreBackend for TomlStore {
     ) -> StorageResult<()> {
         self.0.set_initialized(namespace, state)
     }
-}
 
-crate::define_store_test_suite!(
-    TomlStore,
-    "toml",
-    "[amethystate]\nwatch_interval_ms = 50\n\n[ui.theme]\ndark = false",
-    "[amethystate]\nwatch_interval_ms = 50\n\n[ui.theme]\ndark = true",
-    "[amethystate]\nwatch_interval_ms = 50\n\n[ui]\ntheme = {}"
-);
+    fn record_schema(
+        &self,
+        at: &StorePath,
+        schema: &crate::store::meta::SchemaSnapshot,
+    ) -> StorageResult<()> {
+        self.0.record_schema(at, schema)
+    }
+}

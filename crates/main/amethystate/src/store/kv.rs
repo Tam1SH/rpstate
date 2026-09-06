@@ -467,10 +467,9 @@ impl Kv {
 
 /// What [`Kv::clear`] did.
 ///
-/// How deep the paths are follows the engine's scan - see
-/// [`StoreBackend::scan_keys`] - so a flat engine names the leaves it removed
-/// and a document engine names the level it removed them with. What went is the
-/// same either way.
+/// The paths are the ones the engine's scan lists - see
+/// [`StoreBackend::scan_keys`] - so each is a value that went, or a value that
+/// stayed, rather than a level holding several.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Cleared {
     /// Paths that were removed, with everything under them.

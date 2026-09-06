@@ -129,19 +129,21 @@ impl MigrationBackendAdapter for RedbMigrationBackend<'_> {
             .bookkeeping(self.path, TABLE_META, prefix)
     }
 
-    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>> {
-        self.txn
-            .load_typed(TABLE_SCHEMA_SNAPSHOT, prefix.as_str())
-            .bookkeeping(self.path, TABLE_SCHEMA_SNAPSHOT, prefix)
+    fn get_schema_snapshots(&self, prefix: &StorePath) -> StorageResult<Vec<SchemaSnapshot>> {
+        Ok(self
+            .txn
+            .load_typed::<Vec<SchemaSnapshot>>(TABLE_SCHEMA_SNAPSHOT, prefix.as_str())
+            .bookkeeping(self.path, TABLE_SCHEMA_SNAPSHOT, prefix)?
+            .unwrap_or_default())
     }
 
-    fn set_schema_snapshot(
+    fn set_schema_snapshots(
         &mut self,
         prefix: &StorePath,
-        snapshot: &SchemaSnapshot,
+        trees: &[SchemaSnapshot],
     ) -> StorageResult<()> {
         self.txn
-            .save_typed(TABLE_SCHEMA_SNAPSHOT, prefix.as_str(), snapshot)
+            .save_typed(TABLE_SCHEMA_SNAPSHOT, prefix.as_str(), &trees)
             .bookkeeping(self.path, TABLE_SCHEMA_SNAPSHOT, prefix)
     }
 

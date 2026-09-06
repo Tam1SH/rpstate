@@ -23,12 +23,13 @@ use crate::{
 use crate::codec::CodecError;
 use crate::migration::engine::{MigrationEngine, StorageProvider};
 use crate::migration::set::MigrationSet;
-use crate::store::backend::redb::tables::TABLE_SCHEMA_SNAPSHOT;
+use crate::store::backend::redb::tables::{TABLE_SCHEMA_SNAPSHOT, TableReader, TableWriter};
 use crate::store::backend::utils;
 use crate::store::backend::utils::Attempted;
 use crate::store::backend::utils::refuse_closing_from_a_flush;
 use crate::store::debouncer::{Debouncer, FlushPolicy};
 use crate::store::durable::{Commit, CommitSignal, PersistHealth};
+use crate::store::meta::SchemaSnapshot;
 use crate::store::traits::{MigrationBackendAdapter, StoreLayout};
 use parking_lot::{Mutex, RwLock};
 use rmp_serde::Serializer;
@@ -983,6 +984,42 @@ impl StoreBackend for RedbStore {
         Ok(found)
     }
 
+    /// Written in a transaction of its own rather than through the buffer.
+    ///
+    /// A schema is recorded when a struct is built, which is a handful of times
+    /// at a start rather than once a frame, and the comparison above the write
+    /// means a rebuild of the same struct costs one read. The buffer is for the
+    /// data path and would need a case of its own for this.
+    fn record_schema(&self, at: &StorePath, schema: &SchemaSnapshot) -> StorageResult<()> {
+        let db = self.inner.db()?;
+
+        let mut held: Vec<SchemaSnapshot> = db
+            .begin_read()
+            .doing(StorageError::Meta, &self.inner.path)?
+            .load_typed(TABLE_SCHEMA_SNAPSHOT, at.as_str())
+            .change_context(StorageError::Meta)
+            .attach_table(TABLE_SCHEMA_SNAPSHOT.name())
+            .attach_key(at)?
+            .unwrap_or_default();
+
+        match crate::store::moved::same_declaration_stored(&held, &schema.fields) {
+            Some(index) if held[index] == *schema => return Ok(()),
+            Some(index) => held[index] = schema.clone(),
+            None => held.push(schema.clone()),
+        }
+
+        let txn = db
+            .begin_write()
+            .doing(StorageError::Meta, &self.inner.path)?;
+
+        txn.save_typed(TABLE_SCHEMA_SNAPSHOT, at.as_str(), &held)
+            .change_context(StorageError::Meta)
+            .attach_table(TABLE_SCHEMA_SNAPSHOT.name())
+            .attach_key(at)?;
+
+        txn.commit().doing(StorageError::Meta, &self.inner.path)
+    }
+
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         if state.is_seeded() && self.inner.initialized.lock().contains(namespace.as_str()) {
             return Ok(());
@@ -1201,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn test_component_atomic_rollback() {
+    fn a_failure_rolls_back_the_prefix_the_failing_step_reached_into() {
         let path = TempPath::new("rollback");
         let mut cfg = StoreConfig::new(&path);
         cfg.save_debounce = Duration::from_millis(50);
@@ -1213,18 +1250,17 @@ mod tests {
 
         let mset = MigrationSet::default()
             .add(
-                "net",
-                MigrationPlan::new().step(1, "ok", |ctx| ctx.set("ip", &"8.8.8.8".to_string())),
-                EMPTY_FIELDS,
-                &[],
-            )
-            .add(
-                "ui",
-                MigrationPlan::new().step(1, "fail", |_| {
+                "app",
+                MigrationPlan::new().step(1, "reach, then fail", |ctx| {
+                    ctx.global_get::<String>("net.ip")?;
                     Err(MigrationError::Custom("crash".into()).into())
                 }),
                 EMPTY_FIELDS,
-                &["net"],
+            )
+            .add(
+                "net",
+                MigrationPlan::new().step(1, "ok", |ctx| ctx.set("ip", &"8.8.8.8".to_string())),
+                EMPTY_FIELDS,
             );
 
         let (store, report) = RedbStore::open(StoreConfig::new(&path), mset).unwrap();

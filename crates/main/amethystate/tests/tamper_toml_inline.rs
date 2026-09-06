@@ -1,10 +1,23 @@
 #![cfg(feature = "toml")]
 
+use amethystate::amethystate;
 use amethystate::store::StoreBackend;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::path::StorePath;
 use amethystate_core::test_utils::TempPath;
 use std::time::Duration;
+
+#[amethystate(prefix = "cfg")]
+pub struct Cfg {
+    #[amestate(default = 0u32)]
+    pub width: u32,
+
+    #[amestate(default = 0u32)]
+    pub height: u32,
+
+    #[amestate(default = 0u32)]
+    pub scale: u32,
+}
 
 fn settle() {
     std::thread::sleep(Duration::from_millis(120));

@@ -248,7 +248,6 @@ fn a_prefix_may_not_land_on_another_structs_field(backend: Backend) {
 }
 
 #[backends(all)]
-#[ignore = "red on the text engines and not yet answered: a key deeper than an entry is read as one"]
 fn a_map_will_not_open_over_keys_deeper_than_its_entries(backend: Backend) {
     let path = TempPath::new("map_swallows_below");
     let store = StoreBuilder::new(path.path())

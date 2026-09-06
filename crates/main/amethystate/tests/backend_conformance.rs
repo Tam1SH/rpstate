@@ -42,8 +42,7 @@ use amethystate::Store;
 use amethystate::errors::WriteValue;
 use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate::store::{
-    Occupied, ReadValue, StorageError, StoreEvent, StoreOp, StorePath, StorePathError,
-    SubscriptionKind,
+    ReadValue, StorageError, StoreEvent, StoreOp, StorePath, StorePathError, SubscriptionKind,
 };
 use amethystate_core::test_utils::TempPath;
 use error_stack::Report;
@@ -177,8 +176,7 @@ fn a_value_reads_back_where_it_was_written(backend: Backend) {
 }
 
 /// An ancestor of a written path is excluded, and asked about separately by
-/// `an_ancestor_is_not_a_value` - a tree engine has a node there where a flat
-/// one has no key, and the two answer differently without either being wrong.
+/// `an_ancestor_is_not_a_value`.
 fn a_write_leaves_every_other_path_alone(backend: Backend) {
     proptest!(config(), |(raw in path_set(), probe in path())| {
         let file = TempPath::new("conf_no_other_path");
@@ -202,11 +200,11 @@ fn a_write_leaves_every_other_path_alone(backend: Backend) {
 
 /// A path with values under it and none of its own never reads back as a value.
 ///
-/// Where the engines are allowed to differ: the flat ones hold no key there and
-/// answer `Ok(None)`, the document ones hold a node and answer with a decode
-/// failure. What none of them may do is hand back something that reads as a
-/// value, because the only value in reach is one that belongs to a path
-/// underneath - and a caller cannot tell that apart from a real reading.
+/// What none of them may do is hand back something that reads as a value,
+/// because the only value in reach is one that belongs to a path underneath -
+/// and a caller cannot tell that apart from a real reading. A refusal is
+/// admitted beside `Ok(None)` because a declared path can have a node where an
+/// undeclared one has no key at all.
 fn an_ancestor_is_not_a_value(backend: Backend) {
     proptest!(config(), |(head in path(), child in segment())| {
         let file = TempPath::new("conf_ancestor");
@@ -332,11 +330,15 @@ fn a_scan_lists_exactly_what_is_under_the_prefix(backend: Backend) {
                 .collect(),
         );
 
+        let beside = leaves(
+            tails
+                .iter()
+                .map(|tail| sibling_head.iter().chain(tail).cloned().collect())
+                .collect(),
+        );
+
         write_leaves(&store, &under);
-        for tail in &tails {
-            let beside = sibling.join(&StorePath::from_segments(tail));
-            store.set(&beside, &9000u32).unwrap();
-        }
+        write_leaves(&store, &beside);
         store.set(&elsewhere, &1u32).unwrap();
 
         let mut expected: Vec<StorePath> = under.to_vec();
@@ -517,17 +519,15 @@ fn a_name_holding_the_separator_stays_one_level(backend: Backend) {
     });
 }
 
-/// 12. A value at a name and values under that name either coexist, or the
-///     second write is refused and the first survives. Neither is destroyed.
+/// 12. A value at a name and values under that name coexist, and neither write
+///     disturbs the other.
 ///
-/// The one place the suite does not ask for the same answer from everyone. A
-/// document holds a value at a node or values under it, never both, so the flat
-/// engines take the second write and the document engines refuse it - and a
-/// refusal that leaves the first value alone is as good an answer as keeping
-/// both. What stays universal is that nothing is lost without a word.
+/// A path nobody declared is one whole key on every engine - a range of them on
+/// redb and sqlite, a plane of them in a document - so `a` and `a.b` are two
+/// keys and nothing has to choose between them.
 ///
-/// Both orders, because the order the two writes arrive in is what decides
-/// which of the two an engine that walks a tree would have destroyed.
+/// Both orders, because the order the two writes arrive in is what would decide
+/// which of the two an engine that walked a tree destroyed.
 fn a_leaf_and_a_branch_coexist_at_one_name(backend: Backend) {
     proptest!(config(), |(head in path(), child in segment())| {
         let file = TempPath::new("conf_leaf_and_branch");
@@ -535,57 +535,29 @@ fn a_leaf_and_a_branch_coexist_at_one_name(backend: Backend) {
 
         let node = StorePath::segment("leaf_first").join(&StorePath::from_segments(&head));
         let under = node.push(&child);
-        store.set(&node, &1u32).unwrap();
 
-        match store.set(&under, &2u32) {
-            Ok(()) => {
-                prop_assert_eq!(
-                    store.get::<u32>(&node).ok(),
-                    Some(Some(1)),
-                    "writing under {} lost the value at it", node
-                );
-                prop_assert_eq!(store.get::<u32>(&under).ok(), Some(Some(2)));
-            }
-            Err(refused) => {
-                let refused: Report<StorageError> = refused.into();
-                prop_assert!(
-                    refused.contains::<Occupied>(),
-                    "refused for some other reason: {refused:?}"
-                );
-                prop_assert_eq!(
-                    store.get::<u32>(&node).ok(),
-                    Some(Some(1)),
-                    "the write under {} was refused and took the value at it anyway", node
-                );
-            }
-        }
+        store.set(&node, &1u32).unwrap();
+        store.set(&under, &2u32).unwrap();
+
+        prop_assert_eq!(
+            store.get::<u32>(&node).unwrap(),
+            Some(1),
+            "writing under {} lost the value at it", node
+        );
+        prop_assert_eq!(store.get::<u32>(&under).unwrap(), Some(2));
 
         let node = StorePath::segment("branch_first").join(&StorePath::from_segments(&head));
         let under = node.push(&child);
-        store.set(&under, &2u32).unwrap();
 
-        match store.set(&node, &1u32) {
-            Ok(()) => {
-                prop_assert_eq!(store.get::<u32>(&node).ok(), Some(Some(1)));
-                prop_assert_eq!(
-                    store.get::<u32>(&under).ok(),
-                    Some(Some(2)),
-                    "writing at {} lost what was under it", node
-                );
-            }
-            Err(refused) => {
-                let refused: Report<StorageError> = refused.into();
-                prop_assert!(
-                    refused.contains::<Occupied>(),
-                    "refused for some other reason: {refused:?}"
-                );
-                prop_assert_eq!(
-                    store.get::<u32>(&under).ok(),
-                    Some(Some(2)),
-                    "the write at {} was refused and took what was under it anyway", node
-                );
-            }
-        }
+        store.set(&under, &2u32).unwrap();
+        store.set(&node, &1u32).unwrap();
+
+        prop_assert_eq!(store.get::<u32>(&node).unwrap(), Some(1));
+        prop_assert_eq!(
+            store.get::<u32>(&under).unwrap(),
+            Some(2),
+            "writing at {} lost what was under it", node
+        );
     });
 }
 
@@ -1135,7 +1107,6 @@ macro_rules! conformance_suite {
         }
 
         #[test]
-        #[ignore = "the text engines disagree here, which is this file's finding rather than a regression"]
         fn writing_then_deleting_leaves_the_store_as_it_was() {
             super::writing_then_deleting_leaves_the_store_as_it_was(BACKEND);
         }
@@ -1146,7 +1117,6 @@ macro_rules! conformance_suite {
         }
 
         #[test]
-        #[ignore = "the text engines disagree here, which is this file's finding rather than a regression"]
         fn a_scan_lists_exactly_what_is_under_the_prefix() {
             super::a_scan_lists_exactly_what_is_under_the_prefix(BACKEND);
         }

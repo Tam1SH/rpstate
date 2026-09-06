@@ -140,9 +140,9 @@ fn deleting_a_level_named_dot_removes_it() {
         .unwrap();
 
     let contents = doc! {
-        json = "{\n  \".\": 7,\n  \"cfg\": { \"width\": 1280 }\n}\n",
-        toml = "\".\" = 7\n\n[cfg]\nwidth = 1280\n",
-        ron  = "{\".\": 7, \"cfg\": {\"width\": 1280}}",
+        json = "{\n  \".\": 7,\n  \"cfg.width\": 1280\n}\n",
+        toml = "\".\" = 7\n\"cfg.width\" = 1280\n",
+        ron  = "{\".\": 7, \"cfg.width\": 1280}",
     };
     std::fs::write(path.path(), contents).unwrap();
     drop(store);
@@ -163,7 +163,9 @@ fn deleting_a_level_named_dot_removes_it() {
 }
 
 /// A key literally named `.` written by hand is an ordinary one-level name.
-/// Reading it must give back what is stored under it.
+/// Reading it must give back what is stored under it, and a write must go back
+/// under the name the person used rather than under the spelling this library
+/// would have chosen.
 #[test]
 fn a_hand_written_dot_key_reads_back_its_own_value() {
     let path = TempPath::new("tamper_dot_hand");
@@ -179,21 +181,45 @@ fn a_hand_written_dot_key_reads_back_its_own_value() {
     settle();
 
     let contents = doc! {
-        json = "{\n  \".\": 7,\n  \"cfg\": { \"width\": 1280 }\n}\n",
-        toml = "\".\" = 7\n\n[cfg]\nwidth = 1280\n",
-        ron  = "{\".\": 7, \"cfg\": {\"width\": 1280}}",
+        json = "{\n  \".\": 7,\n  \"cfg.width\": 1280\n}\n",
+        toml = "\".\" = 7\n\"cfg.width\" = 1280\n",
+        ron  = "{\".\": 7, \"cfg.width\": 1280}",
     };
     std::fs::write(path.path(), contents).unwrap();
+
+    {
+        let store = StoreBuilder::new(path.path())
+            .backend(text_backend())
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            store.get::<u32>(["."]).unwrap(),
+            Some(7),
+            "the value under the hand-written `.` key is not what came back"
+        );
+        assert_eq!(
+            store.get::<u32>(["cfg", "width"]).unwrap(),
+            Some(1280),
+            "and it does not disturb what is beside it"
+        );
+
+        store.set(["."], &9u32).unwrap();
+        store.save_now().unwrap();
+    }
+    settle();
+
+    let after = std::fs::read_to_string(path.path()).unwrap();
+    assert!(
+        !after.contains("\\."),
+        "the write invented a second spelling instead of using the one in the file: {after}"
+    );
 
     let store = StoreBuilder::new(path.path())
         .backend(text_backend())
         .build()
         .unwrap();
-    assert_eq!(
-        store.get::<u32>(["."]).unwrap(),
-        Some(7),
-        "the value under the hand-written `.` key is not what came back"
-    );
+    assert_eq!(store.get::<u32>(["."]).unwrap(), Some(9));
 }
 
 /// Scanning must not report the whole document as the value of one entry.
@@ -212,9 +238,9 @@ fn scanning_over_a_hand_written_dot_key_does_not_yield_the_document() {
     settle();
 
     let contents = doc! {
-        json = "{\n  \".\": 7,\n  \"cfg\": { \"width\": 1280 }\n}\n",
-        toml = "\".\" = 7\n\n[cfg]\nwidth = 1280\n",
-        ron  = "{\".\": 7, \"cfg\": {\"width\": 1280}}",
+        json = "{\n  \".\": 7,\n  \"cfg.width\": 1280\n}\n",
+        toml = "\".\" = 7\n\"cfg.width\" = 1280\n",
+        ron  = "{\".\": 7, \"cfg.width\": 1280}",
     };
     std::fs::write(path.path(), contents).unwrap();
 

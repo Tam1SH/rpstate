@@ -1149,12 +1149,12 @@ persist, and they carry the field tree with roles - so the declared paths are
 knowable before anything is constructed, and even for a schema whose code is no
 longer in the build. Two things killed it:
 
-- the snapshot store is keyed by prefix alone, so two schemas at one prefix
-  leave one record - **measured**, `tests/snapshot_per_prefix.rs`, `#[ignore]`d.
-  Holding several per prefix is possible and claims are what make it addressable
-  (paths are stable where a struct name is not, and the refusal makes claim sets
-  pairwise disjoint, so a record can be found by path intersection rather than
-  by key) - but that is a change to how migration planning finds a stored shape;
+- the snapshot store was keyed by prefix alone, so two schemas at one prefix
+  left one record. Settled the way this entry guessed it would be: a prefix
+  holds several, and a record is found by intersecting the places it owns rather
+  than by a key, because claims at one prefix are pairwise disjoint. The
+  declaration is the places, the version rides with it, and the struct name
+  takes no part. `tests/snapshot_per_prefix.rs` runs;
 - and migrations are the one part of this library that is not worked out. Not to
   be pulled into an unrelated mechanism.
 
@@ -2583,20 +2583,43 @@ handed nothing but a path. So it removes whatever is there, and property 5
 belongs in the same recorded-divergence bucket as property 12 rather than being
 demanded of everyone.
 
-**A scan on a text engine goes one level deep.** `scan_prefix_impl` and
-`scan_keys_impl` set `target_depth = parts.len() + 1` (`text/store.rs:825`,
-`:1004`), so a scan lists direct children only; anything deeper comes back as
-the intermediate branch, with a serialized subtree for its value. redb ranges
-the whole subtree and sqlite ranges `key_range`, so both list every key at any
-depth. A value three levels down is invisible to a scan of its grandparent.
-`ReactiveMap` survives this only because a map's entries are always exactly one
-level below it. `Store::scan_keys` means two different things depending on the
-engine.
+**`moved::between` pairs declarations by name, and a flattened node has none on
+disk.** A flattened node lends its children no segment, so what it is called
+never reaches the store: two trees whose places are identical but whose
+flattened nodes are spelled differently are reported as broken, and comparing a
+tree with itself can report a break. Found by the properties beside the module -
+`the_same_tree_twice_has_moved_nothing` and `a_break_means_the_trees_differ`,
+both `#[ignore]`d - on a fresh seed, in code nothing had touched.
 
-**`delete` at a path that holds no value takes everything under it.**
-`generic_delete` removes the node, so `delete(["a"])` where only `a.b` exists
-deletes `a.b`. On the flat engines there is no key at `a` and nothing happens.
-On a document engine `delete` and `delete_prefix` are the same call.
+Pairing on the places beneath instead is the obvious answer and is not enough on
+its own: two flattened nodes at one level can own places in common, so overlap
+alone crosses them, and name-first-then-overlap still leaves a leaf that turned
+into a flattened node unpaired. Both were tried and neither held for three runs
+of the generator. The comparison wants restating over places rather than
+patching over names, and `What::Flattened` is what would go: a node that gains
+or loses its segment moves every place beneath it, and saying so place by place
+is what a caller can act on.
+
+Nothing above the property is affected today. `Owners` refuses two declarations
+that would own a place in common, so the crossing pairs the generator reaches
+cannot be declared; what is reachable is a flattened node renamed between two
+builds, which reads as a break that did not happen.
+
+**A scan on a text engine lists the same keys as on a flat one.** Settled: a
+document holds two things. The declared paths are a tree, walked down to where a
+declaration says a value begins - a `Role::Field`, or one entry on a
+`Role::Map`'s level - and the declarations come from the inventory and from the
+schemas the store recorded, so a tool built from other source reads the same
+edges. Everything else is a plane of whole keys beside it, which is what redb's
+range and sqlite's `key_range` hold too.
+`backend_conformance::a_scan_lists_exactly_what_is_under_the_prefix` runs on all
+five.
+
+**`delete` at a path that holds no value takes everything under it.** Settled by
+the same split: `delete(["a"])` where only `a.b` exists finds no key `a` in the
+plane and takes nothing, on all five. Inside a declared tree the two are still
+one call, and there `Owners` is what keeps a declared value and a declared level
+off the same path.
 
 **On toml, deleting an absent path creates the levels on the way to it.**
 `Navigable::get_child_mut` for toml is `Item::get_mut`, which is

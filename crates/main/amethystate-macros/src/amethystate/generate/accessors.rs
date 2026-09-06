@@ -1,7 +1,7 @@
 use crate::amethystate::generate::{path_parts, unreadable_tokens};
 use crate::amethystate::model::{Field, Mode, Schema, Shape};
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
 /// The stored type of one field, as it appears in the reactive struct.
@@ -295,6 +295,8 @@ fn struct_check(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
 pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenStream2 {
     let checked = struct_check(crate_name, schema);
     let init_fields = super::init::init_fields(crate_name, schema);
+    let data_struct_name = format_ident!("{}_Data", schema.name);
+    let struct_label = schema.name.to_string();
 
     if schema.is_root() {
         quote! {
@@ -352,14 +354,34 @@ pub(crate) fn constructor(crate_name: &TokenStream2, schema: &Schema) -> TokenSt
                 namespace: impl #crate_name::store::IntoStorePath,
                 instance_id: #crate_name::uuid::Uuid,
             ) -> ::core::result::Result<Self, #crate_name::store::OpenStruct> {
+                use #crate_name::StoreBackend;
+
                 let __ame_fallbacks = store.fallbacks();
-                Self::new_with_id_under(
+                let namespace = namespace.into_store_path()?;
+
+                let built = Self::new_with_id_under(
                     store,
-                    namespace,
+                    namespace.clone(),
                     instance_id,
                     __ame_fallbacks.on_unreadable,
                     __ame_fallbacks.on_delete,
-                )
+                )?;
+
+                store.record_schema(
+                    &namespace,
+                    &#crate_name::store::meta::SchemaSnapshot {
+                        version: <#data_struct_name as #crate_name::migration::fields::AmeStateFields>::VERSION,
+                        struct_name: ::core::option::Option::Some(
+                            <::std::string::String as ::core::convert::From<&str>>::from(#struct_label),
+                        ),
+                        fields: <#data_struct_name as #crate_name::migration::fields::AmeStateFields>::FIELDS
+                            .iter()
+                            .map(#crate_name::store::meta::StoredFieldEntry::from)
+                            .collect(),
+                    },
+                )?;
+
+                Ok(built)
             }
 
             /// The same, told what the struct holding this one decided about a

@@ -16,10 +16,35 @@ use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
+/// Brings the prefix a step is reaching into up to date before it is read.
+///
+/// A step that stays inside its own prefix needs no ordering: the engine is
+/// already there. A step that reaches out is the only thing that can want
+/// another prefix migrated first, and reaching out is a thing it does rather
+/// than a thing it declares - so this is asked at the moment of the reach, and
+/// the engine answers it by migrating that prefix on the spot.
+///
+/// Implemented by the engine's pass. A context built without one - a test with
+/// a hand-made storage - reaches whatever is on disk, which is what it asked
+/// for.
+pub trait Reaching {
+    /// Migrates whatever prefix `full_key` falls under, unless it is already
+    /// done or already running.
+    ///
+    /// A prefix already running is a cycle, and comes back named end to end.
+    fn reach(
+        &self,
+        storage: &mut dyn MigrationBackendAdapter,
+        from: &str,
+        full_key: &str,
+    ) -> StorageResult<()>;
+}
+
 pub struct MigrationContext<'a> {
     prefix: String,
     storage: &'a mut dyn MigrationBackendAdapter,
     provided: Option<&'a Provided>,
+    reaching: Option<&'a dyn Reaching>,
 }
 
 impl<'a> MigrationContext<'a> {
@@ -30,7 +55,15 @@ impl<'a> MigrationContext<'a> {
             prefix,
             storage,
             provided: None,
+            reaching: None,
         }
+    }
+
+    /// Lends the pass that can bring another prefix up to date. See
+    /// [`Reaching`].
+    pub fn with_reaching(mut self, reaching: &'a dyn Reaching) -> Self {
+        self.reaching = Some(reaching);
+        self
     }
 
     /// Lends the values the application handed to
@@ -282,11 +315,13 @@ impl<'a> MigrationContext<'a> {
 
     /// Reads a value by its whole path, ignoring this context's prefix.
     ///
-    /// For a step that needs something another part of the store owns. Whether
-    /// that value has already been migrated depends on ordering - declare it
-    /// with [`PrefixMigrationBuilder::depends_on`](crate::migration::builder::PrefixMigrationBuilder::depends_on)
-    /// rather than hoping.
-    pub fn global_get<T: DeserializeOwned>(&self, full_key: &str) -> StepResult<Option<T>> {
+    /// For a step that needs something another part of the store owns. That
+    /// part is brought up to date first, so what comes back is the migrated
+    /// value and not whatever the last version left - the reach is the
+    /// ordering, and there is nothing to declare. See [`Reaching`].
+    pub fn global_get<T: DeserializeOwned>(&mut self, full_key: &str) -> StepResult<Option<T>> {
+        self.reach(full_key)?;
+
         let read = self
             .storage
             .get(full_key)
@@ -306,7 +341,14 @@ impl<'a> MigrationContext<'a> {
     }
 
     /// Writes a value by its whole path, ignoring this context's prefix.
+    ///
+    /// The part of the store being written into is brought up to date first,
+    /// for the same reason as [`MigrationContext::global_get`]: a value left
+    /// where an old version put it would otherwise be migrated after this
+    /// write and carried off with the rest.
     pub fn global_set<T: Serialize>(&mut self, full_key: &str, value: &T) -> StepResult<()> {
+        self.reach(full_key)?;
+
         let bytes = encode(self.storage, value)
             .attach_migrating(&self.prefix)
             .attach_raw_key(full_key)
@@ -316,6 +358,16 @@ impl<'a> MigrationContext<'a> {
             .attach_migrating(&self.prefix)
             .attach_raw_key(full_key)
             .attach_value_bytes(bytes.len())
+            .map_err(RunStep::Store)
+    }
+
+    fn reach(&mut self, full_key: &str) -> StepResult<()> {
+        let Some(reaching) = self.reaching else {
+            return Ok(());
+        };
+
+        reaching
+            .reach(&mut *self.storage, &self.prefix, full_key)
             .map_err(RunStep::Store)
     }
 
@@ -352,6 +404,7 @@ impl<'a> MigrationContext<'a> {
             prefix: self.scoped_path(sub_prefix),
             storage: self.storage,
             provided: self.provided,
+            reaching: self.reaching,
         }
     }
 
@@ -362,6 +415,7 @@ impl<'a> MigrationContext<'a> {
             prefix: self.prefix.clone(),
             storage: self.storage,
             provided: self.provided,
+            reaching: self.reaching,
         }
     }
 
@@ -580,17 +634,14 @@ mod tests {
             unreachable!()
         }
 
-        fn get_schema_snapshot(
-            &self,
-            _prefix: &StorePath,
-        ) -> StorageResult<Option<SchemaSnapshot>> {
+        fn get_schema_snapshots(&self, _prefix: &StorePath) -> StorageResult<Vec<SchemaSnapshot>> {
             unreachable!()
         }
 
-        fn set_schema_snapshot(
+        fn set_schema_snapshots(
             &mut self,
             _prefix: &StorePath,
-            _snapshot: &SchemaSnapshot,
+            _trees: &[SchemaSnapshot],
         ) -> StorageResult<()> {
             unreachable!()
         }

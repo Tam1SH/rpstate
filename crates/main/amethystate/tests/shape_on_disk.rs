@@ -6,16 +6,14 @@
 //! was built from the same source knows the shape, which is the thing the
 //! migration track is trying to stop being true.
 
-#[cfg(feature = "redb")]
 use amethystate::migration::fields::Role;
-#[cfg(feature = "redb")]
 use amethystate::store::InspectorBackend;
 use amethystate::store::builder::{Backend, StoreBuilder};
-#[cfg(feature = "redb")]
 use amethystate::store::meta::{SchemaSnapshot, StoredFieldEntry};
 use amethystate::{ReactiveMap, amethystate};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
+use std::path::Path;
 
 #[amethystate(prefix = "ondisk", version = 1)]
 pub struct Recorded {
@@ -50,9 +48,6 @@ pub struct NetPart {
 /// so an engine whose codec cannot carry some part of it fails on the second
 /// open - which is how a `Role` that serialises as a variant took `ron` out
 /// entirely, since a `ron::value::Value` has nowhere to put one.
-///
-/// This is the half that runs on every engine. Reading the recorded shape apart
-/// needs the inspector, and that is redb-only below.
 #[backends(all)]
 fn the_recorded_shape_survives_this_engines_codec(backend: Backend) {
     let path = TempPath::new("shape_codec");
@@ -74,7 +69,6 @@ fn the_recorded_shape_survives_this_engines_codec(backend: Backend) {
 
 /// Written by one store, read by another that only has the file - which is the
 /// claim being tested.
-#[cfg(feature = "redb")]
 fn snapshot_of(backend: Backend, path: &TempPath) -> SchemaSnapshot {
     {
         let store = StoreBuilder::new(path.path())
@@ -85,14 +79,7 @@ fn snapshot_of(backend: Backend, path: &TempPath) -> SchemaSnapshot {
         store.save_now().unwrap();
     }
 
-    let inspector = amethystate::stores::RedbStore::open(
-        amethystate::StoreConfig::new(path.path()),
-        Default::default(),
-    )
-    .unwrap()
-    .0;
-
-    inspector
+    inspecting(backend, path.path())
         .get_schema_snapshots()
         .unwrap()
         .into_iter()
@@ -101,7 +88,43 @@ fn snapshot_of(backend: Backend, path: &TempPath) -> SchemaSnapshot {
         .expect("no snapshot was written for the declared prefix")
 }
 
-#[cfg(feature = "redb")]
+fn inspecting(backend: Backend, at: &Path) -> Box<dyn InspectorBackend> {
+    let config = amethystate::StoreConfig::new(at);
+
+    match backend {
+        #[cfg(feature = "redb")]
+        Backend::Redb => Box::new(
+            amethystate::stores::RedbStore::open(config, Default::default())
+                .unwrap()
+                .0,
+        ),
+        #[cfg(feature = "sqlite")]
+        Backend::Sqlite => Box::new(
+            amethystate::stores::SqliteStore::open(config, Default::default())
+                .unwrap()
+                .0,
+        ),
+        #[cfg(feature = "json")]
+        Backend::Json => Box::new(
+            amethystate::stores::JsonStore::open(config, Default::default())
+                .unwrap()
+                .0,
+        ),
+        #[cfg(feature = "toml")]
+        Backend::Toml => Box::new(
+            amethystate::stores::TomlStore::open(config, Default::default())
+                .unwrap()
+                .0,
+        ),
+        #[cfg(feature = "ron")]
+        Backend::Ron => Box::new(
+            amethystate::stores::RonStore::open(config, Default::default())
+                .unwrap()
+                .0,
+        ),
+    }
+}
+
 fn field<'a>(fields: &'a [StoredFieldEntry], name: &str) -> &'a StoredFieldEntry {
     fields
         .iter()
@@ -109,8 +132,7 @@ fn field<'a>(fields: &'a [StoredFieldEntry], name: &str) -> &'a StoredFieldEntry
         .unwrap_or_else(|| panic!("no field named {name} in the snapshot"))
 }
 
-#[cfg(feature = "redb")]
-#[backends(Redb)]
+#[backends(all)]
 fn the_snapshot_records_what_each_path_is(backend: Backend) {
     let path = TempPath::new("shape_on_disk");
     let snapshot = snapshot_of(backend, &path);
@@ -133,8 +155,7 @@ fn the_snapshot_records_what_each_path_is(backend: Backend) {
 /// identifier instead, so the file said `bind` while the data sat at
 /// `listen_addr` - and anything planning a migration off the snapshot was
 /// planning against a path nothing held.
-#[cfg(feature = "redb")]
-#[backends(Redb)]
+#[backends(all)]
 fn the_snapshot_names_the_path_rather_than_the_field(backend: Backend) {
     let path = TempPath::new("shape_on_disk_key");
     let snapshot = snapshot_of(backend, &path);
@@ -161,8 +182,7 @@ fn the_snapshot_names_the_path_rather_than_the_field(backend: Backend) {
     );
 }
 
-#[cfg(feature = "redb")]
-#[backends(Redb)]
+#[backends(all)]
 fn a_level_records_what_lives_under_it(backend: Backend) {
     let path = TempPath::new("shape_on_disk_nested");
     let snapshot = snapshot_of(backend, &path);
@@ -178,10 +198,40 @@ fn a_level_records_what_lives_under_it(backend: Backend) {
     assert_eq!(field(&net.children, "host").type_name, "String");
 }
 
+/// A name is a label. Nothing in a migration reads it, so a snapshot written
+/// under one name is left alone by a build that spells it another - the places
+/// are what the record is of, and they have not moved.
+#[backends(all)]
+fn a_rename_is_not_a_change_to_the_store(backend: Backend) {
+    let path = TempPath::new("shape_on_disk_rename");
+    let before = snapshot_of(backend, &path);
+
+    let inspector = inspecting(backend, path.path());
+    let mut renamed = before.clone();
+    renamed.struct_name = Some("SomethingElseEntirely".to_string());
+    drop(inspector);
+
+    {
+        let store = StoreBuilder::new(&path).backend(backend).build().unwrap();
+        store
+            .record_schema(&amethystate::store::to_path(["ondisk"]).unwrap(), &renamed)
+            .unwrap();
+        store.save_now().unwrap();
+    }
+
+    let after = snapshot_of(backend, &path);
+
+    assert_eq!(
+        after.struct_name.as_deref(),
+        Some("SomethingElseEntirely"),
+        "reopening rewrote a snapshot whose places had not moved"
+    );
+    assert_eq!(after.fields, before.fields);
+}
+
 /// A leaf writes no `children` key, because most paths are leaves and a
 /// document a person reads should not carry an empty list on every one.
-#[cfg(feature = "redb")]
-#[backends(Redb)]
+#[backends(all)]
 fn a_leaf_does_not_write_an_empty_list_of_children(backend: Backend) {
     let path = TempPath::new("shape_on_disk_leaf");
     let snapshot = snapshot_of(backend, &path);

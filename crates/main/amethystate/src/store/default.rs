@@ -345,6 +345,11 @@ impl StoreBackend for Store {
         self.backend.format_record()
     }
 
+    #[cfg(feature = "test-utils")]
+    fn reread_from_disk(&self) {
+        self.backend.reread_from_disk()
+    }
+
     fn save_now(&self) -> StorageResult<()> {
         self.backend.save_now()
     }
@@ -369,6 +374,14 @@ impl StoreBackend for Store {
     fn is_initialized(&self, namespace: &StorePath) -> StorageResult<bool> {
         self.backend.is_initialized(namespace)
     }
+    fn record_schema(
+        &self,
+        at: &StorePath,
+        schema: &crate::store::meta::SchemaSnapshot,
+    ) -> StorageResult<()> {
+        self.backend.record_schema(at, schema)
+    }
+
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()> {
         self.backend.set_initialized(namespace, state)
     }

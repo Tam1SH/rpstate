@@ -11,11 +11,11 @@ pub trait TextDocument: Send + Sync + Sized + Clone + 'static {
     type Node: Clone + Debug;
     fn format() -> CodecFormat;
 
-    fn get(&self, parts: &[&str]) -> Option<&Self::Node>;
-    fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()>;
-    fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>>;
-    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()>;
-    fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>>;
+    fn get(&self, at: &StorePath) -> Option<&Self::Node>;
+    fn set(&mut self, at: &StorePath, node: Self::Node) -> StorageResult<()>;
+    fn delete(&mut self, at: &StorePath) -> StorageResult<Option<Self::Node>>;
+    fn delete_subtree(&mut self, at: &StorePath) -> StorageResult<()>;
+    fn scan(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Self::Node)>>;
     fn parse(src: &str) -> StorageResult<Self>;
     fn serialize(&self) -> StorageResult<String>;
     fn empty() -> Self;
@@ -55,129 +55,163 @@ pub trait Navigable: Sized + Clone {
     fn scan_children(&self) -> Vec<(String, Self)>;
 }
 
-pub fn generic_get<'a, N: Navigable>(root: &'a N, parts: &[&str]) -> Option<&'a N> {
-    if parts.is_empty() {
-        return Some(root);
+pub fn generic_get<'a, N: Navigable>(root: &'a N, at: &StorePath) -> Option<&'a N> {
+    let mut current = root;
+
+    for name in at.segments() {
+        current = current.get_child(&name)?;
     }
 
-    let mut current = root;
-    for part in parts {
-        current = current.get_child(part)?;
-    }
     Some(current)
 }
 
-pub fn generic_set<N: Navigable>(root: &mut N, parts: &[&str], node: N) -> StorageResult<()> {
-    if parts.is_empty() {
+pub fn generic_set<N: Navigable>(root: &mut N, at: &StorePath, node: N) -> StorageResult<()> {
+    let Some(last) = at.name() else {
         *root = node;
         return Ok(());
-    }
-    let (last, heads) = parts.split_last().unwrap();
+    };
+
+    let heads = at.len() - 1;
     let mut current = root;
-    for (at, &part) in heads.iter().enumerate() {
+
+    for (depth, name) in at.segments().take(heads).enumerate() {
         if !current.is_map() {
             return Err(refused(
                 Occupied::Value {
-                    level: level(parts, at),
+                    level: level(at, depth),
                 },
-                parts,
+                at,
             ));
         }
-        if current.get_child(part).is_none() {
-            current.insert_child(part, N::make_empty_map());
+        if current.get_child(&name).is_none() {
+            current.insert_child(&name, N::make_empty_map());
         }
-        current = current.get_child_mut(part).unwrap();
+        current = current.get_child_mut(&name).expect("just inserted");
     }
 
     if !current.is_map() {
         return Err(refused(
             Occupied::Value {
-                level: level(parts, heads.len()),
+                level: level(at, heads),
             },
-            parts,
+            at,
         ));
     }
     if !node.is_map()
-        && let Some(existing) = current.get_child(last)
+        && let Some(existing) = current.get_child(&last)
         && existing.is_map()
         && existing.has_children()
     {
         return Err(refused(
             Occupied::Branch {
-                level: level(parts, parts.len()),
+                level: level(at, at.len()),
             },
-            parts,
+            at,
         ));
     }
 
-    current.insert_child(last, node);
+    current.insert_child(&last, node);
     Ok(())
 }
 
-fn level(parts: &[&str], upto: usize) -> String {
-    StorePath::from_segments(&parts[..upto])
+fn level(at: &StorePath, upto: usize) -> String {
+    StorePath::from_segments(at.segments().take(upto))
         .as_str()
         .to_string()
 }
 
-fn refused(occupied: Occupied, parts: &[&str]) -> Report<StorageError> {
-    let writing = StorePath::from_segments(parts);
+fn refused(occupied: Occupied, writing: &StorePath) -> Report<StorageError> {
     Report::new(occupied)
         .change_context(StorageError::Write)
         .attach(format!("writing: {writing}"))
         .attach("a document holds a value at a level or values under it, never both")
 }
 
-pub fn generic_delete<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResult<Option<N>> {
-    if parts.is_empty() {
+/// Removes the value at `parts`, and every level above it that held nothing
+/// else.
+///
+/// A flat engine has no node above a key at all, so deleting the only thing
+/// under `a` leaves no `a`. A document has one, and leaving it behind as `{}`
+/// is a difference a caller can see: a scan lists it, and writing a value and
+/// deleting it stops being a round trip.
+///
+/// Only a level this delete emptied is pruned, so a map written as `{}` and
+/// never added to is left alone - nothing was removed from it, and there is
+/// nothing to walk back up.
+pub fn generic_delete<N: Navigable>(root: &mut N, at: &StorePath) -> StorageResult<Option<N>> {
+    let Some(last) = at.name() else {
         return Ok(None);
-    }
-    let (last, heads) = parts.split_last().unwrap();
-    let mut current = root;
-    for &part in heads {
-        if let Some(next) = current.get_child_mut(part) {
-            current = next;
-        } else {
-            return Ok(None);
+    };
+
+    let heads = at.len() - 1;
+    let mut current = &mut *root;
+    for name in at.segments().take(heads) {
+        match current.get_child_mut(&name) {
+            Some(next) => current = next,
+            None => return Ok(None),
         }
     }
 
-    Ok(current.remove_child(last))
-}
-
-pub fn generic_delete_subtree<N: Navigable>(root: &mut N, parts: &[&str]) -> StorageResult<()> {
-    if parts.is_empty() {
-        *root = N::make_empty_map();
-        return Ok(());
+    let removed = current.remove_child(&last);
+    if removed.is_some() {
+        prune_empty_above(root, at, heads);
     }
 
-    let (last, heads) = parts.split_last().unwrap();
+    Ok(removed)
+}
+
+/// Walks back up the levels above the delete, dropping each one it left empty.
+///
+/// Deepest first, so a chain of levels that existed only to hold the value
+/// goes with it rather than one link of it.
+fn prune_empty_above<N: Navigable>(root: &mut N, at: &StorePath, heads: usize) {
+    for depth in (1..=heads).rev() {
+        let name = at.segment_at(depth - 1).expect("above the delete");
+
+        let mut current = &mut *root;
+        for above in at.segments().take(depth - 1) {
+            match current.get_child_mut(&above) {
+                Some(next) => current = next,
+                None => return,
+            }
+        }
+
+        match current.get_child(&name) {
+            Some(node) if node.is_map() && !node.has_children() => current.remove_child(&name),
+            _ => return,
+        };
+    }
+}
+
+pub fn generic_delete_subtree<N: Navigable>(root: &mut N, at: &StorePath) -> StorageResult<()> {
+    let Some(last) = at.name() else {
+        *root = N::make_empty_map();
+        return Ok(());
+    };
+
+    let heads = at.len() - 1;
     let mut current = root;
-    for &part in heads {
-        match current.get_child_mut(part) {
+    for name in at.segments().take(heads) {
+        match current.get_child_mut(&name) {
             Some(next) => current = next,
             None => return Ok(()),
         }
     }
 
-    current.remove_child(last);
+    current.remove_child(&last);
     Ok(())
 }
 
-pub fn generic_scan<N: Navigable>(root: &N, parts: &[&str]) -> StorageResult<Vec<(String, N)>> {
+pub fn generic_scan<N: Navigable>(
+    root: &N,
+    prefix: &StorePath,
+) -> StorageResult<Vec<(StorePath, N)>> {
     let mut results = Vec::new();
-    let prefix = StorePath::from_segments(parts);
 
-    let node = if parts.is_empty() {
-        Some(root)
-    } else {
-        generic_get(root, parts)
-    };
-
-    if let Some(node) = node {
+    if let Some(node) = generic_get(root, prefix) {
         for (k, v) in node.scan_children() {
             match prefix.try_push(&k) {
-                Ok(full) => results.push((full.as_str().to_string(), v)),
+                Ok(full) => results.push((full, v)),
                 Err(_) => tracing::warn!(
                     target: "amethystate",
                     under = %prefix,

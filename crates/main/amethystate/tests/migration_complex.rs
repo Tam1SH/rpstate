@@ -292,10 +292,8 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
         .migrations(|m| {
             m.collect_codegen();
 
-            m.for_node::<Profile>().depends_on::<Identity>().step(
-                2,
-                "split full name and snapshot plan",
-                |ctx| {
+            m.for_node::<Profile>()
+                .step(2, "split full name and snapshot plan", |ctx| {
                     let full_name = ctx
                         .get::<String>("full_name")?
                         .expect("seed should contain profile full_name");
@@ -316,10 +314,9 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
                     ctx.delete("full_name")?;
                     ctx.delete("age_text")?;
                     Ok(())
-                },
-            );
+                });
 
-            m.for_node::<Workspace>().depends_on::<Profile>().step(
+            m.for_node::<Workspace>().step(
                 3,
                 "derive welcome title after profile migration",
                 |ctx| {
@@ -335,10 +332,8 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
                 },
             );
 
-            m.for_node::<Ui>().depends_on::<Workspace>().step(
-                2,
-                "flatten panel state and normalize sidebar",
-                |ctx| {
+            m.for_node::<Ui>()
+                .step(2, "flatten panel state and normalize sidebar", |ctx| {
                     let sidebar_px = ctx.get::<u16>("sidebar_px")?.unwrap_or(0);
                     let width_px = ctx.get::<u16>("width_px")?.unwrap_or(1);
                     let sidebar_ratio = sidebar_px as f32 / width_px as f32;
@@ -350,13 +345,10 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
                     ctx.delete("width_px")?;
                     ctx.delete("panels.left.visible")?;
                     Ok(())
-                },
-            );
+                });
 
-            m.for_node::<Shortcuts>().depends_on::<Workspace>().step(
-                2,
-                "parse legacy shortcut bindings",
-                |ctx| {
+            m.for_node::<Shortcuts>()
+                .step(2, "parse legacy shortcut bindings", |ctx| {
                     let legacy = ctx
                         .get::<Vec<String>>("legacy_bindings")?
                         .unwrap_or_default();
@@ -371,8 +363,7 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
                     ctx.set("bindings", &bindings)?;
                     ctx.delete("legacy_bindings")?;
                     Ok(())
-                },
-            );
+                });
 
             m.for_node::<BrokenRoot>()
                 .step(2, "stage broken branch mutation", |ctx| {
@@ -381,11 +372,11 @@ fn complex_hybrid_migrations_handle_dependency_tree_and_rollback(backend: Backen
                     Ok(())
                 });
 
-            m.for_node::<BrokenChild>().depends_on::<BrokenRoot>().step(
-                2,
-                "fail broken branch",
-                |_| Err(MigrationError::Custom("intentional failure".into()).into()),
-            );
+            m.for_node::<BrokenChild>()
+                .step(2, "fail broken branch", |ctx| {
+                    ctx.global_get::<String>("complex_broken_root.original")?;
+                    Err(MigrationError::Custom("intentional failure".into()).into())
+                });
         })
         .build_with_migration()
         .unwrap();

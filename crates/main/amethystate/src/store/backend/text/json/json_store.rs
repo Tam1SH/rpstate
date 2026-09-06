@@ -84,6 +84,11 @@ impl StoreBackend for JsonStore {
         Some(&self.0)
     }
 
+    #[cfg(feature = "test-utils")]
+    fn reread_from_disk(&self) {
+        self.0.reread_from_disk()
+    }
+
     fn files_layout(&self) -> Option<StoreLayout> {
         self.0.files_layout()
     }
@@ -123,12 +128,12 @@ impl StoreBackend for JsonStore {
     ) -> StorageResult<()> {
         self.0.set_initialized(namespace, state)
     }
-}
 
-crate::define_store_test_suite!(
-    JsonStore,
-    "json",
-    r#"{"amethystate": {"watch_interval_ms": 50}, "ui": {"theme": {"dark": false}}}"#,
-    r#"{"amethystate": {"watch_interval_ms": 50}, "ui": {"theme": {"dark": true}}}"#,
-    r#"{"amethystate": {"watch_interval_ms": 50}, "ui": {}}"#
-);
+    fn record_schema(
+        &self,
+        at: &StorePath,
+        schema: &crate::store::meta::SchemaSnapshot,
+    ) -> StorageResult<()> {
+        self.0.record_schema(at, schema)
+    }
+}

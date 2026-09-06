@@ -113,11 +113,14 @@ impl Error for StorageError {}
 
 pub type StorageResult<T> = Result<T, Report<StorageError>>;
 
-/// A write a document engine refuses because it cannot represent the result.
+/// A write a document engine refuses because its tree cannot represent the
+/// result.
 ///
 /// A tree holds a value at a node or values under it, never both, so the second
 /// write is refused and the first survives. Only the document engines - json,
-/// toml, ron - report this.
+/// toml, ron - report this, and only inside the part of the file a schema
+/// declares: what nothing declares is written whole, one key to a path, where
+/// there is no level for a value to be at odds with.
 ///
 /// Sits below [`StorageError::Write`] so that a caller who has to tell this
 /// apart - a seeding write, which nobody asked for, backs off where a real one

@@ -3,6 +3,7 @@ pub mod builder;
 pub mod check;
 pub mod config;
 pub mod debouncer;
+pub mod declared;
 pub mod default;
 pub mod durable;
 mod error;
@@ -32,6 +33,7 @@ pub use check::{
     Check, CheckContext, Invalid, refused, refused_or_default, refused_struct_or_kept,
     refused_under,
 };
+pub use declared::{Declared, Holds};
 pub use durable::{Commit, Durable};
 pub use error::{IntoStorageReport, Occupied, StorageError, StorageResult, one_line};
 pub use inspector::InspectorBackend;

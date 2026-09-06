@@ -46,13 +46,14 @@ impl InspectorBackend for SqliteStore {
                 .change_context(StorageError::Meta)
                 .attach_table(SNAPSHOTS)
                 .attach_read_so_far(results.len())?;
-            let snapshot: SchemaSnapshot = sonic_rs::from_slice(&bytes)
+            let trees: Vec<SchemaSnapshot> = sonic_rs::from_slice(&bytes)
                 .map_err(CodecError::from)
                 .change_context(StorageError::Codec)
                 .attach_table(SNAPSHOTS)
                 .attach_raw_key(&key)
                 .attach_value_bytes(bytes.len())?;
-            results.push((key, snapshot));
+
+            results.extend(trees.into_iter().map(|tree| (key.clone(), tree)));
         }
         Ok(results)
     }

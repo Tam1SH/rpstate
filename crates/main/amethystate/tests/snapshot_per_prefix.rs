@@ -21,7 +21,6 @@ pub struct UiLayout {
 
 #[cfg(feature = "redb")]
 #[backends(Redb)]
-#[ignore = "known: the snapshot store is keyed by prefix alone - see TODO.md"]
 fn two_schemas_at_one_prefix_each_keep_their_own_snapshot(backend: Backend) {
     let path = TempPath::new("snapshot_per_prefix");
     {

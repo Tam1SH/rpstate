@@ -92,9 +92,23 @@ impl From<&FieldDescriptor> for StoredFieldEntry {
     }
 }
 
+/// The places declared at one prefix, written down.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SchemaSnapshot {
     pub version: u32,
+
+    /// A label, for a report and for a person reading the file.
+    ///
+    /// Nothing in a migration reads it. A name is a `&'static str` from a type
+    /// that may not exist in the next build, two builds may spell one name two
+    /// ways, and one type may be renamed while its places stay exactly where
+    /// they were - so a rename is not a change to the store and must not be
+    /// read as one. The places are the identity.
+    ///
+    /// The third instance of the same rule, after
+    /// [`StoredFieldEntry::type_name`] and `Claimed::by`. See
+    /// `RFC-the-ownership-tree.md`.
     pub struct_name: Option<String>,
+
     pub fields: Vec<StoredFieldEntry>,
 }

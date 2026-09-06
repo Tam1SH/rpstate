@@ -148,11 +148,19 @@ pub trait MigrationBackendAdapter {
 
     fn get_meta(&self, prefix: &StorePath) -> StorageResult<Option<PrefixMeta>>;
     fn set_meta(&mut self, prefix: &StorePath, meta: &PrefixMeta) -> StorageResult<()>;
-    fn get_schema_snapshot(&self, prefix: &StorePath) -> StorageResult<Option<SchemaSnapshot>>;
-    fn set_schema_snapshot(
+    /// The trees recorded at `prefix`, one per declaration.
+    ///
+    /// A prefix is not a place and nothing claims it, so more than one
+    /// declaration may sit at one as long as their places stay apart - and
+    /// each is recorded whole, because a declaration is identified by the
+    /// places it owns and folding two together would lose which belonged to
+    /// which. See `RFC-the-ownership-tree.md`.
+    fn get_schema_snapshots(&self, prefix: &StorePath) -> StorageResult<Vec<SchemaSnapshot>>;
+
+    fn set_schema_snapshots(
         &mut self,
         prefix: &StorePath,
-        snapshot: &SchemaSnapshot,
+        trees: &[SchemaSnapshot],
     ) -> StorageResult<()>;
     fn get_migration_log(&self, prefix: &StorePath) -> StorageResult<Option<Vec<AppliedStep>>>;
     fn set_migration_log(&mut self, prefix: &StorePath, log: &[AppliedStep]) -> StorageResult<()>;
@@ -302,6 +310,19 @@ pub trait StoreBackend: Send + Sync + 'static {
         None
     }
 
+    /// Reads the file back now, as the watcher would, and tells subscribers
+    /// what changed.
+    ///
+    /// A test that edits the file underneath a running store otherwise has to
+    /// wait for the operating system to notice, which is the one thing
+    /// `watcher_wiring` is for. Everything else about a reread - which paths it
+    /// reports, and as what - is settled here instead, without a deadline.
+    ///
+    /// An engine that holds no file has nothing to reread, which is why this is
+    /// defaulted rather than demanded.
+    #[cfg(feature = "test-utils")]
+    fn reread_from_disk(&self) {}
+
     /// Writes everything buffered and says whether it landed.
     ///
     /// This is the fallible half of dropping the store, and the point of
@@ -390,6 +411,30 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// Setting a namespace [`Fresh`](InitState::Fresh) that was never seeded is
     /// not an error.
     fn set_initialized(&self, namespace: &StorePath, state: InitState) -> StorageResult<()>;
+
+    /// Records the places a struct claims at a namespace chosen when it runs.
+    ///
+    /// A struct with a `prefix` is recorded at the open, from the inventory,
+    /// because its path is known before anything is built. A struct without one
+    /// is built at a path the caller picks - `Struct::new(store, "instances.a")`
+    /// - and until it is built nobody knows where to look, so the recording
+    /// happens where the construction does.
+    ///
+    /// Without it the store holds data under a path no recorded schema claims,
+    /// which is the one question a tool reading the store on its own asks. See
+    /// `RFC-the-ownership-tree.md`.
+    ///
+    /// Writing the same shape again is not an error and costs nothing: the
+    /// engines compare before they write, because a struct is built as often as
+    /// the application likes.
+    ///
+    /// Defaulted, so a backend implemented outside this crate stays correct
+    /// without knowing the question exists - at the price of a tool learning
+    /// nothing about what such a struct claimed there.
+    fn record_schema(&self, at: &StorePath, schema: &SchemaSnapshot) -> StorageResult<()> {
+        let _ = (at, schema);
+        Ok(())
+    }
 
     fn mark_initialized(&self, namespace: &StorePath) -> StorageResult<()> {
         self.set_initialized(namespace, InitState::Seeded)

@@ -320,9 +320,7 @@ where
     if store.parallel_reads() {
         use rayon::prelude::*;
 
-        let scanned = store
-            .scan_prefix(path)
-            .map_err(Report::from)
+        let scanned = StoreBackend::scan_prefix(store, path)
             .attach_prefix(path)
             .map_err(|why| LoadMap::from_store(path, why))?;
 

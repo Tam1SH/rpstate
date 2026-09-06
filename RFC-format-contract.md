@@ -322,9 +322,15 @@ store is silent corruption. A converter has somewhere to ask.
 
 That case is not hypothetical and it is not only about conversion. A document
 engine cannot tell a value that is itself a map from a level with values under
-it, which is why `scan_prefix_impl` stops one level below its prefix and guesses.
-`Role` answers it for declared paths once it reaches the meta; nothing answers
-it for what `Kv` writes outside a schema.
+it by looking at the file. Where a schema declares the path, `Role` says which
+it is, and the store records that, so the answer survives the binary that
+declared it. Where nothing declares it, the file is not asked: the path is
+written whole, as one name, in a plane beside the declared trees - the layout
+the metadata file has always used, and for the same reason, that a key written
+whole needs no schema to be read back.
+
+So the question is not answered by guessing, and it is not answered by
+bookkeeping either. It stops being asked.
 
 ---
 

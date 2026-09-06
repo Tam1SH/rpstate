@@ -1,12 +1,19 @@
 # RFC: the ownership tree, and what replaces the schema hash
 
-**Status: designed, not built.** What follows is one subject reached from two
-directions that turned out to be the same one - who owns which place, and how a
-store notices that the declarations moved.
+**Status: built, less one hole named at the end.** What follows is one subject
+reached from two directions that turned out to be the same one - who owns which
+place, and how a store notices that the declarations moved.
 
-`TYPE_HASH` is a `u32` computed by XOR over field names and their types'
-hashes, compared once at the open. It goes, and the tree that is already
-written beside it does the judging instead.
+`TYPE_HASH` was a `u32` computed by XOR over field names and their types'
+hashes, compared once at the open. It is gone, and the tree written beside it
+does the judging: `moved::between` compares the places a prefix recorded against
+the places it declares now, and `SchemaSnapshot` is what it reads.
+
+`MIGRATION_DEPS` and the dependency graph are gone with it. Ordering is the
+reaching, as [below](#migrations): `MigrationContext::global_get` and
+`global_set` bring the prefix they name up to date before they answer, the stack
+of prefixes part-way through is what a cycle runs into, and the chain is named
+end to end.
 
 ## What the schema is
 
@@ -146,15 +153,16 @@ failing test. Transactionality within the run stops a migration from being an
 *additional* source of half-states; the single write underneath stays exactly as
 good as it is.
 
-## What this removes
+## What this removed
 
 - `TYPE_HASH`, `AmeType`, `hash.rs`, `fnv1a`, and `schema_hash` from the
   comparison;
-- `MIGRATION_DEPS` and the dependency graph;
+- `MIGRATION_DEPS`, `depends_on`, `depends_on_raw`, the `petgraph` dependency
+  and everything that read it - components and their topological sort;
 - the noise: adding a field with a default is the commonest and most harmless
-  change there is, and it trips the hash today.
+  change there is, and it tripped the hash.
 
-And one limitation goes with them. A recursive type did not compile, because
+And one limitation went with them. A recursive type did not compile, because
 `TYPE_HASH` was a const that read its fields' hashes and rustc refused the
 cycle:
 
@@ -216,3 +224,56 @@ decision to drop an entry an informed one.
 `get_raw`, `set` and `delete`, so adopting, converting or discarding what was
 there needs no new mechanism. Whether the absence of such a step over occupied
 foreign ground should be reported is the one thing here still to decide.
+
+## A namespace chosen when it runs
+
+A struct with no prefix is `SchemaEntry { prefix: None }`, and `ensure_snapshots`
+skips those, because there is no path to record one at. When such a struct is a
+`#[amestate(nested)]` part that is right and enough: its places are in its
+holder's snapshot already, as `StoredShape::children`.
+
+Built on its own it is a different thing. `Struct::new(store, "instances.a")`
+puts its places on disk at a path nobody knew until it ran, so the recording
+happens where the construction does - `StoreBackend::record_schema`, beside
+`set_initialized`, which is the other write into the metadata that a
+construction rather than a migration makes.
+
+In `new_with_id` and not in `new_with_id_under`, because the latter is also how
+a holder builds a part, and a flattened part is built at the holder's own path:
+recording there would file the part's places under the holder's name.
+
+The engines compare before they write, so building the same struct again costs
+one read.
+
+## Identity
+
+**A declaration is the places it owns.** Not its name, and not the prefix it
+sits under. A prefix is not a place - nothing claims one, `Owners` keys on the
+paths a declaration owns and holds the name beside them as a label - so a prefix
+holds however many declarations sit there, each recorded whole, and two of them
+are the same declaration when they own a place in common.
+
+That is decidable rather than guessed at. Declarations at one prefix own
+disjoint places or they are refused, so a place belongs to at most one on either
+side and a recorded tree meets at most one declared tree.
+
+Sharing no place is not a puzzle either, and needs no tie-break: a declaration
+whose every place moved is a removal beside an addition, which is what the two
+are - the data under the old places is out from under any declaration, and the
+new places annexed whatever was under them. The same rule as a rename, one level
+up.
+
+**The version is part of it.** A declaration carries its own, in its own tree,
+rather than the prefix carrying one for whatever happens to sit there.
+
+**The name takes no part.** Not in what is compared, not in what triggers a
+write. A type renamed while its places stay put has changed nothing about the
+store, and `shape_on_disk::a_rename_is_not_a_change_to_the_store` holds it.
+
+## The hole
+
+**The ladder is still the prefix's.** `PrefixMeta` holds one version per prefix
+and `MigrationPlan` is keyed by prefix, so the steps under a prefix are one
+ladder even where two declarations sit there with versions of their own. The
+record above is per declaration; the walk that reads it is not, and moving it
+touches `MigrationSet`, `PrefixMeta`, `AppliedStep` and the migration log.

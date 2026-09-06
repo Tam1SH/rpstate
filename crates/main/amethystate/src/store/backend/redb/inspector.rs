@@ -47,13 +47,14 @@ impl InspectorBackend for RedbStore {
                 .attach_store_file(&self.inner.path)
                 .attach_read_so_far(results.len())?;
             let prefix = k.value().to_string();
-            let snapshot: SchemaSnapshot = rmp_serde::from_slice(v.value())
+            let trees: Vec<SchemaSnapshot> = rmp_serde::from_slice(v.value())
                 .map_err(CodecError::from)
                 .change_context(StorageError::Meta)
                 .attach_store_file(&self.inner.path)
                 .attach_raw_key(&prefix)
                 .attach_value_bytes(v.value().len())?;
-            results.push((prefix, snapshot));
+
+            results.extend(trees.into_iter().map(|tree| (prefix.clone(), tree)));
         }
         Ok(results)
     }

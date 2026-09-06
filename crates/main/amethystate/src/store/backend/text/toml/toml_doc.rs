@@ -6,7 +6,7 @@ use crate::store::backend::text::document::{
     generic_set,
 };
 use crate::store::screening::Noticed;
-use crate::store::{CodecFormat, StorageError};
+use crate::store::{CodecFormat, StorageError, StorePath};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -56,13 +56,12 @@ impl TextDocument for TomlDocument {
         CodecFormat::Toml
     }
 
-    fn get(&self, parts: &[&str]) -> Option<&Self::Node> {
-        generic_get(self.0.as_item(), parts)
+    fn get(&self, at: &StorePath) -> Option<&Self::Node> {
+        generic_get(self.0.as_item(), at)
     }
 
-    fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()> {
-        let is_root = parts.is_empty();
-        if is_root {
+    fn set(&mut self, at: &StorePath, node: Self::Node) -> StorageResult<()> {
+        if at.is_root() {
             let table = match node.into_table() {
                 Ok(t) => t,
                 Err(_) => {
@@ -74,22 +73,22 @@ impl TextDocument for TomlDocument {
             *self.0.as_item_mut() = toml_edit::Item::Table(table);
             return Ok(());
         }
-        generic_set(self.0.as_item_mut(), parts, node)
+        generic_set(self.0.as_item_mut(), at, node)
     }
 
-    fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>> {
-        if parts.is_empty() {
+    fn delete(&mut self, at: &StorePath) -> StorageResult<Option<Self::Node>> {
+        if at.is_root() {
             return Ok(None);
         }
-        generic_delete(self.0.as_item_mut(), parts)
+        generic_delete(self.0.as_item_mut(), at)
     }
 
-    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()> {
-        generic_delete_subtree(self.0.as_item_mut(), parts)
+    fn delete_subtree(&mut self, at: &StorePath) -> StorageResult<()> {
+        generic_delete_subtree(self.0.as_item_mut(), at)
     }
 
-    fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>> {
-        generic_scan(self.0.as_item(), parts)
+    fn scan(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Self::Node)>> {
+        generic_scan(self.0.as_item(), prefix)
     }
 
     fn parse(src: &str) -> StorageResult<Self> {

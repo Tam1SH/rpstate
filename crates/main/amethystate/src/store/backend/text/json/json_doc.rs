@@ -6,7 +6,7 @@ use crate::store::backend::text::document::{
 };
 use crate::store::backend::text::error::TextStoreError;
 use crate::store::screening::Noticed;
-use crate::store::{CodecFormat, StorageError};
+use crate::store::{CodecFormat, StorageError, StorePath};
 use error_stack::{Report, ResultExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -56,13 +56,12 @@ impl TextDocument for JsonDocument {
         CodecFormat::Json
     }
 
-    fn get(&self, parts: &[&str]) -> Option<&Self::Node> {
-        generic_get(&self.0, parts)
+    fn get(&self, at: &StorePath) -> Option<&Self::Node> {
+        generic_get(&self.0, at)
     }
 
-    fn set(&mut self, parts: &[&str], node: Self::Node) -> StorageResult<()> {
-        let is_root = parts.is_empty();
-        if is_root {
+    fn set(&mut self, at: &StorePath, node: Self::Node) -> StorageResult<()> {
+        if at.is_root() {
             if !node.is_object() {
                 return Err(Report::new(TextStoreError::RootMustBeObject)
                     .change_context(StorageError::Write)
@@ -71,19 +70,19 @@ impl TextDocument for JsonDocument {
             self.0 = node;
             return Ok(());
         }
-        generic_set(&mut self.0, parts, node)
+        generic_set(&mut self.0, at, node)
     }
 
-    fn delete(&mut self, parts: &[&str]) -> StorageResult<Option<Self::Node>> {
-        generic_delete(&mut self.0, parts)
+    fn delete(&mut self, at: &StorePath) -> StorageResult<Option<Self::Node>> {
+        generic_delete(&mut self.0, at)
     }
 
-    fn delete_subtree(&mut self, parts: &[&str]) -> StorageResult<()> {
-        generic_delete_subtree(&mut self.0, parts)
+    fn delete_subtree(&mut self, at: &StorePath) -> StorageResult<()> {
+        generic_delete_subtree(&mut self.0, at)
     }
 
-    fn scan(&self, parts: &[&str]) -> StorageResult<Vec<(String, Self::Node)>> {
-        generic_scan(&self.0, parts)
+    fn scan(&self, prefix: &StorePath) -> StorageResult<Vec<(StorePath, Self::Node)>> {
+        generic_scan(&self.0, prefix)
     }
 
     fn parse(src: &str) -> StorageResult<Self> {

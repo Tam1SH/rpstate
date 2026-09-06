@@ -32,9 +32,9 @@ fn settle() {
 }
 
 const EDITED: &str = doc! {
-    json = "{ \"cfg\": { \"width\": 1280, \"note\": \"edited by hand\" } }\n",
-    toml = "[cfg]\nwidth = 1280\nnote = \"edited by hand\"\n",
-    ron  = "{\"cfg\": {\"width\": 1280, \"note\": \"edited by hand\"}}",
+    json = "{ \"cfg.width\": 1280, \"cfg.note\": \"edited by hand\" }\n",
+    toml = "\"cfg.width\" = 1280\n\"cfg.note\" = \"edited by hand\"\n",
+    ron  = "{\"cfg.width\": 1280, \"cfg.note\": \"edited by hand\"}",
 };
 
 /// An edit made to the file while the store is open reaches the store.
