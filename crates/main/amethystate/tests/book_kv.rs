@@ -3,6 +3,8 @@ use amethystate::store::builder::{Backend, StoreBuilder};
 use amethystate_core::test_utils::TempPath;
 use amethystate_test_macros::backends;
 
+mod common;
+
 #[amethystate(prefix = "network")]
 pub struct Network {
     #[amestate(default = 8080u16)]
@@ -46,7 +48,6 @@ fn raw_values_at_paths(backend: Backend) -> anyhow::Result<()> {
 }
 
 #[backends(all)]
-#[ignore = "red on the text engines and not yet answered: what a listing under a prefix covers"]
 fn what_a_listing_covers(backend: Backend) -> anyhow::Result<()> {
     let (store, _path) = open(backend, "book_kv_keys")?;
     let kv = store.kv();
@@ -168,6 +169,46 @@ fn raw_writes_are_checked_by_nothing(backend: Backend) -> anyhow::Result<()> {
         kv.get::<u32>("thing").is_err(),
         "asking for the old type fails at the read"
     );
+
+    Ok(())
+}
+
+#[amethystate(prefix = "chrome")]
+pub struct Chrome {
+    #[amestate(default = 800u32)]
+    pub width: u32,
+}
+
+#[cfg(feature = "json")]
+#[backends(Json)]
+fn what_a_kv_write_looks_like_in_the_file(backend: Backend) -> anyhow::Result<()> {
+    let (store, path) = open(backend, "book_kv_on_disk")?;
+    let _chrome = Chrome::new_with(&store)?;
+
+    //@show a declared struct and a Kv write, side by side in one file
+    store
+        .kv()
+        .namespace("plugins")
+        .namespace("left")
+        .set("width", &240u32)?;
+    //@show-end
+
+    store.save_now()?;
+    let written = std::fs::read_to_string(path.path())?;
+
+    assert!(
+        written.contains(r#""plugins.left.width""#),
+        "a path nothing declares is one whole key: {written}"
+    );
+    assert!(
+        written.contains(r#""chrome""#) && written.contains(r#""width""#),
+        "and a declared struct still nests: {written}"
+    );
+
+    common::measured(&[
+        ("what failed", "nothing"),
+        ("the file a Kv write leaves", written.trim()),
+    ]);
 
     Ok(())
 }

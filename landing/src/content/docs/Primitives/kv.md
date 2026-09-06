@@ -127,7 +127,32 @@ kv.get::<u32>("thing")?;                          // Err, at the read
 A raw `set` overwrites whatever was there, whatever its type. The disagreement
 surfaces at the next `get` that asks for the old one.
 
-## What you give up
+## Where it lands in the file
 
-No versions, no migrations, no drift detection - those belong to the declared
-structs. If the data has a shape worth evolving, declare it.
+On redb and sqlite there is nothing to say: every key is stored whole, and a
+`Kv` write is one more of them.
+
+A document engine - json, toml, ron - holds two things, and this is where you
+see it. A declared struct is written as a tree, level by level, because the
+declarations say where each of its values ends. A path nothing declares is
+written **whole, as one key** beside those trees:
+
+<!-- shown: a declared struct and a Kv write, side by side in one file -->
+```rust
+store
+    .kv()
+    .namespace("plugins")
+    .namespace("left")
+    .set("width", &240u32)?;
+```
+<!-- /shown -->
+
+<!-- printed: the file a Kv write leaves from book_kv -->
+```
+{
+  "chrome": {
+    "width": 800
+  },
+  "plugins.left.width": 240
+}
+```
